@@ -5,15 +5,19 @@ Every generated claim in this system must be traceable to a source passage (NFR-
 
 ## 2. Ingestion Pipeline
 
-**Input types accepted:** PDF (text-native and scanned), DOCX, TXT, email exports (`.eml`/plain text), scanned TIFF/PNG/JPG (routed through OCR first, per CARD 05 in VIBECODING_SPEC.md)
+**Input types accepted:** PDF (text-native and scanned, per-page — a mixed document with some scanned and some text-native pages is OCR'd only on the pages that actually need it, never the whole document), DOCX, TXT, CSV, XLSX/XLS (each worksheet treated as a numbered "page" for citation purposes), email exports (`.eml`/plain text), scanned TIFF/PNG/JPG (routed through OCR first, per CARD 05 in VIBECODING_SPEC.md), voice notes (`.wav`/`.mp3`/`.m4a`/`.ogg`, routed through local speech-to-text per CARD 12 — **team addition, not PS-traceable, see REQUIREMENTS.md §6**)
 
 **Exact pipeline steps:**
-1. **Document type detection** — file extension + a `python-magic` MIME check (don't trust extension alone)
-2. **Text extraction:**
-   - Text-native PDF → `pdfplumber` (preserves layout better than `PyPDF2` for table-heavy refinery documents)
-   - Scanned PDF/image → CARD 05 OCR pipeline, page by page
+1. **Document type detection** — file extension AND a `python-magic` MIME check, reconciled (don't trust extension alone, but don't trust MIME alone either): MIME overrides a wrong extension, but the extension resolves the specific cases where MIME is provably too generic to trust — OOXML files (.docx/.xlsx) reporting as a bare `application/zip`/`application/octet-stream` on some libmagic builds, and CSV/TXT being byte-identical as `text/plain` (no signature distinguishes them). Both cases are real, observed on this project's own dev machine, not hypothetical.
+2. **Text extraction**, per page/sheet (never per whole document — a mixed PDF with some scanned and some text-native pages must only OCR the pages that actually need it):
+   - Text-native PDF → `pdfplumber` (preserves layout better than `PyPDF2` for table-heavy refinery documents); any individual page with no extractable text is rendered to an image and routed through CARD 05's OCR pipeline (or its handwritten fallback) for that page only
    - DOCX → `python-docx`'s paragraph/table iteration
-3. **Chunking:** recursive character splitter, **chunk size 512 tokens, overlap 64 tokens** (exact values — do not leave these as "reasonable defaults" the agent picks itself; consistency across the corpus matters for retrieval quality comparisons). Use `tiktoken`'s `cl100k_base` encoding to count tokens for the split, even though inference uses local models — it's a good-enough universal tokenizer for chunk-sizing purposes.
+   - XLSX → `openpyxl`; XLS (legacy binary) → `xlrd` — each worksheet is one "page" (1-indexed sheet position), so a citation can still say which sheet a fact came from
+   - CSV → read as plain text (already delimited, no special parsing needed for chunking)
+   - Voice notes (.wav/.mp3/.m4a/.ogg) → CARD 12's local speech-to-text, whole recording as one unpaginated "page" — **team addition, not PS-traceable**
+3. **Chunking:** recursive character splitter, **chunk size 512 tokens, overlap 64 tokens** (exact values — do not leave these as "reasonable defaults" the agent picks itself; consistency across the corpus matters for retrieval quality comparisons). Use `tiktoken`'s `cl100k_base` encoding to count tokens for the split, even though inference uses local models — it's a good-enough universal tokenizer for chunk-sizing purposes. This is the pipeline's default and the strategy §3's 0.35 confidence threshold is calibrated against.
+
+   **Optional alternative — semantic chunking (`backend/ingestion/semantic_chunking.py`):** groups sentences at detected embedding-distance topic-shift boundaries instead of a fixed token count, with the fixed-size splitter above as a safety net for any oversized segment. This is genuinely OPT-IN, not a silent upgrade to the default: switching to it changes the chunk-size distribution the 0.35 threshold assumes, and per this file's own rule, that requires re-tuning and documenting the change here, not swapping it in quietly. Use it deliberately, not by default.
 4. **Metadata attached to every chunk (mandatory fields, none optional):**
    ```python
    class ChunkMetadata(BaseModel):
