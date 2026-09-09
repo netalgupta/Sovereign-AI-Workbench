@@ -47,6 +47,10 @@ import openpyxl
 import pdfplumber
 import xlrd
 from docx import Document as DocxDocument
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table as DocxTable
+from docx.text.paragraph import Paragraph as DocxParagraph
 from pydantic import BaseModel
 
 # file_path -> extracted text. See module docstring for what the real
@@ -123,15 +127,46 @@ def _extract_native_pdf_pages(file_path: str, ocr_fn: OcrFn | None) -> list[Page
     return pages
 
 
+def _iter_block_items(doc):
+    """Yield each paragraph/table in actual document order.
+
+    Real bug this fixes, found by inspecting real extracted output, not
+    by re-reading the code: python-docx's `.paragraphs` and `.tables`
+    are two SEPARATE flat lists, each in their own internal order but
+    with no relationship to each other's position in the document. The
+    original version of this function did `[p.text for p in
+    doc.paragraphs]` followed by `for table in doc.tables: ...` — i.e.
+    every paragraph, THEN every table, regardless of where each table
+    actually sits in the document. On a real SOP fixture, this put the
+    sentence "The table below lists the normal operating envelope..."
+    in one chunk and the table's actual data (including the exact value
+    a real test question asks for) in a completely different chunk,
+    separated by everything else in the document — a real retrieval-
+    locality bug, not just a cosmetic one. Iterating the underlying XML
+    body's children in order and dispatching each to the right wrapper
+    is the standard python-docx idiom for "give me content in document
+    order" — there's no higher-level API that does this directly.
+    """
+    for child in doc.element.body.iterchildren():
+        if isinstance(child, CT_P):
+            yield DocxParagraph(child, doc)
+        elif isinstance(child, CT_Tbl):
+            yield DocxTable(child, doc)
+
+
 def _extract_docx(file_path: str) -> list[PageText]:
     # DOCX has no reliable page boundaries at the file-format level
     # (pagination depends on the renderer/font/margins) — per spec,
     # page_number is genuinely None here, not a missing value.
     doc = DocxDocument(file_path)
-    parts = [p.text for p in doc.paragraphs]
-    for table in doc.tables:
-        for row in table.rows:
-            parts.append("\t".join(cell.text for cell in row.cells))
+    parts = []
+    for block in _iter_block_items(doc):
+        if isinstance(block, DocxParagraph):
+            if block.text:
+                parts.append(block.text)
+        else:  # DocxTable
+            for row in block.rows:
+                parts.append("\t".join(cell.text for cell in row.cells))
     return [PageText(page_number=None, text="\n".join(parts))]
 
 
