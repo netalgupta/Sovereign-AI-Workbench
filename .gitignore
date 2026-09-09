@@ -22,3 +22,4 @@ build/
 /models/embeddings/
 /models/ocr/
 /models/vision/
+/models/audio/
