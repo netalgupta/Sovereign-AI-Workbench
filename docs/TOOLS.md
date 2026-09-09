@@ -1,0 +1,139 @@
+# TOOLS.md — Master Tool Catalog, SIH26117 (Final, Complete)
+
+This consolidates the full tool/skill catalog into one authoritative, owner-assigned reference. Categories A-G map to SYSTEM.md's sub-agents and DEPENDENCIES.md's libraries. Category H below folds in every MRPL-unit-specific tool that was previously only described in prose in the MRPL-Grounded Dossier — those are now numbered, tiered, and owned like everything else, so nothing MRPL-specific is a paragraph instead of a tracked deliverable.
+
+**Priority tiers:** 🔴 Demo-critical (must work flawlessly) · 🟡 Strong-to-have (build if time allows past Day 8) · ⚪ Registry-listed only (architecture supports it, not necessarily polished for the live demo)
+
+---
+
+## A. Vision & Document Understanding — Owner: Sahil (build), Aryan (model integration)
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 1 | Printed OCR (PaddleOCR) | 🔴 | Core to FR-7, FR-12 |
+| 2 | Handwritten OCR (TrOCR/VLM fallback) | 🔴 | Explicit PS requirement |
+| 3 | Image super-resolution (Real-ESRGAN) | 🟡 | Improves OCR accuracy on poor scans |
+| 4 | Denoise/deskew/binarize (OpenCV) | 🔴 | Cheap, always run before OCR |
+| 5 | Layout & table extraction (LayoutLMv3) | 🟡 | Structures inspection report tables |
+| 6 | P&ID symbol/connection extraction (Qwen2-VL) | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
+| 7 | Defect/anomaly detection (YOLOv8) | 🟡 | Public dataset fine-tune |
+| 8 | Photo-to-report matching | ⚪ | Registry-listed |
+| 9 | Document type classifier | 🔴 | Routes scans to correct pipeline |
+| 10 | Image diffing/change detection | ⚪ | Registry-listed |
+| 11 | Signature/stamp detection | ⚪ | Nice MRPL-approval-workflow touch, low priority |
+| 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
+
+## B. Knowledge & Retrieval (RAG/GraphRAG) — Owner: Aryan (core), Netal (UI)
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 12 | Hybrid dense+sparse retrieval | 🔴 | Core to FR-10 |
+| 13 | Entity/relationship extraction for graph | 🔴 | Needed for the signature graph query |
+| 14 | Knowledge graph store + query (Neo4j) | 🔴 | Pipeline-segment / valve-reference query, demoed against real segment names Mangalore–Hassan–Neriya–Devangonthi |
+| 15 | Contradiction detection across documents | 🟡 | Strong safety-relevant differentiator |
+| 16 | Version/revision tracking | 🟡 | SOP-currency checking |
+| 17 | Source-grounded citation on every claim | 🔴 | Non-negotiable per NFR-4 |
+| 18 | Correspondence/email summarization | 🟡 | Generic depot-to-HQ use case |
+| 19 | Cross-reference resolver | ⚪ | Registry-listed |
+| 57 | Aromatic Complex ↔ refinery cross-document reconciliation | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
+| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
+
+## C. Reasoning, Planning & Orchestration — Owner: Aryan (logic), Aditya (infra)
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 20 | Task planner with visible plan graph | 🔴 | FR-5, judge-facing visual |
+| 21 | Multi-model router | 🔴 | FR-3, FR-11 |
+| 22 | Sub-agent spawning per modality | 🔴 | Core architecture |
+| 23 | Self-verification agent | 🟡 | Quality/trust booster |
+| 24 | Human approval gate | 🔴 | NFR-6, safety-critical |
+| 25 | Long-running task checkpointing | ⚪ | Registry-listed |
+
+## D. Computation — Owner: Aryan (tool wiring), Sahil (trace UI)
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 26 | SymPy symbolic engine | 🔴 | No Wolfram Alpha — fully local |
+| 27 | Maxima CAS | 🟡 | Heavier symbolic ops |
+| 28 | NumPy/SciPy numerical + stats | 🔴 | Trend analysis, curve fitting |
+| 29 | Pint unit-aware calculations | 🔴 | Prevents unit-error class entirely |
+| 30 | CoolProp thermophysical properties | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups |
+| 31 | Matplotlib plotting | 🔴 | Embedded charts in outputs |
+| 32 | NetworkX graph math | 🟡 | Pipeline dependency graphs |
+| 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
+| 52 | Hydrogen balance calculator (CCR ↔ hydrotreating units) | 🟡 | MRPL-specific — Pint-based unit-aware mass balance, prevents unit-conversion errors on H2 byproduct tracking. Owner: Aryan |
+| 53 | PSA hydrogen purity trend dashboard | 🟡 | MRPL-specific — ingests PSA purity logs, plots against the 99.9% target (tool 31), flags drift. Owner: Aryan (data)/Kanishka (chart UI) |
+
+## E. Code & Sandbox — Owner: Aditya
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 33 | Code generation (routed) | 🔴 | FR-13 |
+| 34 | Sandboxed execution (Docker, no network) | 🔴 | FR-13, NFR core |
+| 35 | Automated test generation + run | 🟡 | Strengthens the verification story |
+| 36 | Static analysis/linting pass | ⚪ | Registry-listed |
+| 37 | Internal tool scaffolding | ⚪ | Registry-listed |
+
+## F. Output Generation — Owner: Kanishka
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 38 | DOCX generation (python-docx) | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
+| 39 | XLSX generation with live formulas | 🔴 | FR-9 |
+| 40 | PPTX generation | 🟡 | FR-9 |
+| 41 | Calculation trace documents | 🔴 | NFR-5 |
+| 42 | Audio briefing (Piper TTS) | ⚪ | Polish item |
+| 43 | Redaction tool | 🟡 | Confidentiality-relevant differentiator |
+| 54 | Novolen grade-changeover checklist generator | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
+| 55 | Novolen batch quality report generator | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
+| 56 | Merox sulphur-spec compliance checker | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
+| 58 | Aromatic Complex benzene safety-note drafting | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
+
+## G. Governance, Audit & Trust — Owner: Aditya (backend), Kanishka (UI)
+
+| # | Tool | Priority | Notes |
+|---|---|---|---|
+| 44 | Live network monitor panel | 🔴 | FR-1, FR-15 — single most important judge-facing proof |
+| 45 | Full audit log | 🔴 | NFR-7 |
+| 46 | RBAC on knowledge base | 🟡 | Basic tiers sufficient for demo |
+| 47 | Model provenance tracking | ⚪ | Registry-listed |
+| 48 | Encrypted-at-rest storage | 🔴 | NFR-3 |
+| 49 | SAP read-only connector | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
+| 50 | Portable/air-gapped packaging | 🔴 | NFR-2 |
+
+---
+
+## H. MRPL Unit-by-Unit Coverage Map (cross-reference — every unit, every tool touching it)
+
+| MRPL Unit | Tools that cover it |
+|---|---|
+| Hydrocracker (×2, MRPL's signature differentiator) | 6 (P&ID tuning), 38 (terminology-tuned drafting), 51 (catalyst/WABT trend) |
+| CCR (×2, UOP tech) | 52 (H2 balance calculator) |
+| LPG/Kero Merox | 56 (sulphur-spec compliance checker) |
+| Hydrogen/PSA units (×3) | 53 (purity trend dashboard), 30 (CoolProp steam/fluid properties) |
+| Novolen Polypropylene plant | 54 (grade-changeover checklist), 55 (batch quality report) |
+| Aromatic Complex (MSEZ, Para-Xylene/Benzene) | 57 (cross-document reconciliation), 58 (benzene safety-note drafting) |
+| SPM "Mangala-1" + Petronet MHB pipeline | 59 (vessel/cargo processing), 14 (pipeline-segment graph query, real segment names) |
+| Marketing depots (Kasargod/Hindupur/Hosur) | 60 (multi-location correspondence summarizer) |
+| SAP ERP (all modules, live since 2010) | 49 (read-only connector) |
+
+If a judge asks "what does this actually do for us, unit by unit" — this table is the answer, and every row traces to a numbered, owned, tiered tool above, not a claim in a slide.
+
+---
+
+## I. Live Demo Script (final, timed)
+
+1. **[0:00-1:00]** Boot from portable drive (Electron app), system live, network monitor panel visible and reading zero from the start
+2. **[1:00-3:00]** Flow 1 — scanned inspection report → OCR → findings extraction → DOCX approval note drafted, grounded and cited (tools 1, 12, 17, 38)
+3. **[3:00-4:30]** Flow 2 — coding task, written and run in sandbox, test result shown (tools 33, 34)
+4. **[4:30-6:00]** Flow 3 — P&ID/photo multimodal understanding, structured extraction shown (tool 6)
+5. **[6:00-7:00]** Router demoed switching models across the above 3 flows; live model-add to `models.yaml` (tool 21, FR-4)
+6. **[7:00-8:00]** Signature graph query on the Mangalore-Hassan pipeline segment (tool 14); SAP connector query grounding a maintenance summary (tool 49)
+7. **[8:00-9:00]** *If time allows:* benzene/Aromatic Complex safety-note drafting (tool 58) — the strongest safety-specific USP, worth a dedicated beat if the schedule has room
+8. **[9:00-close]** Network monitor still reading zero; audit log exported live as final proof (tools 44, 45)
+
+---
+
+## J. Design Principle Restated
+
+No Wolfram Alpha, no cloud math API, no cloud anything. Every computational claim (tools 26-32, 51-53) is backed by an open-source library executing locally. MRPL cannot use a tool that phones out to evaluate a hydrocracker mass balance, and neither can this system.

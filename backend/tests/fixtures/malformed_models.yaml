@@ -1,0 +1,4 @@
+# Missing the required `model` field — used to assert ValidationError propagates unmodified.
+- id: broken-model
+  backend: ollama
+  task_tags: [debugging]

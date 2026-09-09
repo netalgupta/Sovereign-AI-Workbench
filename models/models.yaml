@@ -1,0 +1,25 @@
+# models.yaml — Model Registry (dev tier, RTX 4060 8GB)
+# Exact shape per VIBECODING_SPEC.md CARD 01 / DEPENDENCIES.md §1.
+# Adding a model = adding an entry here + backend reload. No code change (FR-4).
+# Do not add fields beyond id/backend/model/task_tags without updating
+# CARD 01's ModelConfig schema, this file, and TOOLS.md in the same change.
+
+- id: coder-model
+  backend: ollama
+  model: qwen2.5-coder:7b
+  task_tags: [code_generation, code_review, debugging]
+
+- id: reasoning-model
+  backend: ollama
+  model: qwen2.5:14b
+  task_tags: [summarization, drafting, approval_notes, planning]
+
+- id: vision-model
+  backend: ollama
+  model: qwen2-vl:7b
+  task_tags: [ocr, image_understanding, diagram_reading]
+
+- id: fast-router
+  backend: ollama
+  model: phi-3.5-mini
+  task_tags: [classification, routing]

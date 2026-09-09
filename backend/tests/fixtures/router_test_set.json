@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "note": "REQUIREMENTS.md FR-3 describes this set as spanning 'code / summarization / vision / math', but VIBECODING_SPEC.md CARD 03's VALID_TASK_TAGS has no math-related tag and explicitly forbids inventing one on the fly. This fixture therefore covers every category CARD 03's fixed tag list actually supports (code_generation, code_review, debugging, summarization, drafting, approval_notes, planning, ocr, image_understanding, diagram_reading) and omits a pure-math category until that gap is resolved (see router.py module docstring)."
+  },
+  "cases": [
+    {"prompt": "Write a Python function that reverses a linked list.", "expected_tags": ["code_generation"]},
+    {"prompt": "Review this pull request diff for bugs before we merge it.", "expected_tags": ["code_review"]},
+    {"prompt": "Why is my Flask app throwing a 500 error on this endpoint?", "expected_tags": ["debugging"]},
+    {"prompt": "Summarize this 40-page maintenance report into five bullet points.", "expected_tags": ["summarization"]},
+    {"prompt": "Draft an approval note for the hydrocracker catalyst change-out.", "expected_tags": ["drafting", "approval_notes"]},
+    {"prompt": "Plan out the steps needed to migrate our vector DB from FAISS to a new index.", "expected_tags": ["planning"]},
+    {"prompt": "Extract the text from this scanned inspection report image.", "expected_tags": ["ocr"]},
+    {"prompt": "What does this photo of the corroded valve show?", "expected_tags": ["image_understanding"]},
+    {"prompt": "Read the P&ID diagram and list every valve tag you can identify.", "expected_tags": ["diagram_reading"]},
+    {"prompt": "Fix the off-by-one error in this sorting algorithm.", "expected_tags": ["debugging", "code_review"]},
+    {"prompt": "Generate unit tests for this sandbox executor module.", "expected_tags": ["code_generation"]},
+    {"prompt": "Condense this week's shift logs into a short summary for the plant manager.", "expected_tags": ["summarization"]},
+    {"prompt": "Write the recommendation section for this QA batch report.", "expected_tags": ["drafting"]},
+    {"prompt": "Draft a safety circular about benzene handling procedures.", "expected_tags": ["drafting", "approval_notes"]},
+    {"prompt": "Break down the tasks required to add a new model to the registry.", "expected_tags": ["planning"]},
+    {"prompt": "OCR this handwritten inspection note and give me the plain text.", "expected_tags": ["ocr"]},
+    {"prompt": "Look at this cargo manifest scan and tell me what it says.", "expected_tags": ["ocr", "image_understanding"]},
+    {"prompt": "Identify the equipment tags visible in this hydrocracker P&ID.", "expected_tags": ["diagram_reading"]},
+    {"prompt": "Review my code for the SymPy calculation wrapper for correctness.", "expected_tags": ["code_review"]},
+    {"prompt": "Refactor this function to avoid using eval().", "expected_tags": ["code_generation", "code_review"]}
+  ]
+}

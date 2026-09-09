@@ -1,0 +1,13 @@
+# Backend dependencies — Aryan's Day 1-2 scope (model registry, router).
+# Full stack requirements accumulate here as other owners' tools land;
+# see DEPENDENCIES.md for the complete target list across all categories.
+
+pydantic>=2.0
+pyyaml>=6.0
+requests>=2.31
+fastapi>=0.110
+uvicorn>=0.29
+
+# Test-only
+pytest>=8.0
+responses>=0.25
