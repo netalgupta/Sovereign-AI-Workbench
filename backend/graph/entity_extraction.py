@@ -91,7 +91,12 @@ def _call_extraction_model(prompt: str, model_name: str) -> str:
     response = requests.post(
         f"{_OLLAMA_HOST}/api/generate",
         json={"model": model_name, "prompt": prompt, "stream": False},
-        timeout=60,
+        # 120s, not 60s: a real run of the live test against the actual
+        # 14B reasoning model took 61s in isolation and timed out when
+        # run as part of the full suite (CPU inference under contention
+        # from other tests running back to back) -- 60s was already
+        # marginal even in the best case, not a safe margin at all.
+        timeout=120,
     )
     response.raise_for_status()
     return response.json()["response"]
