@@ -10,7 +10,15 @@ build/
 .env
 *.log
 
-# Model weights and portable-drive artifacts never belong in git
+# Model weights and portable-drive artifacts never belong in git — these
+# are fetched once via backend/ingestion/fetch_models.py (see model_cache.py)
+# and shipped on the portable drive per DEPENDENCIES.md §10, never checked in.
 *.gguf
 *.tar
+*.safetensors
+*.bin
+*.onnx
 /models/weights/
+/models/embeddings/
+/models/ocr/
+/models/vision/
