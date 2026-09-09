@@ -191,7 +191,7 @@ def _normalize_name(name: str) -> str:
 
 def deduplicate_entities(
     entities: list[ExtractedEntity],
-) -> tuple[list[ExtractedEntity], list[MergeDecision]]:
+) -> tuple[list[ExtractedEntity], list[MergeDecision], dict[tuple[str, str], str]]:
     """Merge duplicate entities — GRAPH_SPEC.md §5 step 3.
 
     Two tiers, matching the spec's own two-tier language:
@@ -206,9 +206,22 @@ def deduplicate_entities(
        MergeDecision.
     Only merges entities of the SAME `type` — never lets a Person and an
     Equipment merge just because their name strings happen to overlap.
+
+    Also returns `name_map`: {(type, original_name): canonical_name} for
+    EVERY input entity, not just the ones that got merged. Real gap this
+    closes, found while wiring this function into the actual ingestion
+    pipeline for the first time (it was built and unit-tested here, but
+    nothing had ever called it for real): callers need to remap
+    relationship endpoints and document-link references from whatever
+    per-chunk name the LLM used to the canonical name this function
+    picked, or a relationship extracted as {"from": "V-204", ...} would
+    fail to find "V-204" once the graph only has a node named "Valve
+    V-204". Returning just the deduplicated entity list was never enough
+    to actually use this function correctly.
     """
     canonical: list[ExtractedEntity] = []
     merge_decisions: list[MergeDecision] = []
+    name_map: dict[tuple[str, str], str] = {}
 
     for entity in entities:
         norm = _normalize_name(entity.name)
@@ -218,6 +231,7 @@ def deduplicate_entities(
             None,
         )
         if exact_match is not None:
+            name_map[(entity.type, entity.name)] = exact_match.name
             continue
 
         fuzzy_match = next(
@@ -238,8 +252,10 @@ def deduplicate_entities(
                     reason="substring match after case/whitespace normalization",
                 )
             )
+            name_map[(entity.type, entity.name)] = fuzzy_match.name
             continue
 
         canonical.append(entity)
+        name_map[(entity.type, entity.name)] = entity.name
 
-    return canonical, merge_decisions
+    return canonical, merge_decisions, name_map
