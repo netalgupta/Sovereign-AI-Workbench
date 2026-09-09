@@ -1,0 +1,1 @@
+Shift note: catalyst bed temperature nominal across all reactors.

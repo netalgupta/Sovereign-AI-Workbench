@@ -1,0 +1,143 @@
+"""Tests for extract_pages.
+
+test_mixed_pdf_only_ocrs_the_blank_page is the important one here: it's
+a regression test for a real bug (not hypothetical) — an earlier version
+of this function checked "does ANY page have text?" and, if so, silently
+returned every page as-is, including blank ones. That would have been
+silent data loss on exactly the kind of mixed document (printed cover
+page + scanned signature page) real refinery correspondence produces.
+"""
+
+import os
+
+import pytest
+
+from backend.ingestion.text_extraction import extract_pages
+
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+def _path(name: str) -> str:
+    return os.path.join(FIXTURES, name)
+
+
+def test_native_pdf_extracts_both_pages_with_correct_page_numbers():
+    pages = extract_pages(_path("sample_native.pdf"), "pdf")
+
+    assert len(pages) == 2
+    assert pages[0].page_number == 1
+    assert "hydrocracker catalyst deactivation" in pages[0].text
+    assert pages[1].page_number == 2
+    assert "Mangalore-Hassan" in pages[1].text
+
+
+def test_fully_scanned_pdf_without_ocr_fn_raises_naming_the_blank_page():
+    with pytest.raises(NotImplementedError) as exc_info:
+        extract_pages(_path("sample_scanned_no_text.pdf"), "pdf")
+
+    assert "page(s) [1]" in str(exc_info.value)
+
+
+def test_mixed_pdf_only_ocrs_the_blank_page():
+    """The regression test — see module docstring."""
+    ocr_calls: list[str] = []
+
+    def fake_ocr(image_path: str) -> str:
+        ocr_calls.append(image_path)
+        return "OCR'd: hand-signed approval page"
+
+    pages = extract_pages(_path("sample_mixed_pdf.pdf"), "pdf", ocr_fn=fake_ocr)
+
+    assert len(pages) == 2
+    # Page 1 had real extractable text — must be untouched, OCR must
+    # NEVER have been called for it.
+    assert "Cover letter" in pages[0].text
+    # Page 2 had no text layer — must have gone through OCR.
+    assert pages[1].text == "OCR'd: hand-signed approval page"
+    assert len(ocr_calls) == 1  # exactly one page needed OCR, not both
+
+
+def test_mixed_pdf_without_ocr_fn_raises_naming_only_the_actually_blank_page():
+    with pytest.raises(NotImplementedError) as exc_info:
+        extract_pages(_path("sample_mixed_pdf.pdf"), "pdf")
+
+    # Must name page 2 specifically, not "the whole document" — page 1
+    # is fine and doesn't need OCR at all.
+    assert "page(s) [2]" in str(exc_info.value)
+
+
+def test_docx_extraction_includes_paragraph_and_table_text():
+    pages = extract_pages(_path("sample_doc.docx"), "docx")
+
+    assert len(pages) == 1
+    assert pages[0].page_number is None
+    assert "Valve V-204" in pages[0].text
+    assert "Field" in pages[0].text  # from the table
+
+
+def test_txt_extraction():
+    pages = extract_pages(_path("sample_note.txt"), "txt")
+
+    assert len(pages) == 1
+    assert pages[0].page_number is None
+    assert "catalyst bed temperature" in pages[0].text
+
+
+def test_csv_extraction_is_readable_as_text():
+    pages = extract_pages(_path("sample_lab_results.csv"), "csv")
+
+    assert len(pages) == 1
+    assert "sulphur_ppm" in pages[0].text
+
+
+def test_eml_extraction_gets_the_plain_text_body():
+    pages = extract_pages(_path("sample_email.eml"), "email")
+
+    assert len(pages) == 1
+    assert "Kasargod depot" in pages[0].text
+
+
+def test_xlsx_extraction_treats_each_sheet_as_a_numbered_page():
+    pages = extract_pages(_path("sample_spec_sheet.xlsx"), "xlsx")
+
+    assert len(pages) == 1
+    assert pages[0].page_number == 1
+    assert "QA_Results" in pages[0].text
+    assert "sulphur_ppm" in pages[0].text
+    assert "7.9" in pages[0].text
+
+
+def test_legacy_xls_extraction():
+    pages = extract_pages(_path("sample_spec_sheet_legacy.xls"), "xls")
+
+    assert len(pages) == 1
+    assert pages[0].page_number == 1
+    assert "sulphur_ppm" in pages[0].text
+    assert "8.5" in pages[0].text
+
+
+def test_image_without_ocr_fn_raises():
+    with pytest.raises(NotImplementedError):
+        extract_pages("some_photo.jpg", "image")
+
+
+def test_audio_without_transcribe_fn_raises():
+    with pytest.raises(NotImplementedError):
+        extract_pages("some_voice_note.wav", "audio")
+
+
+def test_audio_with_transcribe_fn_returns_single_unpaginated_page():
+    pages = extract_pages(
+        "some_voice_note.wav",
+        "audio",
+        audio_transcribe_fn=lambda path: "Transcribed: schedule the turnaround for next week",
+    )
+
+    assert len(pages) == 1
+    assert pages[0].page_number is None
+    assert "turnaround" in pages[0].text
+
+
+def test_unsupported_type_raises_value_error():
+    with pytest.raises(ValueError, match="Unsupported document type"):
+        extract_pages("some_file.zip", "unknown")

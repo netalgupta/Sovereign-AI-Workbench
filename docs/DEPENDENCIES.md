@@ -37,15 +37,22 @@
 | OpenCV | Deskew, denoise, binarization preprocessing |
 | LayoutLMv3 / table-transformer | Layout and table extraction |
 | Ultralytics YOLOv8 | Defect/anomaly detection (fine-tuned on public corrosion datasets) |
+| PyMuPDF (fitz) | Rasterizing a specific PDF page to an image, for routing just that page through OCR (a mixed scanned+text-native PDF must not OCR the whole document) |
+| faster-whisper | Local speech-to-text for voice-note transcription — **team addition, not PS-traceable, see REQUIREMENTS.md §6 / TOOLS.md #61 / VIBECODING_SPEC.md CARD 12**. Same fetch-once/offline-forever caching discipline as sentence-transformers (§4) — see `backend/ingestion/model_cache.py` |
 
 ## 4. Knowledge / Retrieval
 
 | Library | Purpose |
 |---|---|
-| FAISS or ChromaDB | Vector store |
+| FAISS (locked: `IndexFlatIP` — see RAG_SPEC.md §2 step 6; ChromaDB was an earlier either/or option, no longer live now that RAG_SPEC.md pins the exact index type) | Vector store |
 | rank_bm25 | Sparse keyword retrieval |
 | Neo4j Community Edition (locked — see GRAPH_SPEC.md §2) | Graph store |
 | sentence-transformers | Embedding generation |
+| python-magic | Document type detection — MIME-sniffing half of RAG_SPEC.md §2 step 1's extension+MIME reconciliation |
+| pdfplumber | Text-native PDF extraction, per page (RAG_SPEC.md §2 step 2) |
+| python-docx / openpyxl / xlrd | DOCX / XLSX / legacy-XLS reading for ingestion — the same python-docx/openpyxl libraries §6 uses for *generating* output, now doing double duty for *reading* input |
+| langchain-text-splitters | `RecursiveCharacterTextSplitter.from_tiktoken_encoder` — RAG_SPEC.md §2 step 3's exact chunking spec (512 tokens/64 overlap, cl100k_base), reused rather than hand-rolled |
+| tiktoken | Token counting for chunking (`cl100k_base`, per RAG_SPEC.md §2 step 3) |
 
 ## 5. Math / Computation (no Wolfram Alpha, no cloud math API — all local)
 

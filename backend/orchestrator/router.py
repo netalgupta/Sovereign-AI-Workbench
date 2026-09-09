@@ -56,6 +56,12 @@ VALID_TASK_TAGS = [
     "ocr",
     "image_understanding",
     "diagram_reading",
+    # Added alongside CARD 12 (team addition — not PS-traceable, see
+    # REQUIREMENTS.md §6). Unlike every tag above, this maps to a direct
+    # tool call (transcribe_voice_note), never an Ollama-servable LLM —
+    # it deliberately has no models.yaml entry. See VIBECODING_SPEC.md
+    # CARD 03's note for why that's correct, not an oversight.
+    "audio_transcription",
 ]
 
 _OLLAMA_HOST = "http://localhost:11434"
@@ -64,8 +70,8 @@ _PROMPT_TEMPLATE = (
     'You are a task classifier. Given the user\'s request, output ONLY a JSON array '
     'of task tags from this exact list: ["code_generation", "code_review", "debugging", '
     '"summarization", "drafting", "approval_notes", "planning", "ocr", '
-    '"image_understanding", "diagram_reading"]. Output nothing except the JSON array. '
-    'If multiple tags apply, include all of them.\n\n'
+    '"image_understanding", "diagram_reading", "audio_transcription"]. Output nothing '
+    'except the JSON array. If multiple tags apply, include all of them.\n\n'
     'User request: {user_input}'
 )
 

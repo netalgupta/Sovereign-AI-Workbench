@@ -69,3 +69,5 @@ This document is the single source of truth for what must be built, why, and how
 ## 6. Traceability Statement
 
 Every requirement in §2 and §3 was derived directly from the PS26117 text (Background, Description, Expected Solution) with no invented scope beyond what category H of TOOLS.md adds as differentiators. This table is the artifact judges can be shown to prove full PS coverage line by line.
+
+**Addendum, 2026-09-09 — team-added, non-PS-traceable capabilities:** a small number of tools go beyond both the PS text and category H's MRPL-specific differentiators (e.g. TOOLS.md #61, local voice-note transcription). These are deliberate, explicitly-tracked scope decisions — never presented to judges as PS-derived — made when they extend the general robustness of an already-in-scope requirement (here, FR-7's document-modality handling) using the same offline-first, no-invented-scope discipline as everything else in this catalog. Every such tool is marked "Team addition" in TOOLS.md's notes column so this traceability statement stays honest rather than being quietly broadened.
