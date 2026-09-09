@@ -19,30 +19,20 @@ claim to cover FR-3 as written.
 """
 
 import json
-import os
 import re
-from pathlib import Path
 
 import requests
 
-from backend.models.registry import load_registry
+from backend.models.registry import resolve_model_name
 
 # Bug found only by actually running this against a live Ollama: CARD 03's
 # `router_model_id` is a registry ID ("fast-router"), not an Ollama model
 # tag. Ollama has no model literally named "fast-router" — the real tag is
 # whatever models.yaml maps that id to (e.g. "phi-3.5-mini"). Resolve
-# through the registry (CARD 01) instead of passing the id straight through.
-_DEFAULT_REGISTRY_PATH = str(Path(__file__).resolve().parents[2] / "models" / "models.yaml")
-
-
-def _resolve_model_name(router_model_id: str) -> str:
-    registry_path = os.environ.get("MODELS_REGISTRY_PATH", _DEFAULT_REGISTRY_PATH)
-    registry = load_registry(registry_path)
-    if router_model_id not in registry:
-        raise ValueError(
-            f"Unknown model id {router_model_id!r} — not found in registry at {registry_path}"
-        )
-    return registry[router_model_id].model
+# through the registry (CARD 01, via resolve_model_name) instead of
+# passing the id straight through. resolve_model_name now lives in
+# registry.py, not here — entity_extraction.py needed the exact same
+# resolution, and duplicating it a second time was the wrong call.
 
 
 VALID_TASK_TAGS = [
@@ -119,7 +109,7 @@ def classify_task(user_input: str, router_model_id: str = "fast-router") -> list
             if the model's response still isn't parseable JSON after one
             retry with a stricter instruction appended.
     """
-    model_name = _resolve_model_name(router_model_id)
+    model_name = resolve_model_name(router_model_id)
     prompt = _PROMPT_TEMPLATE.format(user_input=user_input)
     raw = _call_router_model(prompt, model_name)
 
