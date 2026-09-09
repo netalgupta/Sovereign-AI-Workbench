@@ -303,6 +303,84 @@ class RetrievedChunk(BaseModel):
 
 ---
 
+## CARD 10 — Pint Unit-Aware Calculation Tool
+**Owner:** Aryan | **File:** `/backend/tools/math/unit_calc.py`
+
+**Added post-hoc (2026-09-09):** TOOLS.md tool #29 (Pint unit-aware calculations, 🔴, "prevents unit-conversion error class entirely") had no card — VIBECODING_SPEC.md's own header claims one exists for every 🔴 tool, and this one didn't. Writing it before writing the code, per this file's own rule: an unfilled blank is where a guess enters the codebase.
+
+**Exact function signature:**
+```python
+def evaluate_unit_expression(expression: str, target_unit: str | None = None) -> UnitCalcResult:
+```
+
+**Exact schema(s):**
+```python
+class UnitCalcResult(BaseModel):
+    expression: str
+    result_magnitude: float
+    result_unit: str
+    steps: list[str]
+```
+
+**Install command:** `pip install pint`
+
+**Step-by-step:**
+1. Use a module-level cached `pint.UnitRegistry()` instance — do not construct a new one per call (it parses a unit-definitions file on init, which is expensive, same rationale as CARD 05's PaddleOCR caching)
+2. Call `ureg.parse_expression(expression)` — this both evaluates the arithmetic and tracks units in one step, e.g. `"1500 kg/hr / (2.5 kg/m**3)"` returns a `Quantity` in `hr**-1 * m**3`-equivalent units, not a bare float
+3. Append `str(quantity)` to `steps` immediately after parsing
+4. If `target_unit` is given, call `quantity.to(target_unit)` and append the converted `str(quantity)` to `steps` — this is the actual unit-conversion the tool exists to get right
+5. `result_magnitude = float(quantity.magnitude)`, `result_unit = str(quantity.units)`
+6. If `pint.errors.DimensionalityError` is raised (e.g. the expression tries to add kilograms to meters), re-raise as `ValueError(f"Incompatible units in expression {expression!r}: {exc}")` — this is the exact error class the tool exists to catch, so its message must say so explicitly, not just "could not evaluate"
+7. Any other parse failure (`pint.errors.UndefinedUnitError`, tokenize errors) → `ValueError(f"Could not evaluate unit expression: {expression!r}")`
+
+**Test command:** `pytest backend/tests/test_unit_calc.py -v`
+**Definition of done:** `evaluate_unit_expression("1500 kg/hr / (2.5 kg/m**3)", target_unit="m**3/hr")` returns a `result_unit` equivalent to `m**3/hr` with the correct magnitude; an expression mixing incompatible dimensions (e.g. `"5 meter + 3 second"`) raises `ValueError` containing "Incompatible units"; an undefined unit raises the second `ValueError` form above.
+
+**Anti-hallucination note:** do not attempt to combine this with CARD 08's symbolic engine into one function — Pint quantities are numeric-with-units, SymPy expressions are symbolic; conflating them is exactly the kind of invented scope this spec exists to prevent. If a future task genuinely needs symbolic algebra *and* units together, that's a new card, not a silent extension of this one.
+
+---
+
+## CARD 11 — CoolProp Thermophysical Property Lookup
+**Owner:** Aryan | **File:** `/backend/tools/math/thermophysical.py`
+
+**Added post-hoc (2026-09-09):** TOOLS.md tool #30 (🟡, backs tool #53's PSA/steam-table lookups) — same missing-card situation as CARD 10, filled in before implementation for the same reason.
+
+**Exact function signature:**
+```python
+def lookup_thermophysical_property(
+    output_property: str,
+    input1_property: str,
+    input1_value: float,
+    input2_property: str,
+    input2_value: float,
+    fluid: str,
+) -> ThermophysicalResult:
+```
+
+**Exact schema(s):**
+```python
+class ThermophysicalResult(BaseModel):
+    fluid: str
+    output_property: str
+    value: float
+    units: str
+```
+
+**Install command:** `pip install coolprop`
+
+**Step-by-step:**
+1. Call `CoolProp.CoolProp.PropsSI(output_property, input1_property, input1_value, input2_property, input2_value, fluid)` directly — this is CoolProp's own documented SI-unit interface, do not use the non-SI `Props` variant
+2. CoolProp's `PropsSI` already raises `ValueError` with a descriptive message on an unknown fluid/property/invalid input combination — catch it and re-raise as `ValueError(f"CoolProp lookup failed for fluid={fluid!r}, output={output_property!r}: {exc}")` so every caller sees a consistent message shape, without discarding CoolProp's own detail
+3. `PropsSI` always returns SI units by convention. Populate `units` from a small fixed lookup table for the properties this system actually queries (`T`→`K`, `P`→`Pa`, `D`→`kg/m^3`, `H`→`J/kg`, `S`→`J/kg/K`, `U`→`J/kg`, `Q`→`dimensionless (0-1)`, `C`→`J/kg/K`, `CONDUCTIVITY`→`W/m/K`, `VISCOSITY`→`Pa*s`). If `output_property` isn't in that table, set `units = "SI (CoolProp PropsSI convention — not mapped for this property, see CoolProp docs)"` — never fabricate a specific unit string for a property this table doesn't actually know about
+4. Return `ThermophysicalResult(fluid=fluid, output_property=output_property, value=result, units=<from step 3>)`
+
+**Test command:** `pytest backend/tests/test_thermophysical.py -v`
+**Definition of done:** `lookup_thermophysical_property("H", "T", 300, "P", 101325, "Water")` returns a `float` value with `units == "J/kg"`; an unknown fluid name raises `ValueError` whose message contains both `"CoolProp lookup failed"` and the original CoolProp detail text; an output property outside the fixed table still returns a result with the honest fallback `units` string rather than a guessed unit.
+
+**Anti-hallucination note:** never invent a unit string for a property not in the fixed table in step 3 — an engineer trusting this tool's `units` field for, say, a steam-table lookup used in a drafted approval note must never be shown a wrong unit with the same confidence as a correct one.
+
+---
+
 ## Template for Any New Card (use this exact skeleton — do not deviate)
 
 ```

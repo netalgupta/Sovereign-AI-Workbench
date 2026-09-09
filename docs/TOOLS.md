@@ -56,8 +56,8 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 26 | SymPy symbolic engine | 🔴 | No Wolfram Alpha — fully local |
 | 27 | Maxima CAS | 🟡 | Heavier symbolic ops |
 | 28 | NumPy/SciPy numerical + stats | 🔴 | Trend analysis, curve fitting |
-| 29 | Pint unit-aware calculations | 🔴 | Prevents unit-error class entirely |
-| 30 | CoolProp thermophysical properties | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups |
+| 29 | Pint unit-aware calculations | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
+| 30 | CoolProp thermophysical properties | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
 | 31 | Matplotlib plotting | 🔴 | Embedded charts in outputs |
 | 32 | NetworkX graph math | 🟡 | Pipeline dependency graphs |
 | 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
