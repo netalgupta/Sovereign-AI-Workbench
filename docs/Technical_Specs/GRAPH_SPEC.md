@@ -6,6 +6,8 @@ Plain vector retrieval cannot answer "show every SOP referencing this valve" or 
 ## 2. Storage Choice
 **Locked: Neo4j Community Edition.** Cypher query language, mature visualization tooling, and this is now the only graph backend implemented — no NetworkX fallback path to build or maintain. Every Cypher example in this document is the actual implementation target, not a placeholder.
 
+**Hard constraint, verified by actually running the default Docker image:** Neo4j's default config sends anonymous usage telemetry on every startup — its own log prints "Anonymous Usage Data is being sent to Neo4j" unless disabled. This is exactly the kind of default phone-home behavior CLAUDE.md's hard constraint #1 requires auditing every dependency for. It is NOT disabled by default — whoever builds the real `docker-compose.yml` (SYSTEM.md §5 / DEPENDENCIES.md §10) MUST set `NEO4J_dbms_usage__report_enabled=false` as an environment variable on the Neo4j container. Confirmed fixed: the exact same container with this flag set produces a clean startup log with no telemetry line at all.
+
 ## 3. Node Types (exact labels, do not invent variants)
 
 | Label | Properties | Example |
