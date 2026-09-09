@@ -1,12 +1,36 @@
-# Backend dependencies — Aryan's Day 1-2 scope (model registry, router).
-# Full stack requirements accumulate here as other owners' tools land;
-# see DEPENDENCIES.md for the complete target list across all categories.
+# Backend dependencies. Organized to mirror DEPENDENCIES.md's category
+# structure so it's obvious which spec section justifies each line.
+# Full target list (including other owners' categories not yet built)
+# lives in DEPENDENCIES.md — this file tracks what's actually imported
+# by code in this repo today, not the eventual full stack.
 
+# Core backend (DEPENDENCIES.md §2)
 pydantic>=2.0
 pyyaml>=6.0
 requests>=2.31
 fastapi>=0.110
 uvicorn>=0.29
+
+# Math / computation — no Wolfram Alpha, no cloud math API (DEPENDENCIES.md §5)
+sympy>=1.14
+pint>=0.24
+coolprop>=8.0
+
+# Vision / OCR — document rasterization + local ASR (DEPENDENCIES.md §3)
+pymupdf>=1.24            # PDF page rendering for per-page OCR fallback
+faster-whisper>=1.2      # local speech-to-text (CARD 12, team addition — see REQUIREMENTS.md §6)
+
+# Knowledge / retrieval — ingestion + embeddings (DEPENDENCIES.md §4)
+python-magic-bin>=0.4; sys_platform == 'win32'   # MIME sniffing (Windows binary wheel)
+python-magic>=0.4; sys_platform != 'win32'        # same library, Linux/Mac wheel needs system libmagic
+pdfplumber>=0.11
+python-docx>=1.2
+openpyxl>=3.1
+xlrd>=2.0                # legacy .xls reading (openpyxl is XLSX-only)
+tiktoken>=0.8
+langchain-text-splitters>=0.3
+faiss-cpu>=1.13
+sentence-transformers>=3.3
 
 # Test-only
 pytest>=8.0

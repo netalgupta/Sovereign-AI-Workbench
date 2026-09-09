@@ -22,6 +22,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 10 | Image diffing/change detection | ⚪ | Registry-listed |
 | 11 | Signature/stamp detection | ⚪ | Nice MRPL-approval-workflow touch, low priority |
 | 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
+| 61 | Voice note transcription (local speech-to-text) | 🟡 | **Team addition — not traceable to a PS26117 line.** Extends FR-7's document-modality handling to audio input (depot/HQ voice notes, shift handovers). Fully offline (faster-whisper, fetch-once/offline-forever pattern per `model_cache.py`). VIBECODING_SPEC.md CARD 12, Owner: Aryan. See REQUIREMENTS.md §6 for how this is kept honestly separate from PS-derived scope. |
 
 ## B. Knowledge & Retrieval (RAG/GraphRAG) — Owner: Aryan (core), Netal (UI)
 

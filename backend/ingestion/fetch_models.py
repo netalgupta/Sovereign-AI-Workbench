@@ -32,8 +32,31 @@ def _fetch_bge_large(model_id: str = "BAAI/bge-large-en-v1.5") -> None:
     print(f"Saved to {cache_dir} — future loads are fully offline.")
 
 
+def _fetch_whisper_base(model_id: str = "Systran/faster-whisper-base") -> None:
+    # Imported here, not at module top, and NOT via voice_transcription.py
+    # — that module forces itself offline (HF_HUB_OFFLINE=1) as an import
+    # side-effect, which would poison this exact fetch call if we routed
+    # through it. fetch_models.py stays completely independent of every
+    # runtime module that assumes offline, on purpose — see
+    # voice_transcription.py's module docstring for the bug this avoids.
+    from faster_whisper.utils import download_model
+
+    from backend.ingestion.model_cache import local_cache_dir
+
+    cache_dir = local_cache_dir("audio", model_id)
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {model_id} (one-time, requires internet)...")
+    # output_dir -> huggingface_hub's local_dir (symlinks disabled) --
+    # a clean, flat, self-contained directory, NOT the hashed cache
+    # layout `download_root`/`cache_dir` would produce. Verified by
+    # reading download_model's own source before relying on it.
+    download_model(model_id, output_dir=str(cache_dir))
+    print(f"Saved to {cache_dir} — future loads are fully offline.")
+
+
 _FETCHERS = {
     "bge-large-en-v1.5": _fetch_bge_large,
+    "faster-whisper-base": _fetch_whisper_base,
 }
 
 

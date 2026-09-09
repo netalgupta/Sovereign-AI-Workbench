@@ -43,10 +43,9 @@
              ┌─────▼─────┐                          ┌─────▼──────┐
              │ Sandbox   │                          │ Vector DB  │
              │ (isolated │                          │ + Graph DB │
-             │ Docker,   │                          │ (Chroma/   │
-             │ no net)   │                          │ FAISS +    │
-             └───────────┘                          │ Neo4j)     │
-                                                     └────────────┘
+             │ Docker,   │                          │ (FAISS +   │
+             │ no net)   │                          │ Neo4j)     │
+             └───────────┘                          └────────────┘
 ┌────────────────────────────────────────────────────────────┐
 │  DATA / INGESTION LAYER                                      │
 │  - Document ingestion pipeline (PDF/DOCX/scans/emails)       │
@@ -72,11 +71,11 @@
 |---|---|---|
 | Task Router | Classifies incoming request(s) into task type(s) | phi-3.5-mini via Ollama |
 | Orchestrator Agent | Decomposes multi-step tasks, builds visible plan graph, dispatches to sub-agents | LangGraph (Python) |
-| Vision Sub-Agent | OCR, diagram/photo understanding | Qwen2-VL-7B, PaddleOCR, Real-ESRGAN |
+| Vision Sub-Agent | OCR, diagram/photo understanding, + local voice-note transcription (team addition, not PS-traceable — see REQUIREMENTS.md §6) | Qwen2-VL-7B, PaddleOCR, Real-ESRGAN, faster-whisper (ASR) |
 | Code Sub-Agent | Writes and iterates on code | Qwen2.5-Coder-7B/14B |
 | Reasoning Sub-Agent | Drafting, summarization, planning text | Qwen2.5-14B |
 | Math Tool Layer | Verified numeric/symbolic computation, called as a direct tool (not through an LLM) | SymPy, Maxima, NumPy/SciPy, Pint, CoolProp |
-| Retrieval Layer | Hybrid dense+sparse search, graph traversal | bge-large embeddings, BM25, FAISS/Chroma, Neo4j |
+| Retrieval Layer | Hybrid dense+sparse search, graph traversal | bge-large embeddings, BM25, FAISS (locked, `IndexFlatIP`), Neo4j |
 | Self-Verification Agent | Checks final output against original request before completion | phi-3.5-mini (cheap, fast pass) |
 | Human Approval Gate | Confirms before any write/send action | Frontend modal + backend hold state |
 | Audit Logger | Append-only log of every action | SQLite (local), exportable to CSV |

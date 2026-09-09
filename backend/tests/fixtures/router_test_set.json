@@ -1,6 +1,6 @@
 {
   "meta": {
-    "note": "REQUIREMENTS.md FR-3 describes this set as spanning 'code / summarization / vision / math', but VIBECODING_SPEC.md CARD 03's VALID_TASK_TAGS has no math-related tag and explicitly forbids inventing one on the fly. This fixture therefore covers every category CARD 03's fixed tag list actually supports (code_generation, code_review, debugging, summarization, drafting, approval_notes, planning, ocr, image_understanding, diagram_reading) and omits a pure-math category until that gap is resolved (see router.py module docstring)."
+    "note": "REQUIREMENTS.md FR-3 describes this set as spanning 'code / summarization / vision / math', but VIBECODING_SPEC.md CARD 03's VALID_TASK_TAGS has no math-related tag and explicitly forbids inventing one on the fly. This fixture therefore covers every category CARD 03's fixed tag list actually supports (code_generation, code_review, debugging, summarization, drafting, approval_notes, planning, ocr, image_understanding, diagram_reading, audio_transcription) and omits a pure-math category until that gap is resolved (see router.py module docstring). audio_transcription was added 2026-09-09 alongside CARD 12 (team addition, not PS-traceable — see REQUIREMENTS.md §6); two lower-value duplicate-coverage prompts were swapped out for it to keep this set at exactly 20, matching FR-3's literal '20-prompt' wording."
   },
   "cases": [
     {"prompt": "Write a Python function that reverses a linked list.", "expected_tags": ["code_generation"]},
@@ -12,12 +12,12 @@
     {"prompt": "Extract the text from this scanned inspection report image.", "expected_tags": ["ocr"]},
     {"prompt": "What does this photo of the corroded valve show?", "expected_tags": ["image_understanding"]},
     {"prompt": "Read the P&ID diagram and list every valve tag you can identify.", "expected_tags": ["diagram_reading"]},
-    {"prompt": "Fix the off-by-one error in this sorting algorithm.", "expected_tags": ["debugging", "code_review"]},
+    {"prompt": "Transcribe this voice note from the depot shift handover.", "expected_tags": ["audio_transcription"]},
     {"prompt": "Generate unit tests for this sandbox executor module.", "expected_tags": ["code_generation"]},
     {"prompt": "Condense this week's shift logs into a short summary for the plant manager.", "expected_tags": ["summarization"]},
     {"prompt": "Write the recommendation section for this QA batch report.", "expected_tags": ["drafting"]},
     {"prompt": "Draft a safety circular about benzene handling procedures.", "expected_tags": ["drafting", "approval_notes"]},
-    {"prompt": "Break down the tasks required to add a new model to the registry.", "expected_tags": ["planning"]},
+    {"prompt": "Turn this recorded voice memo about the turnaround schedule into text.", "expected_tags": ["audio_transcription"]},
     {"prompt": "OCR this handwritten inspection note and give me the plain text.", "expected_tags": ["ocr"]},
     {"prompt": "Look at this cargo manifest scan and tell me what it says.", "expected_tags": ["ocr", "image_understanding"]},
     {"prompt": "Identify the equipment tags visible in this hydrocracker P&ID.", "expected_tags": ["diagram_reading"]},

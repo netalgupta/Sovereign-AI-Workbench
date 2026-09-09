@@ -88,10 +88,12 @@ def classify_task(user_input: str, router_model_id: str = "fast-router") -> list
 
 **Exact prompt template (use verbatim, do not paraphrase — consistency matters for the 90% accuracy target in FR-3):**
 ```
-You are a task classifier. Given the user's request, output ONLY a JSON array of task tags from this exact list: ["code_generation", "code_review", "debugging", "summarization", "drafting", "approval_notes", "planning", "ocr", "image_understanding", "diagram_reading"]. Output nothing except the JSON array. If multiple tags apply, include all of them.
+You are a task classifier. Given the user's request, output ONLY a JSON array of task tags from this exact list: ["code_generation", "code_review", "debugging", "summarization", "drafting", "approval_notes", "planning", "ocr", "image_understanding", "diagram_reading", "audio_transcription"]. Output nothing except the JSON array. If multiple tags apply, include all of them.
 
 User request: {user_input}
 ```
+
+**Added 2026-09-09 — `audio_transcription` tag (CARD 12, team addition, not PS-traceable):** this is the first tag added to the fixed list since this card was written, done in the same change as CARD 12 and TOOLS.md's row #61 per this card's own anti-hallucination rule below. Note the rule's original wording ("update this card, `models.yaml`, and TOOLS.md") assumed every tag eventually maps to an Ollama-servable registry model — building CARD 12 surfaced that this isn't actually true for every tag: `audio_transcription` (like `math`'s `assigned_agent`, per AGENTS_SPEC.md §6) maps to a **direct tool call** (`transcribe_voice_note`), never an LLM, so it correctly has NO `models.yaml` entry — inventing a fake one just to satisfy the letter of the old rule would be dishonest, not complete. The rule going forward: update this card + TOOLS.md always; update `models.yaml` only if the tag's real handler is actually an Ollama-servable LLM.
 
 **Step-by-step:**
 1. Format the prompt above with `user_input` inserted at `{user_input}`
@@ -378,6 +380,49 @@ class ThermophysicalResult(BaseModel):
 **Definition of done:** `lookup_thermophysical_property("H", "T", 300, "P", 101325, "Water")` returns a `float` value with `units == "J/kg"`; an unknown fluid name raises `ValueError` whose message contains both `"CoolProp lookup failed"` and the original CoolProp detail text; an output property outside the fixed table still returns a result with the honest fallback `units` string rather than a guessed unit.
 
 **Anti-hallucination note:** never invent a unit string for a property not in the fixed table in step 3 — an engineer trusting this tool's `units` field for, say, a steam-table lookup used in a drafted approval note must never be shown a wrong unit with the same confidence as a correct one.
+
+---
+
+## CARD 12 — Local Voice Note Transcription
+**Owner:** Aryan | **File:** `/backend/tools/audio/voice_transcription.py`
+
+**Added post-hoc (2026-09-09) — TEAM ADDITION, NOT PS-TRACEABLE:** voice-note transcription is not in REQUIREMENTS.md, RAG_SPEC.md's original input-type list, or any PS26117 line. It was added as a deliberate scope decision (not silently invented) to extend FR-7's document-modality handling to audio input, matching the "boundless, pluggable" architecture claim TOOLS.md §I already makes. TOOLS.md's row for this tool is marked "Team addition" explicitly so the PS-traceability claim in REQUIREMENTS.md §6 stays honest for judges — see that file's amended §6.
+
+**Exact function signature:**
+```python
+def transcribe_voice_note(audio_path: str) -> TranscriptionResult:
+```
+
+**Exact schema(s):**
+```python
+class TranscriptionSegment(BaseModel):
+    text: str
+    start_seconds: float
+    end_seconds: float
+
+class TranscriptionResult(BaseModel):
+    full_text: str
+    segments: list[TranscriptionSegment]
+    language: str
+```
+
+**Install command:** `pip install faster-whisper`
+
+**Model:** `Systran/faster-whisper-base` (dev tier — CPU-friendly, ~150MB int8; a `small`/`medium` upgrade is a `download_root` + model-name swap only, per the same dual-tier pattern DEPENDENCIES.md §1 uses for the LLM tier, never a code change). Cached via the SAME fetch-once/offline-forever pattern as CARD "embeddings" (`backend/ingestion/model_cache.py`) — faster-whisper pulls its model from the Hugging Face Hub exactly like sentence-transformers does, so it has the identical phone-home risk at inference time and must be handled identically.
+
+**Step-by-step:**
+1. Fetch once, online: `WhisperModel("Systran/faster-whisper-base", download_root=<cache dir>)` — writes the model into `model_cache.local_cache_dir("audio", "Systran/faster-whisper-base")`
+2. At runtime: `model_cache.force_offline_mode()` before constructing `WhisperModel`, then construct with `local_files_only=True` and `download_root` pointed at the same cache dir — belt-and-suspenders offline guarantee, same reasoning as the embeddings card
+3. Cache the `WhisperModel` instance at module level — model construction is expensive, same rationale as CARD 05/10's cached-instance pattern
+4. Call `model.transcribe(audio_path)`, which returns a `(segments_generator, info)` tuple — materialize the generator into a list immediately (don't return a lazy generator to the caller; a caller inspecting `.segments` twice would silently get an empty second read)
+5. Build `full_text` by joining every segment's `.text.strip()` with a single space
+6. `language` comes from `info.language` (faster-whisper auto-detects unless told otherwise — do not hardcode `"en"`, MRPL correspondence could legitimately be in another language)
+7. If `audio_path` does not exist, raise `FileNotFoundError` before constructing/calling the model — same "fail before touching the expensive resource" pattern as CARD 05
+
+**Test command:** `pytest backend/tests/test_voice_transcription.py -v`
+**Definition of done:** on a real, checked-in fixture audio clip with known spoken content, `full_text` contains the expected substring; `segments` is non-empty and every segment's `start_seconds < end_seconds`; a missing file raises `FileNotFoundError`; one test hard-blocks sockets (same technique as the embeddings test) around a FRESH model load and still succeeds, proving inference truly never reaches the network.
+
+**Anti-hallucination note:** never hardcode `language="en"` — that would silently mislabel a non-English voice note with full confidence, exactly the kind of wrong-label failure this whole system's anti-hallucination discipline exists to prevent elsewhere. If `model.transcribe()` returns no segments at all (silence, corrupted audio), `full_text` must be an empty string, not a fabricated placeholder like "[no speech detected]" invented by this wrapper — let the caller decide what an empty transcript means for their use case.
 
 ---
 

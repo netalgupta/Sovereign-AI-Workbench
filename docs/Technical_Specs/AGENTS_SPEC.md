@@ -82,7 +82,7 @@ If `satisfied: false`, route back to `planner` with the `missing` list appended 
 
 | Sub-agent | Allowed | Forbidden |
 |---|---|---|
-| `vision_agent` | Call OCR/VLM tools (CARD 05 etc.), return extracted text/structure | Cannot call code execution or write files directly |
+| `vision_agent` | Call OCR/VLM/ASR tools (CARD 05, CARD 12, etc.), return extracted text/structure. Scope deliberately broadened beyond pure vision to cover audio transcription (CARD 12, a team addition — see REQUIREMENTS.md §6) rather than introduce a new sub-agent/enum value for one tool; "vision_agent" here means "extraction from a non-text-native input modality," not literally "only images." | Cannot call code execution or write files directly |
 | `code_agent` | Call CARD 04 sandbox execution, iterate on failure up to 3 attempts | Cannot execute outside the sandbox under any circumstance |
 | `reasoning_agent` | Draft text, call retrieval for grounding | Cannot state a fact without a citation if retrieval was available for that domain (enforced per RAG_SPEC.md §4) |
 | `math_tool` | Call SymPy/NumPy/etc. directly (not an LLM call at all — a direct function call node) | N/A — this node never invokes an LLM, by design, per NFR-5 |
