@@ -22,7 +22,8 @@ import pytest
 import requests
 import responses
 
-from backend.orchestrator.router import VALID_TASK_TAGS, _resolve_model_name, classify_task
+from backend.models.registry import resolve_model_name
+from backend.orchestrator.router import VALID_TASK_TAGS, classify_task
 
 FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "router_test_set.json")
 GENERATE_URL = "http://localhost:11434/api/generate"
@@ -46,7 +47,7 @@ def _router_model_actually_pulled() -> bool:
     except (requests.exceptions.RequestException, ValueError, KeyError):
         return False
     try:
-        resolved_model = _resolve_model_name("fast-router")
+        resolved_model = resolve_model_name("fast-router")
     except (FileNotFoundError, ValueError):
         return False
     return resolved_model in pulled

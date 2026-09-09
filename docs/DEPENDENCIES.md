@@ -46,7 +46,7 @@
 |---|---|
 | FAISS (locked: `IndexFlatIP` — see RAG_SPEC.md §2 step 6; ChromaDB was an earlier either/or option, no longer live now that RAG_SPEC.md pins the exact index type) | Vector store |
 | rank_bm25 | Sparse keyword retrieval |
-| Neo4j Community Edition (locked — see GRAPH_SPEC.md §2) | Graph store |
+| Neo4j Community Edition (locked — see GRAPH_SPEC.md §2) | Graph store. **Ships with usage telemetry ON by default — verified by actually running the container.** `NEO4J_dbms_usage__report_enabled=false` is mandatory on every deployment (dev, portable drive, real MRPL), not optional hardening. |
 | sentence-transformers | Embedding generation |
 | python-magic | Document type detection — MIME-sniffing half of RAG_SPEC.md §2 step 1's extension+MIME reconciliation |
 | pdfplumber | Text-native PDF extraction, per page (RAG_SPEC.md §2 step 2) |

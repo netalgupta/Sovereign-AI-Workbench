@@ -6,6 +6,8 @@ Plain vector retrieval cannot answer "show every SOP referencing this valve" or 
 ## 2. Storage Choice
 **Locked: Neo4j Community Edition.** Cypher query language, mature visualization tooling, and this is now the only graph backend implemented — no NetworkX fallback path to build or maintain. Every Cypher example in this document is the actual implementation target, not a placeholder.
 
+**Hard constraint, verified by actually running the default Docker image:** Neo4j's default config sends anonymous usage telemetry on every startup — its own log prints "Anonymous Usage Data is being sent to Neo4j" unless disabled. This is exactly the kind of default phone-home behavior CLAUDE.md's hard constraint #1 requires auditing every dependency for. It is NOT disabled by default — whoever builds the real `docker-compose.yml` (SYSTEM.md §5 / DEPENDENCIES.md §10) MUST set `NEO4J_dbms_usage__report_enabled=false` as an environment variable on the Neo4j container. Confirmed fixed: the exact same container with this flag set produces a clean startup log with no telemetry line at all.
+
 ## 3. Node Types (exact labels, do not invent variants)
 
 | Label | Properties | Example |
@@ -28,6 +30,17 @@ Plain vector retrieval cannot answer "show every SOP referencing this valve" or 
 | `AUTHORED_BY` | `Document` → `Person` | Sign-off/authorship |
 | `REPORTS_INCIDENT_AT` | `Incident` → `Equipment` / `PipelineSegment` | — |
 | `MAINTENANCE_PERFORMED_ON` | `MaintenanceRecord` → `Equipment` | From SAP-sourced data |
+
+## 4.1 Extraction-to-Schema Property Bridge (gap found while implementing, not in the original spec)
+
+§5's extraction prompt asks the LLM for a generic `{"type": ..., "name": string, "attributes": object}` shape for every entity type — but §3's node schema uses a DIFFERENT key property name per type (`tag` for Equipment, `segment_name` for PipelineSegment, `name` for Person, and Incident has no name-like field at all — just `date`/`severity`/`summary`). Nothing in the original spec bridged these, which only became visible when actually wiring extraction output into `MERGE` statements. The bridge, fixed here so it's a documented decision instead of a silent code-only choice:
+
+| Extracted `type` | §3 key property to `MERGE` on | Extraction's `name` value goes into |
+|---|---|---|
+| `Equipment` | `tag` | the `tag` property |
+| `PipelineSegment` | `segment_name` | the `segment_name` property — confirmed correct by §6's own signature query, which already merges/matches on `segment_name` |
+| `Person` | `name` | the `name` property (already matches §3 directly) |
+| `Incident` | `summary` | the `summary` property — the closest semantic fit; §3 has no `name`-equivalent field for Incident at all, so this is a deliberate pragmatic choice, not a spec-confirmed one like the other three |
 
 ## 5. Entity Extraction Pipeline (how nodes/edges get created during ingestion)
 

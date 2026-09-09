@@ -1,0 +1,18 @@
+# Force these as binary, always -- never let a contributor's local
+# core.autocrlf setting attempt CRLF<->LF conversion on them. Git's own
+# binary-sniffing heuristic happened to save us this time (verified byte-
+# for-byte against the committed blobs after a "LF will be replaced by
+# CRLF" warning on the test corpus's PDFs), but that's git guessing from
+# content, not a guarantee — this file makes it a fact, not a heuristic,
+# for every contributor's clone regardless of their own git config.
+*.pdf   -text
+*.docx  -text
+*.xlsx  -text
+*.xls   -text
+*.png   -text
+*.jpg   -text
+*.jpeg  -text
+*.tiff  -text
+*.wav   -text
+*.mp3   -text
+*.eml   -text

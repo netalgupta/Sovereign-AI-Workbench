@@ -75,6 +75,45 @@ def test_docx_extraction_includes_paragraph_and_table_text():
     assert "Field" in pages[0].text  # from the table
 
 
+def test_docx_extraction_preserves_document_order_of_tables_and_paragraphs(tmp_path):
+    """Regression test for a real bug found on a real fixture (the
+    corpus's SOP-114 document): python-docx's .paragraphs and .tables
+    are two separate flat lists with no positional relationship to each
+    other. An earlier version of _extract_docx did all paragraphs, then
+    all tables -- which put a paragraph introducing a table nowhere
+    near that table's actual data, and put a SECOND table's data
+    immediately after the first table's data instead of after ITS OWN
+    introducing paragraph. This builds a document with two
+    paragraph-then-table pairs and asserts each table's data lands
+    right after its own paragraph, not grouped with the other table's.
+    """
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument()
+    doc.add_paragraph("Intro to table Alpha:")
+    table_a = doc.add_table(rows=1, cols=1)
+    table_a.rows[0].cells[0].text = "AlphaValue"
+    doc.add_paragraph("Intro to table Beta:")
+    table_b = doc.add_table(rows=1, cols=1)
+    table_b.rows[0].cells[0].text = "BetaValue"
+
+    docx_path = tmp_path / "ordering_test.docx"
+    doc.save(str(docx_path))
+
+    pages = extract_pages(str(docx_path), "docx")
+    text = pages[0].text
+
+    # "AlphaValue" must come after "Alpha" and before "Beta" (its own
+    # intro, not the other table's) -- the old bug would have put both
+    # tables' data back-to-back, after both paragraphs.
+    alpha_intro_pos = text.index("Intro to table Alpha")
+    alpha_value_pos = text.index("AlphaValue")
+    beta_intro_pos = text.index("Intro to table Beta")
+    beta_value_pos = text.index("BetaValue")
+
+    assert alpha_intro_pos < alpha_value_pos < beta_intro_pos < beta_value_pos
+
+
 def test_txt_extraction():
     pages = extract_pages(_path("sample_note.txt"), "txt")
 
