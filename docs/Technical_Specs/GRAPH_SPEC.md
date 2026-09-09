@@ -31,6 +31,17 @@ Plain vector retrieval cannot answer "show every SOP referencing this valve" or 
 | `REPORTS_INCIDENT_AT` | `Incident` → `Equipment` / `PipelineSegment` | — |
 | `MAINTENANCE_PERFORMED_ON` | `MaintenanceRecord` → `Equipment` | From SAP-sourced data |
 
+## 4.1 Extraction-to-Schema Property Bridge (gap found while implementing, not in the original spec)
+
+§5's extraction prompt asks the LLM for a generic `{"type": ..., "name": string, "attributes": object}` shape for every entity type — but §3's node schema uses a DIFFERENT key property name per type (`tag` for Equipment, `segment_name` for PipelineSegment, `name` for Person, and Incident has no name-like field at all — just `date`/`severity`/`summary`). Nothing in the original spec bridged these, which only became visible when actually wiring extraction output into `MERGE` statements. The bridge, fixed here so it's a documented decision instead of a silent code-only choice:
+
+| Extracted `type` | §3 key property to `MERGE` on | Extraction's `name` value goes into |
+|---|---|---|
+| `Equipment` | `tag` | the `tag` property |
+| `PipelineSegment` | `segment_name` | the `segment_name` property — confirmed correct by §6's own signature query, which already merges/matches on `segment_name` |
+| `Person` | `name` | the `name` property (already matches §3 directly) |
+| `Incident` | `summary` | the `summary` property — the closest semantic fit; §3 has no `name`-equivalent field for Incident at all, so this is a deliberate pragmatic choice, not a spec-confirmed one like the other three |
+
 ## 5. Entity Extraction Pipeline (how nodes/edges get created during ingestion)
 
 1. After chunking (per RAG_SPEC.md §2), run each chunk through a local LLM extraction prompt (use the reasoning sub-agent, `qwen2.5:14b`) with this exact instruction:

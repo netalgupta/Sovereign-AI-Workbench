@@ -19,11 +19,11 @@ claim to cover FR-3 as written.
 """
 
 import json
-import re
 
 import requests
 
 from backend.models.registry import resolve_model_name
+from backend.utils.llm_output import strip_code_fences
 
 # Bug found only by actually running this against a live Ollama: CARD 03's
 # `router_model_id` is a registry ID ("fast-router"), not an Ollama model
@@ -66,14 +66,6 @@ _PROMPT_TEMPLATE = (
 )
 
 _RETRY_SUFFIX = "\nOutput ONLY the JSON array, no other text."
-
-_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
-
-
-def _strip_code_fences(text: str) -> str:
-    text = text.strip()
-    match = _FENCE_PATTERN.match(text)
-    return match.group(1).strip() if match else text
 
 
 def _call_router_model(prompt: str, model_name: str) -> str:
@@ -127,7 +119,7 @@ def classify_task(user_input: str, router_model_id: str = "fast-router") -> list
 
 
 def _try_parse(raw: str) -> list[str] | None:
-    cleaned = _strip_code_fences(raw)
+    cleaned = strip_code_fences(raw)
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
