@@ -426,6 +426,39 @@ class TranscriptionResult(BaseModel):
 
 ---
 
+## CARD 13 — Chart Image Description (Vision Estimate, Not a Verified Fact)
+**Owner:** Aryan | **File:** `/backend/tools/vision/chart_understanding.py`
+
+**Added post-hoc (2026-09-09), prompted directly by a question about how chart/pie/bar-chart images are handled.** This card exists specifically to extend CARD 08's "never let an estimate wear a verified number's confidence" discipline to vision: a vision model reading a chart image is estimating, not computing. See the counterpart in RAG_SPEC.md's ingestion pipeline for the OTHER chart case — a native XLSX chart, whose exact data is read deterministically with zero vision model involved, because Excel embeds a real cached copy of the chart's actual values in the file itself.
+
+**Exact function signature:**
+```python
+def describe_chart_image(image_path: str, model_id: str = "vision-model") -> ChartVisualDescription:
+```
+
+**Exact schema(s):**
+```python
+class ChartVisualDescription(BaseModel):
+    description: str
+    is_estimate: bool = True  # always True, by design — no code path produces a "verified" value here
+```
+
+**Install command:** none beyond what CARD 01/03 already require (`requests`) — this calls Ollama's `/api/generate` with an `images` field, no new dependency.
+
+**Step-by-step:**
+1. Resolve `model_id` through the registry (`resolve_model_name`) — never hardcode the Ollama model tag, per CLAUDE.md rule #2, same as CARD 03/CARD-graph-extraction
+2. Base64-encode the image file, pass it in Ollama's `images` array alongside the prompt (Ollama's documented multimodal request shape)
+3. Use the exact prompt in the implementation file, which explicitly separates two very different things: (a) transcribing a number LITERALLY PRINTED as text on the chart (a data label, an axis tick — OCR-shaped, close to reliable) from (b) inferring a value from a bar's height or a slice's angle (a genuine estimate) — the model must never blend these into one undifferentiated "value"
+4. Return the raw response text as `description`; `is_estimate` is always `True`
+5. If `image_path` doesn't exist, raise `FileNotFoundError` before touching the model — same "fail before touching the expensive resource" pattern as every other vision/audio tool in this catalog
+
+**Test command:** `pytest backend/tests/test_chart_understanding.py -v`
+**Definition of done:** on a real chart image fixture with a visible printed data label, `description` contains that exact label text; a missing file raises `FileNotFoundError`; `is_estimate` is `True` on every call, with no code path that ever sets it otherwise.
+
+**Anti-hallucination note:** the generation pipeline (RAG_SPEC.md §4) and any approval-note/deliverable generator must never cite `description`'s content as a verified numeric fact the way they would cite a SymPy result (CARD 08) or a native chart's cached value (`xlsx_charts.py`). If this tool's output needs to appear in a generated document, it must carry a visible "vision estimate, not a verified figure" caveat — silently upgrading it to the same confidence tier as a computed number would be the exact failure mode this whole catalog's anti-hallucination discipline exists to prevent.
+
+---
+
 ## Template for Any New Card (use this exact skeleton — do not deviate)
 
 ```

@@ -66,6 +66,44 @@ def test_mixed_pdf_without_ocr_fn_raises_naming_only_the_actually_blank_page():
     assert "page(s) [2]" in str(exc_info.value)
 
 
+def test_pdf_with_embedded_image_calls_chart_image_fn_when_provided():
+    """sample_native.pdf has no embedded images, so this needs a fixture
+    that does -- reuse the corpus's real inspection-report PDF, which
+    has both real text AND an embedded chart image on page 1, exactly
+    the "additive, not a replacement" case chart_image_fn exists for.
+    """
+    corpus_pdf = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "MRPL_RAG_Test_Corpus", "02_Inspection_and_Maintenance",
+        "Inspection_Report_CCR1_Regeneration_Cycle.pdf",
+    )
+    if not os.path.exists(corpus_pdf):
+        pytest.skip("test corpus not present")
+
+    calls = []
+
+    def fake_chart_fn(image_path: str) -> str:
+        calls.append(image_path)
+        return "[Chart: fake description]"
+
+    pages = extract_pages(corpus_pdf, "pdf", chart_image_fn=fake_chart_fn)
+
+    assert len(calls) == 1  # exactly the one page with an embedded image
+    # Additive: the page's real extracted text must still be there too.
+    assert "[Chart: fake description]" in pages[0].text
+    assert len(pages[0].text) > len("[Chart: fake description]")  # real text wasn't replaced
+
+
+def test_pdf_without_chart_image_fn_extracts_normally():
+    """No chart_image_fn passed -- must behave exactly as before this
+    seam existed, not raise or change behavior for callers that don't
+    care about chart images."""
+    pages = extract_pages(_path("sample_native.pdf"), "pdf")
+
+    assert len(pages) == 2
+    assert "hydrocracker catalyst deactivation" in pages[0].text
+
+
 def test_docx_extraction_includes_paragraph_and_table_text():
     pages = extract_pages(_path("sample_doc.docx"), "docx")
 

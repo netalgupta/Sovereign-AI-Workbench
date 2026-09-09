@@ -13,7 +13,12 @@ from pydantic import BaseModel
 
 from backend.ingestion.chunking import chunk_text
 from backend.ingestion.document_types import detect_document_type
-from backend.ingestion.text_extraction import AudioTranscribeFn, OcrFn, extract_pages
+from backend.ingestion.text_extraction import (
+    AudioTranscribeFn,
+    ChartImageFn,
+    OcrFn,
+    extract_pages,
+)
 
 
 class ChunkMetadata(BaseModel):
@@ -50,21 +55,31 @@ def ingest_document(
     file_path: str,
     ocr_fn: OcrFn | None = None,
     audio_transcribe_fn: AudioTranscribeFn | None = None,
+    chart_image_fn: ChartImageFn | None = None,
 ) -> list[IngestedChunk]:
     """Detect, extract, chunk, and tag one document with metadata.
 
     Args:
         file_path: path to the source document.
         ocr_fn: passed straight through to text_extraction.extract_pages
-            for scanned PDFs/images — see that module's docstring for why
-            OCR is injected rather than imported directly here. No
-            default yet: CARD 05 (PaddleOCR)/its handwritten fallback
-            isn't built in this repo yet, so omitting this for an
-            image/scanned input still raises NotImplementedError.
+            for scanned PDFs/images. No default: CARD 05
+            (extract_printed_text) now exists and works, but it only
+            handles PRINTED text — defaulting to it directly would
+            silently produce garbage on a handwritten page, exactly the
+            anti-pattern text_extraction.py's own module docstring warns
+            against. A real default needs the printed-vs-handwritten
+            router (TOOLS.md tool #9) this repo doesn't have yet, not
+            just CARD 05 alone.
         audio_transcribe_fn: same injection point, for voice notes — BUT
-            this one has a real default (CARD 12 already exists), so
-            audio files work out of the box unless you explicitly want
-            to override it (e.g. in a test).
+            this one has a real default (CARD 12 already exists, and
+            there's no printed-vs-handwritten-shaped ambiguity for
+            audio), so audio files work out of the box unless you
+            explicitly want to override it (e.g. in a test).
+        chart_image_fn: same injection point, for describing a PDF
+            page's embedded chart picture (chart_understanding.py) — no
+            default, since its output is always a vision-model estimate
+            (see that module's docstring), never something to apply
+            silently by default the way a verified extraction would be.
     """
     type_info = detect_document_type(file_path)
     if audio_transcribe_fn is None:
@@ -74,6 +89,7 @@ def ingest_document(
         type_info.detected_type,
         ocr_fn=ocr_fn,
         audio_transcribe_fn=audio_transcribe_fn,
+        chart_image_fn=chart_image_fn,
     )
 
     source_document = Path(file_path).name

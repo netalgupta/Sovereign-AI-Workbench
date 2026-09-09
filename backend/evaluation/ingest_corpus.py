@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from backend.ingestion.document_ingestion import ingest_document
+from backend.ingestion.document_ingestion import IngestedChunk, ingest_document
 from backend.ingestion.embeddings import embed_texts
 from backend.retrieval.vector_store import VectorStore
 from backend.tools.vision.ocr_printed import extract_printed_text
@@ -31,14 +31,19 @@ def discover_files(corpus_dir: str) -> list[Path]:
     )
 
 
-def ingest_corpus(corpus_dir: str, verbose: bool = True) -> tuple[VectorStore, dict]:
+def ingest_corpus(corpus_dir: str, verbose: bool = True) -> tuple[VectorStore, list[IngestedChunk], dict]:
     """Ingest every file in `corpus_dir` into a fresh VectorStore.
 
-    Returns (store, stats) where stats records per-file chunk counts and
-    any file that failed to ingest (with its error), so a failure on one
-    file doesn't silently swallow the rest of the corpus.
+    Returns (store, all_chunks, stats). `all_chunks` is the flat list of
+    every IngestedChunk across the whole corpus — exposed (not just
+    buried inside the store) because graph construction (entity
+    extraction per chunk, per-document linking) needs the chunks
+    themselves, not just their embeddings. `stats` records per-file
+    chunk counts and any file that failed to ingest, so one bad file
+    doesn't silently swallow the rest of the corpus.
     """
     store = VectorStore(dim=1024)
+    all_chunks: list[IngestedChunk] = []
     stats = {"files": {}, "total_chunks": 0, "errors": {}}
 
     for file_path in discover_files(corpus_dir):
@@ -54,17 +59,18 @@ def ingest_corpus(corpus_dir: str, verbose: bool = True) -> tuple[VectorStore, d
         if chunks:
             embeddings = embed_texts([c.text for c in chunks])
             store.add_chunks(chunks, embeddings)
+            all_chunks.extend(chunks)
 
         stats["files"][rel] = len(chunks)
         stats["total_chunks"] += len(chunks)
         if verbose:
             print(f"[OK] {rel}: {len(chunks)} chunks")
 
-    return store, stats
+    return store, all_chunks, stats
 
 
 if __name__ == "__main__":
     corpus_dir = sys.argv[1] if len(sys.argv) > 1 else "MRPL_RAG_Test_Corpus"
-    store, stats = ingest_corpus(corpus_dir)
+    store, all_chunks, stats = ingest_corpus(corpus_dir)
     print(json.dumps(stats, indent=2))
     print(f"\nTotal chunks in store: {len(store)}")

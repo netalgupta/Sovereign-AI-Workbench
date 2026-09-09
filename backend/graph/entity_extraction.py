@@ -91,12 +91,16 @@ def _call_extraction_model(prompt: str, model_name: str) -> str:
     response = requests.post(
         f"{_OLLAMA_HOST}/api/generate",
         json={"model": model_name, "prompt": prompt, "stream": False},
-        # 120s, not 60s: a real run of the live test against the actual
-        # 14B reasoning model took 61s in isolation and timed out when
-        # run as part of the full suite (CPU inference under contention
-        # from other tests running back to back) -- 60s was already
-        # marginal even in the best case, not a safe margin at all.
-        timeout=120,
+        # 240s: qwen2.5:14b at Q4_K_M is ~8-9GB, tight on an 8GB card --
+        # DEPENDENCIES.md §1 already documents this needs partial CPU
+        # offload of a few layers, which is inherently much slower than
+        # full GPU residency. A trivial one-word prompt measured at 45s
+        # on this exact machine (nvidia-smi showing 95% GPU utilization
+        # at the time -- genuinely computing, not hung); a full
+        # extraction prompt over a real 512-token chunk is longer still.
+        # 120s was already too tight even before accounting for any
+        # concurrent load on the machine.
+        timeout=240,
     )
     response.raise_for_status()
     return response.json()["response"]
