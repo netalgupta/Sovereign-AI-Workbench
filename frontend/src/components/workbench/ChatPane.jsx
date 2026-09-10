@@ -19,6 +19,7 @@ import {
   Calculator,
   Search,
   Play,
+  ShieldAlert,
 } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
@@ -193,6 +194,9 @@ export function ChatPane() {
   const sessionId = useChatStore((s) => s.sessionId)
   const plan = useChatStore((s) => s.plan) || []
   const setPlan = useChatStore((s) => s.setPlan)
+  const awaitingHumanApproval = useChatStore((s) => s.awaitingHumanApproval)
+  const setAwaitingApproval = useChatStore((s) => s.setAwaitingApproval)
+  const openApprovalModal = useChatStore((s) => s.openApprovalModal)
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
@@ -281,10 +285,14 @@ export function ChatPane() {
       if (p1) setPhraseMsg1(p1)
       if (p2) setPhraseMsg2(p2)
     }
+    window.__workbenchTriggerApproval = (action) => useChatStore.getState().setAwaitingApproval(true, action)
+    window.__workbenchResolveApproval = (confirmed) => useChatStore.getState().resolveApproval(confirmed)
     return () => {
       delete window.__workbenchSetThinkingMidResponse
       delete window.__workbenchSetThinkingExpanded
       delete window.__workbenchSetCompletedPhrases
+      delete window.__workbenchTriggerApproval
+      delete window.__workbenchResolveApproval
     }
   }, [])
 
@@ -300,7 +308,7 @@ export function ChatPane() {
     suggest_mitigation(cool_quench=True)`
 
   const handleSend = async () => {
-    if (!draft.trim() || isPending) return
+    if (!draft.trim() || isPending || awaitingHumanApproval) return
     const text = draft.trim()
     setDraft('')
     addMessage('user', text)
@@ -309,6 +317,9 @@ export function ChatPane() {
       const res = await sendMessage(text, sessionId)
       if (res.plan) {
         setPlan(res.plan)
+      }
+      if (res.awaiting_human_approval) {
+        setAwaitingApproval(true, res.approval_action)
       }
       // Add the assistant message with streaming=true so MessageBubble
       // starts the typewriter reveal. appendStreamChunk pushes the full
@@ -1022,19 +1033,63 @@ export function ChatPane() {
         className="px-6 py-3 flex-shrink-0"
         style={{ borderTop: '1px solid var(--color-border)' }}
       >
+        {/* Safety Gate Locked Banner when approval is pending (§3.12 / FR-15) */}
+        {awaitingHumanApproval && (
+          <div
+            id="composer-approval-locked-banner"
+            className="mb-2.5 px-3 py-2 rounded-md flex items-center justify-between gap-3 text-xs animate-fade-in border"
+            style={{
+              background: 'var(--color-error-tint)',
+              borderColor: 'var(--color-accent-border)',
+            }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <ShieldAlert
+                size={16}
+                strokeWidth={2.2}
+                className="flex-shrink-0"
+                style={{ color: 'var(--color-accent)' }}
+              />
+              <span
+                className="font-medium truncate text-xs"
+                style={{ color: 'var(--color-text)' }}
+              >
+                <strong className="font-semibold">Safety Gate Active:</strong> Critical setpoint change awaiting operator authorization.
+              </span>
+            </div>
+            <button
+              type="button"
+              id="review-approval-gate-btn"
+              onClick={openApprovalModal}
+              className="px-2.5 py-1 rounded text-[11px] font-bold text-white transition-fast cursor-pointer hover:brightness-110 flex-shrink-0 shadow-xs"
+              style={{ background: 'var(--color-accent)' }}
+            >
+              Review Gate
+            </button>
+          </div>
+        )}
+
         <div
           className="flex items-center gap-2 px-3.5 py-2.5 rounded-md transition-fast"
           style={{
             background: 'var(--color-input-bg)',
-            border: '1px solid var(--color-input-border)',
+            border: awaitingHumanApproval
+              ? '1px dashed var(--color-accent)'
+              : '1px solid var(--color-input-border)',
             boxShadow: 'var(--shadow-xs)',
+            opacity: awaitingHumanApproval ? 0.75 : 1,
           }}
         >
           {/* Left buttons: Paperclip + Globe */}
           <button
             type="button"
+            disabled={awaitingHumanApproval}
             onClick={() => showToast('Multimodal upload ready — Drop PDFs, scans, or voice notes here', 'info')}
-            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+              awaitingHumanApproval
+                ? 'cursor-not-allowed opacity-40'
+                : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+            }`}
             style={{ color: 'var(--color-text-muted)' }}
             title="Attach document or audio"
           >
@@ -1042,8 +1097,13 @@ export function ChatPane() {
           </button>
           <button
             type="button"
+            disabled={awaitingHumanApproval}
             onClick={() => showToast('Grounded in 8 local sources — Zero outbound network egress', 'success')}
-            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+              awaitingHumanApproval
+                ? 'cursor-not-allowed opacity-40'
+                : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+            }`}
             style={{ color: 'var(--color-text-muted)' }}
             title="Grounding scope"
           >
@@ -1053,21 +1113,31 @@ export function ChatPane() {
           {/* Input field */}
           <input
             type="text"
+            id="chat-composer-input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a follow-up or command an agentic task..."
-            className="flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--color-text-faint)]"
+            placeholder={
+              awaitingHumanApproval
+                ? 'Composer locked: Human authorization required at approval gate...'
+                : 'Ask a follow-up or command an agentic task...'
+            }
+            className={`flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--color-text-faint)] ${
+              awaitingHumanApproval ? 'cursor-not-allowed text-[var(--color-text-muted)]' : ''
+            }`}
             style={{ color: 'var(--color-text)' }}
-            disabled={isPending}
+            disabled={isPending || awaitingHumanApproval}
           />
 
           {/* Model Selector Dropdown (Cosmetic only per SYSTEM.md) */}
           <div className="relative">
             <button
               type="button"
-              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast cursor-pointer select-none"
+              disabled={awaitingHumanApproval}
+              onClick={() => !awaitingHumanApproval && setModelDropdownOpen(!modelDropdownOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast select-none ${
+                awaitingHumanApproval ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+              }`}
               style={{
                 background: 'var(--color-surface)',
                 border: '1px solid var(--color-border)',
@@ -1118,14 +1188,16 @@ export function ChatPane() {
           {/* Send Button */}
           <button
             type="button"
+            id="chat-composer-send-btn"
             onClick={handleSend}
-            disabled={!draft.trim() || isPending}
-            className="w-8 h-8 rounded-md flex items-center justify-center text-white transition-fast shadow-xs cursor-pointer flex-shrink-0"
+            disabled={!draft.trim() || isPending || awaitingHumanApproval}
+            className={`w-8 h-8 rounded-md flex items-center justify-center text-white transition-fast shadow-xs flex-shrink-0 ${
+              awaitingHumanApproval || !draft.trim() ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+            }`}
             style={{
               background: 'var(--color-accent)',
-              opacity: draft.trim() ? 1 : 0.75,
             }}
-            title="Send message"
+            title={awaitingHumanApproval ? 'Composer locked until approval is resolved' : 'Send message'}
           >
             <Send size={14} strokeWidth={2} />
           </button>

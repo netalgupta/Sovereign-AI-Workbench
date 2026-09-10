@@ -25,12 +25,17 @@ function generateSessionId() {
   })
 }
 
-export const useChatStore = create((set) => ({
+export const useChatStore = create((set, get) => ({
   // ── State ──────────────────────────────────────────────────────────────────
   messages: [],
   sessionId: generateSessionId(),
   draft: '',
   plan: MOCK_PLAN_STEPS,
+
+  // ── Approval Gate State (§3.12 / FR-15) ────────────────────────────────────
+  awaitingHumanApproval: false,
+  pendingApprovalAction: null,
+  isApprovalModalOpen: false,
 
   // ── Actions ────────────────────────────────────────────────────────────────
   setDraft: (draft) => set({ draft }),
@@ -41,6 +46,50 @@ export const useChatStore = create((set) => ({
         s.id === stepId || s.step_id === stepId ? { ...s, status } : s
       ),
     })),
+
+  /**
+   * Set approval gate lock state. When active, blocks composer input.
+   * @param {boolean} status
+   * @param {object|null} [action]
+   */
+  setAwaitingApproval: (status, action = null) =>
+    set({
+      awaitingHumanApproval: status,
+      pendingApprovalAction: action,
+      isApprovalModalOpen: status,
+    }),
+
+  openApprovalModal: () => set({ isApprovalModalOpen: true }),
+  closeApprovalModal: () => set({ isApprovalModalOpen: false }),
+
+  /**
+   * Resolve an awaiting human approval gate decision.
+   * Logs an audit trail message to the conversation and unlocks composer.
+   *
+   * @param {boolean} confirmed - True if operator approved; False if cancelled
+   */
+  resolveApproval: (confirmed) => {
+    const action = get().pendingApprovalAction
+    const actionDesc = action?.description || 'HCU feed rate modification'
+
+    set({
+      awaitingHumanApproval: false,
+      pendingApprovalAction: null,
+      isApprovalModalOpen: false,
+    })
+
+    if (confirmed) {
+      get().addMessage(
+        'assistant',
+        `✅ **Action Authorized by Operator:** Safety gate passed. DCS feed-forward controller FFC-201 accepted parameter update: **115% (1,667 m³/h)**. Continuous interlock monitoring active.`
+      )
+    } else {
+      get().addMessage(
+        'assistant',
+        `❌ **Action Cancelled by Operator:** Parameter modification was rejected. ${actionDesc} aborted. Setpoint retained at nominal **100% (1,450 m³/h)**.`
+      )
+    }
+  },
 
   /**
    * Add a message to the conversation.

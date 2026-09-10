@@ -154,6 +154,61 @@ export const MOCK_PLAN_STEPS = [
   },
 ]
 
+export const MOCK_FEED_RATE_APPROVAL_ACTION = {
+  id: 'act-feed-rate-115',
+  title: 'Confirm Critical Parameter Modification',
+  action_type: 'DCS_SETPOINT_WRITE',
+  target: 'HCU-2 / FFC-201',
+  description: 'This will change HCU feed rate from 100% to 115%.',
+  detail:
+    'This action will adjust the HCU-2 reactor feed rate setpoint from 100% (1,450 m³/h) to 115% (1,667 m³/h) via DCS feed-forward controller FFC-201.',
+  current_value: '100% (1,450 m³/h)',
+  proposed_value: '115% (1,667 m³/h)',
+  unit: 'm³/h',
+  parameter: 'FFC-201.SP (Feed Rate Setpoint)',
+  risk_level: 'CRITICAL',
+  warning:
+    'Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) and increases exothermic runaway risk. Fractionation column flooding probability increases to 34%.',
+  mitigation_required:
+    'Mandatory pre-condition: Quench flow controller (QFC-18) armed and H₂/HC ratio maintained > 1,000 Nm³/m³ before setpoint ramp.',
+}
+
+/**
+ * Detects if a message expresses an explicit intent to ACT (commanding a critical
+ * parameter change or setpoint adjustment) versus an intent to ASK/inquire.
+ *
+ * Strict requirements:
+ * - Questions (ending in '?' or starting with interrogatives like 'What', 'Can you', 'Should we')
+ *   MUST NOT trigger approval.
+ * - Only imperative verbs indicating a requested change ('increase', 'set', 'change', 'raise',
+ *   'adjust', 'modify', 'ramp up') directed at feed rate trigger the gate.
+ *
+ * @param {string} msg
+ * @returns {boolean}
+ */
+export function isActionApprovalRequest(msg) {
+  if (!msg || typeof msg !== 'string') return false
+  const text = msg.trim()
+
+  // 1. Exclude questions or informational inquiries
+  if (text.endsWith('?')) return false
+  if (
+    /^(what|why|how|can you|could you|should we|would you|is it|are there|explain|tell me about)\b/i.test(
+      text
+    )
+  ) {
+    return false
+  }
+
+  // 2. Require action verbs commanding a change to feed rate
+  const actionVerbBefore =
+    /\b(increase|raise|set|change|modify|adjust|boost|ramp\s*up|scale\s*up)\s+(the\s+)?feed[- ]?rate\b/i
+  const actionVerbAfter =
+    /\bfeed[- ]?rate\s*(to|=|:=|\bset to\b|\bchanged to\b|\braised to\b|\bincreased to\b)\s*\d+/i
+
+  return actionVerbBefore.test(text) || actionVerbAfter.test(text)
+}
+
 export async function checkBackendHealth() {
   // Always "online" — this IS the backend for now, by design, not a fallback.
   return { ok: true }
@@ -161,11 +216,31 @@ export async function checkBackendHealth() {
 
 export async function sendMessage(message, sessionId) {
   await new Promise((r) => setTimeout(r, MOCK_LATENCY_MS))
+
+  const isApprovalNeeded = isActionApprovalRequest(message)
+
+  if (isApprovalNeeded) {
+    return {
+      reply: `**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_
+
+> 🛑 **Safety Interlock Gate [FR-15 / §3.12]:** Changing reactor feed rate from **100% (1,450 m³/h)** to **115% (1,667 m³/h)** exceeds the continuous design basis and requires manual human operator authorization before DCS controller FFC-201 can accept the parameter update.
+>
+> A human approval gate modal has been displayed. Composer input is locked until this action is confirmed or cancelled.`,
+      citations: MOCK_CITATIONS.slice(0, 2),
+      plan: MOCK_PLAN_STEPS,
+      session_id: sessionId,
+      awaiting_human_approval: true,
+      approval_action: MOCK_FEED_RATE_APPROVAL_ACTION,
+    }
+  }
+
   return {
     reply: buildMockReply(message),
     citations: MOCK_CITATIONS,
     plan: MOCK_PLAN_STEPS,
     session_id: sessionId,
+    awaiting_human_approval: false,
+    approval_action: null,
   }
 }
 
