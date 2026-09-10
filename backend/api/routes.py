@@ -317,6 +317,81 @@ def scan_sources() -> dict:
     }
 
 
+# ------------------------------------------------------------------ tools
+
+@router.get("/tools")
+def list_tools(category: str | None = Query(None)) -> dict:
+    """Every tool the agent can call, with the exact schema it receives.
+
+    Exposed so the UI can show what the system can actually do, and so a
+    developer can see the schema a model is being handed rather than
+    inferring it from the function. TOOLS.md answers this for humans;
+    this answers it for the orchestrator, and the row numbers link them.
+    """
+    from backend.tools import catalog  # noqa: F401 — import registers everything
+    from backend.tools.registry import all_tools
+
+    return {
+        "tools": [
+            {
+                "name": t.name,
+                "description": t.description,
+                "category": t.category,
+                "priority": t.priority,
+                "requires_approval": t.requires_approval,
+                "is_estimate": t.is_estimate,
+                "computes_numbers": t.computes_numbers,
+                "tools_md_row": t.tools_md_row,
+                "schema": t.to_schema(),
+            }
+            for t in all_tools()
+            if category is None or t.category == category
+        ]
+    }
+
+
+class ToolCallRequest(BaseModel):
+    name: str
+    arguments: dict = {}
+    approved: bool = False
+
+
+@router.post("/tools/call")
+def call_tool_endpoint(body: ToolCallRequest) -> dict:
+    """Dispatch a tool by name.
+
+    `approved` must come from a genuine human approval in the UI, never
+    from a model's own output — a model asserting that a human approved
+    something is exactly the failure hard constraint #4 prevents. A gated
+    tool called without it returns 403, not a silent no-op.
+    """
+    from backend.tools import catalog  # noqa: F401
+    from backend.tools.registry import ApprovalRequired, call_tool
+
+    try:
+        result = call_tool(body.name, body.arguments, approved=body.approved)
+    except ApprovalRequired as exc:
+        raise HTTPException(403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+    # Pydantic results serialize; bytes (a rendered chart) do not, so they
+    # are base64-encoded rather than silently dropped or crashing the
+    # response.
+    if hasattr(result, "model_dump"):
+        payload = result.model_dump()
+        for key, value in list(payload.items()):
+            if isinstance(value, bytes):
+                payload[key] = base64.b64encode(value).decode("ascii")
+                payload[f"{key}_encoding"] = "base64"
+        return {"result": payload}
+    if isinstance(result, bytes):
+        return {"result": base64.b64encode(result).decode("ascii"), "encoding": "base64"}
+    return {"result": result}
+
+
 # ---------------------------------------------------------------- search
 
 class SearchRequest(BaseModel):
