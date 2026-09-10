@@ -143,3 +143,36 @@ All 4 findings from the "detailed retrieval trace" now resolved except boilerpla
 5. THEN move to the two still-not-started original asks: generate more chart images + stress-test `chart_understanding.py` (model `qwen2.5vl:7b` is pulled and ready, untested in the real pipeline), and build the user an interactive way to browse chunks/images/embeddings.
 
 **Infra note**: Neo4j (`sih26117-neo4j-test`, now with persistent named volume `sih26117_neo4j_data`) currently holds the CORRECT, fully-fixed graph (21/21 chunks, dedup length-guard fix applied, phantom `Hydrocracker_PID_Schematic.png` connection gone, signature query verified clean). `backend/evaluation/extraction_cache/mrpl_extractions.jsonl` is the durable source of truth (committed, `da4cd09`) — if Neo4j is ever lost again, `py -3 -m backend.evaluation.build_graph` reloads it in seconds, zero LLM calls.
+
+## UPDATE 3 (same session, later) — ALL 4 FINDINGS CLOSED
+
+Finding 3 (boilerplate) is now **DONE, committed, and pushed** (`cd496b2`, `1570979`, `d3cfc16`, `2a8898c`, `5cd4f80` on `aryan/rag-and-graphrag`). Full suite: **168 passed, 1 skipped**.
+
+**The headline result is a negative one, and it must be reported as such.** Boilerplate removal changed retrieval quality on this corpus by essentially nothing:
+
+| metric | before | after | delta |
+|---|---|---|---|
+| precision@5 fused | 0.350 | 0.350 | +0.000 |
+| precision@5 dense-only | 0.325 | 0.325 | +0.000 |
+| precision@5 sparse-only | 0.200 | 0.225 | +0.025 |
+| corpus chunks | 21 | 21 | 0 |
+
+Zero change on every individual question for fused retrieval. Only BM25-alone improved — the expected direction (a disclaimer recurring across 6 documents is shared *lexical* vocabulary, and BM25 is the component that scores on shared vocabulary), but it does not survive fusion.
+
+**Why it could not have helped**: each question's answer lives in a document contributing only 1-3 chunks of a 21-chunk corpus, while precision@5 always divides by 5. Average structural ceiling = **0.375**; measured fused = 0.350 = **93.3% of the maximum achievable**, with **7 of 8 questions sitting exactly at their per-question ceiling**. There was almost nothing left to win. (Reproduce: `backend/evaluation/boilerplate_precision_comparison.py`.)
+
+**Both symptoms originally cited as evidence for this finding were misreadings — worth remembering before chasing either again**:
+1. The "suspiciously tight 0.029-0.033 fused-score band" is *exactly* the arithmetic range of RRF at k=60 for a chunk appearing in BOTH rankings at ranks 1-9: `2/(60+1)=0.0328` down to `2/(60+9)=0.0290`. RRF scores on RANK and discards similarity magnitudes entirely, so that band is mechanically forced and can carry no information about embedding contamination.
+2. The unrelated depot-correspondence document recurring across top-5 sets is **unchanged** by the fix (5 of 8 question result sets both before and after). It is a small-corpus artifact: top_k=5 against 21 chunks returns ~24% of the entire corpus for *every* query.
+
+**The step is kept anyway**, on stated grounds: detection is real (both disclaimer sentences genuinely recur across 6 of 13 documents), it is general rather than corpus-specific, and real MRPL corpora will carry far heavier letterhead/footer boilerplate at sizes where the precision ceiling is not the binding constraint. It is simply not a retrieval *fix* for THIS corpus.
+
+**Six real bugs were found and fixed inside this one feature** (each with a regression test — see the commit messages for full detail): per-page vs per-document counting; sentence-splitter blind to a disclaimer following `)` + newline; over-correction splitting mid-sentence PDF line-wraps; degenerate `"1."`/`"2."` numbering fragments flagged as boilerplate (same shape as the `MIN_FUZZY_MATCH_LENGTH` entity bug); `strip_boilerplate` collapsing every newline and silently reformatting whole documents (this one would have contaminated the very measurement above — it moved chunk count 21→22); and a sentence in a SINGLE document being flagged on a small corpus, which would have deleted nearly all content from a 2-3 document ingest.
+
+**Also checked this session**: `origin/advay/frontend` is real and substantial — Vite + React 19 + Tailwind v4, chat surface, execution plan rail + network monitor, sources rail, and an `ApprovalModal.jsx` (FR-15/§3.12, the frontend half of hard constraint #4). Currently wired to a client-side API mock, not the real backend. Divergence from `aryan/rag-and-graphrag` is clean: shared history to `dd09910`, then 11 backend-only commits here vs 11 frontend-only commits there, no overlapping files — **except** that branch also copied the docs set into `docs/`, which should be checked for staleness before any merge since root-level docs have moved on. NOT merged — that is the user's call.
+
+**Remaining, in priority order**:
+1. Generate more chart images, add to corpus, stress-test `chart_understanding.py` (CARD 13) at scale — `qwen2.5vl:7b` pulled and ready, still untested in the real pipeline.
+2. Build the user an interactive way to browse chunks / images / embeddings / chunking behavior (semantic vs recursive) themselves — explicitly requested, not started.
+3. Decide on merging `origin/advay/frontend`.
+4. Optional: GPU torch in a dedicated venv (embeddings/OCR are CPU-only today; Ollama already uses the GPU fine).
