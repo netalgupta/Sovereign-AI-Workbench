@@ -26,6 +26,11 @@ _OLLAMA_HOST = "http://localhost:11434"
 # derived from document metadata, not chunk text; MAINTENANCE_PERFORMED_ON
 # is SAP-sourced, same as MaintenanceRecord itself).
 VALID_ENTITY_TYPES = ["Equipment", "PipelineSegment", "Person", "Incident"]
+
+# deduplicate_entities' fuzzy-match tier requires a normalized name to be
+# at least this long to participate in substring-containment matching --
+# see the real bug this fixes in deduplicate_entities' inline comment.
+MIN_FUZZY_MATCH_LENGTH = 3
 VALID_RELATIONSHIP_TYPES = [
     "REFERENCES", "APPLIES_TO", "LOCATED_ON", "AUTHORED_BY", "REPORTS_INCIDENT_AT",
 ]
@@ -234,15 +239,29 @@ def deduplicate_entities(
             name_map[(entity.type, entity.name)] = exact_match.name
             continue
 
-        fuzzy_match = next(
-            (
-                c
-                for c in canonical
-                if c.type == entity.type
-                and (norm in _normalize_name(c.name) or _normalize_name(c.name) in norm)
-            ),
-            None,
-        )
+        fuzzy_match = None
+        # Real bug found running this against the full MRPL corpus, not
+        # a hypothetical: a garbage single-letter entity ("N", extraction
+        # noise from OCR'd diagram text) has normalized form "n" -- a
+        # substring of nearly anything, including "mangalorehassan"
+        # (which contains the letter n). With no length guard, that
+        # "N" PipelineSegment entity fuzzy-merged straight into the
+        # canonical "Mangalore-Hassan" node, and the P&ID diagram it
+        # came from got a spurious REFERENCES edge to a pipeline segment
+        # it has nothing to do with. MIN_FUZZY_MATCH_LENGTH excludes
+        # exactly this failure mode while still allowing the spec's own
+        # worked example ("v204", 4 characters) to match correctly.
+        if len(norm) >= MIN_FUZZY_MATCH_LENGTH:
+            fuzzy_match = next(
+                (
+                    c
+                    for c in canonical
+                    if c.type == entity.type
+                    and len(_normalize_name(c.name)) >= MIN_FUZZY_MATCH_LENGTH
+                    and (norm in _normalize_name(c.name) or _normalize_name(c.name) in norm)
+                ),
+                None,
+            )
         if fuzzy_match is not None:
             merge_decisions.append(
                 MergeDecision(
