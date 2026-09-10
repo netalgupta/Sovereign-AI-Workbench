@@ -24,3 +24,9 @@ build/
 /models/ocr/
 /models/vision/
 /models/audio/
+
+# Frontend pipeline snapshots: regenerate with
+#   python -m backend.evaluation.export_frontend_assets
+# images.json in particular is multi-MB of base64 chart images, derived
+# entirely from files already tracked in the corpus directories.
+frontend/public/pipeline/images.json
