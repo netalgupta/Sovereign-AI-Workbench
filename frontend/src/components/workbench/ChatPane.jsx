@@ -277,6 +277,16 @@ export function ChatPane() {
     return () => clearInterval(timer)
   }, [])
 
+  // Auto-scroll chat container to bottom when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      const el = document.getElementById('chat-messages-container')
+      if (el) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      }
+    }
+  }, [messages.length])
+
   // Expose test automation hooks
   useEffect(() => {
     window.__workbenchSetThinkingMidResponse = (active) => setIsMidResponse(active)
