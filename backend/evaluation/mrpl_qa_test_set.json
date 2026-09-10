@@ -1,0 +1,48 @@
+[
+  {
+    "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+    "expected_answer": "> 410 °C",
+    "expected_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx"
+  },
+  {
+    "question": "What caused the off-spec batch H110F-0847?",
+    "expected_answer": "Catalyst feed rate excursion during grade changeover, ~40 min before DCS alarm response",
+    "expected_source": "Novolen_Batch_QA_Report_Aug2026.pdf"
+  },
+  {
+    "question": "What is the 8-hour TWA benzene exposure limit at the Aromatic Complex?",
+    "expected_answer": "1 ppm",
+    "expected_source": "Aromatic_Complex_Benzene_Safety_Circular.docx"
+  },
+  {
+    "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+    "expected_answer": "0.6% calibration variance exceeding the 0.3% internal tolerance",
+    "expected_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx"
+  },
+  {
+    "question": "What was the root cause of the Hassan pumping station incident on 2026-07-22?",
+    "expected_answer": "Minor seal leak at pump P-HS-02 discharge flange",
+    "expected_source": "Pipeline_Incident_Report_Hassan_Segment.pdf"
+  },
+  {
+    "question": "Did any PSA unit fall below its purity target in the last reporting period?",
+    "expected_answer": "Yes, PSA-3, in the final 3 weeks of the log",
+    "expected_source": "PSA_Hydrogen_Purity_Trend_Log.xlsx"
+  },
+  {
+    "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+    "expected_answer": "2026-08-19, 11.2 ppm vs 10 ppm limit",
+    "expected_source": "Sulphur_Spec_Compliance_LabSheet.xlsx"
+  },
+  {
+    "question": "Which vendor supplies both the hydrocracker catalyst and the Ziegler-Natta catalyst component?",
+    "expected_answer": "VEND-1042",
+    "expected_source": "SAP_Mock_Materials_Master_Export.xlsx"
+  },
+  {
+    "question": "What is MRPL's crude oil sourcing strategy for 2027?",
+    "expected_answer": "Not found in the provided corpus — out-of-corpus negative test case for RAG_SPEC.md §3's refusal behavior",
+    "expected_source": "None — negative test case"
+  }
+]
+

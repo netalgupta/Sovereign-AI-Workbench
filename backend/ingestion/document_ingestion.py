@@ -11,9 +11,16 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.ingestion.boilerplate import strip_boilerplate
 from backend.ingestion.chunking import chunk_text
 from backend.ingestion.document_types import detect_document_type
-from backend.ingestion.text_extraction import AudioTranscribeFn, OcrFn, extract_pages
+from backend.ingestion.text_extraction import (
+    AudioTranscribeFn,
+    ChartImageFn,
+    OcrFn,
+    PageText,
+    extract_pages,
+)
 
 
 class ChunkMetadata(BaseModel):
@@ -50,21 +57,31 @@ def ingest_document(
     file_path: str,
     ocr_fn: OcrFn | None = None,
     audio_transcribe_fn: AudioTranscribeFn | None = None,
+    chart_image_fn: ChartImageFn | None = None,
 ) -> list[IngestedChunk]:
     """Detect, extract, chunk, and tag one document with metadata.
 
     Args:
         file_path: path to the source document.
         ocr_fn: passed straight through to text_extraction.extract_pages
-            for scanned PDFs/images — see that module's docstring for why
-            OCR is injected rather than imported directly here. No
-            default yet: CARD 05 (PaddleOCR)/its handwritten fallback
-            isn't built in this repo yet, so omitting this for an
-            image/scanned input still raises NotImplementedError.
+            for scanned PDFs/images. No default: CARD 05
+            (extract_printed_text) now exists and works, but it only
+            handles PRINTED text — defaulting to it directly would
+            silently produce garbage on a handwritten page, exactly the
+            anti-pattern text_extraction.py's own module docstring warns
+            against. A real default needs the printed-vs-handwritten
+            router (TOOLS.md tool #9) this repo doesn't have yet, not
+            just CARD 05 alone.
         audio_transcribe_fn: same injection point, for voice notes — BUT
-            this one has a real default (CARD 12 already exists), so
-            audio files work out of the box unless you explicitly want
-            to override it (e.g. in a test).
+            this one has a real default (CARD 12 already exists, and
+            there's no printed-vs-handwritten-shaped ambiguity for
+            audio), so audio files work out of the box unless you
+            explicitly want to override it (e.g. in a test).
+        chart_image_fn: same injection point, for describing a PDF
+            page's embedded chart picture (chart_understanding.py) — no
+            default, since its output is always a vision-model estimate
+            (see that module's docstring), never something to apply
+            silently by default the way a verified extraction would be.
     """
     type_info = detect_document_type(file_path)
     if audio_transcribe_fn is None:
@@ -74,21 +91,48 @@ def ingest_document(
         type_info.detected_type,
         ocr_fn=ocr_fn,
         audio_transcribe_fn=audio_transcribe_fn,
+        chart_image_fn=chart_image_fn,
     )
 
-    source_document = Path(file_path).name
+    return pages_to_chunks(pages, Path(file_path).name, type_info.detected_type)
+
+
+def pages_to_chunks(
+    pages: list[PageText],
+    source_document: str,
+    document_type: str,
+    boilerplate_sentences: set[str] | None = None,
+) -> list[IngestedChunk]:
+    """Chunk + tag already-extracted pages — the second half of
+    ingest_document(), split out so a corpus-level caller can run a
+    cross-document pass (boilerplate detection — RAG_SPEC.md §2; see
+    ingest_corpus.py's `ingest_corpus_with_boilerplate_removal`) BETWEEN
+    extraction and chunking, without paying for extraction (OCR/ASR
+    calls included) a second time. `ingest_document` above is just this
+    function preceded by detect+extract, for the common single-file case
+    that doesn't need cross-document boilerplate awareness.
+
+    `boilerplate_sentences`, if given, is stripped from every page's
+    text (via backend.ingestion.boilerplate.strip_boilerplate) before
+    chunking — sentences recurring near-verbatim across many documents
+    (letterhead, footers, standard disclaimers) that would otherwise
+    become shared noise in every chunk's embedding and BM25 tokens.
+    """
     ingestion_date = datetime.date.today().isoformat()
 
     chunks: list[IngestedChunk] = []
     chunk_index = 0
     for page in pages:
-        for piece in chunk_text(page.text):
+        text = page.text
+        if boilerplate_sentences:
+            text = strip_boilerplate(text, boilerplate_sentences)
+        for piece in chunk_text(text):
             chunks.append(
                 IngestedChunk(
                     text=piece,
                     metadata=ChunkMetadata(
                         source_document=source_document,
-                        document_type=type_info.detected_type,
+                        document_type=document_type,
                         page_number=page.page_number,
                         chunk_index=chunk_index,
                         ingestion_date=ingestion_date,

@@ -46,6 +46,7 @@ from typing import Callable
 import openpyxl
 import pdfplumber
 import xlrd
+from backend.ingestion.xlsx_charts import chart_description_to_text, extract_chart_descriptions
 from docx import Document as DocxDocument
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
@@ -60,6 +61,11 @@ OcrFn = Callable[[str], str]
 
 # raw audio file path -> transcribed text. Real implementation: CARD 12.
 AudioTranscribeFn = Callable[[str], str]
+
+# rendered page image path -> chart/figure description text. Real
+# implementation: chart_understanding.py's describe_chart_image (an
+# ESTIMATE, never a verified fact — see that module's docstring).
+ChartImageFn = Callable[[str], str]
 
 
 class PageText(BaseModel):
@@ -95,34 +101,122 @@ def _render_pdf_page_to_png(file_path: str, page_index: int) -> str:
     return png_path
 
 
-def _extract_native_pdf_pages(file_path: str, ocr_fn: OcrFn | None) -> list[PageText]:
+def _extract_pdf_page_text(page) -> str:
+    """Extract one pdfplumber page's text, handling detected tables
+    specially.
+
+    Real bug this fixes, confirmed against the corpus's own PDFs, not
+    hypothetical: `page.extract_text()` alone garbles adjacent table
+    columns together character-by-character whenever a table's columns
+    are tight or unruled — e.g. "Batches ProduceAdvg MFI (g/10minS)pec
+    MFI Range" in the Novolen QA report (should read "Batches Produced",
+    "Avg MFI (g/10min)", "Spec MFI Range" as separate cells), and
+    "HassParno/cNeesrsiy Ea nsgtaintieoenrsing" in the Pipeline Incident
+    Report's corrective-actions table (should read "Hassan/Neriya
+    stations", "Process Engineering").
+
+    Fix: `find_tables()` + `.extract()` on each detected table gives
+    correctly column-separated DATA rows — verified directly, e.g. the
+    Novolen table's data now extracts as
+    ['Homopolymer H030SG', '22', '3.4', '3.0 - 3.8', '0.905', '0'],
+    each value in its own cell. Prose text (everything outside a table's
+    bounding box) still comes from extract_text(), via outside_bbox() to
+    avoid extracting table content twice.
+
+    KNOWN RESIDUAL LIMITATION, disclosed rather than hidden, and broader
+    than first thought: any cell — header OR data — whose content is too
+    long for its column still shows character overlap after this fix.
+    Confirmed in two different ways on two different files: the Novolen
+    table's HEADER row (['Grade', 'Batches Produ', 'ceAdvg MFI (g/10m',
+    ...] — header labels wider than their columns), and the Pipeline
+    Incident Report's own DATA row (['Review seal replacement interval
+    SOP for Ha', 'ssParno/cNeesrsiy Ea nsgtaintieoenrsing', ...] — an
+    unusually long action-item sentence overflowing its cell). Visually
+    inspected the rendered PDF directly for the first case — the label
+    text is genuinely wider than its column in the SOURCE document,
+    causing real glyph-level overlap, reproduced identically even at
+    word-tokenization level (`extract_words()` returns "ProduceAdvg" as
+    one fused token). This is a source-document authoring defect with no
+    text-layer signal left to recover from — not a pdfplumber parsing
+    bug, not row-position-specific, and not something this function can
+    fix. Every OTHER cell in an affected row (e.g. "Target Date"/
+    "Status" in the Incident Report's garbled row) still extracts
+    correctly — this fix is a real, substantial improvement over
+    extract_text() alone (which fused an ENTIRE row into one blob), not
+    a complete one.
+    """
+    tables = page.find_tables()
+    if not tables:
+        return page.extract_text() or ""
+
+    prose_page = page
+    for table in tables:
+        prose_page = prose_page.outside_bbox(table.bbox)
+    prose_text = prose_page.extract_text() or ""
+
+    table_texts = []
+    for table in tables:
+        rows = table.extract()
+        table_lines = ["\t".join(cell or "" for cell in row) for row in rows]
+        table_texts.append("\n".join(table_lines))
+
+    return (prose_text + "\n" + "\n\n".join(table_texts)).strip()
+
+
+def _extract_native_pdf_pages(
+    file_path: str,
+    ocr_fn: OcrFn | None,
+    chart_image_fn: ChartImageFn | None = None,
+) -> list[PageText]:
     pages: list[PageText] = []
     blank_page_numbers: list[int] = []
+    pages_with_images: list[int] = []
 
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
+            text = _extract_pdf_page_text(page)
             if not text.strip():
                 blank_page_numbers.append(i)
+            if page.images:
+                pages_with_images.append(i)
             pages.append(PageText(page_number=i, text=text))
 
-    if not blank_page_numbers:
-        return pages
+    if blank_page_numbers:
+        if ocr_fn is None:
+            raise NotImplementedError(
+                f"{file_path} has no extractable text on page(s) {blank_page_numbers} "
+                f"(scanned, handwritten, or image-only). Pass an ocr_fn — see this "
+                f"module's docstring for what that function must actually do."
+            )
+        for page_number in blank_page_numbers:
+            png_path = _render_pdf_page_to_png(file_path, page_number - 1)
+            try:
+                ocr_text = ocr_fn(png_path)
+            finally:
+                Path(png_path).unlink(missing_ok=True)
+            pages[page_number - 1] = PageText(page_number=page_number, text=ocr_text)
 
-    if ocr_fn is None:
-        raise NotImplementedError(
-            f"{file_path} has no extractable text on page(s) {blank_page_numbers} "
-            f"(scanned, handwritten, or image-only). Pass an ocr_fn — see this "
-            f"module's docstring for what that function must actually do."
-        )
-
-    for page_number in blank_page_numbers:
-        png_path = _render_pdf_page_to_png(file_path, page_number - 1)
-        try:
-            ocr_text = ocr_fn(png_path)
-        finally:
-            Path(png_path).unlink(missing_ok=True)
-        pages[page_number - 1] = PageText(page_number=page_number, text=ocr_text)
+    # A page can have real extractable text AND an embedded chart image
+    # at the same time (this corpus's own PDFs are exactly this shape:
+    # real prose/table text plus an illustrative chart picture) — chart
+    # description is additive to whatever text extraction already
+    # found, never a replacement for it. No default wiring here (see
+    # chart_understanding.py's module docstring on why its output is
+    # always an estimate, never presented as a verified fact) — this is
+    # purely an opt-in seam until a caller explicitly wants it.
+    if chart_image_fn is not None:
+        for page_number in pages_with_images:
+            png_path = _render_pdf_page_to_png(file_path, page_number - 1)
+            try:
+                chart_text = chart_image_fn(png_path)
+            finally:
+                Path(png_path).unlink(missing_ok=True)
+            if chart_text:
+                idx = page_number - 1
+                pages[idx] = PageText(
+                    page_number=page_number,
+                    text=f"{pages[idx].text}\n{chart_text}".strip(),
+                )
 
     return pages
 
@@ -202,7 +296,15 @@ def _extract_xlsx(file_path: str) -> list[PageText]:
     # so a citation can still say "which sheet this fact came from"
     # (NFR-4) rather than falling back to None just because it isn't a
     # printed page.
-    workbook = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    #
+    # NOT read_only=True here, on purpose: read_only mode has no
+    # `_charts` attribute at all (verified directly against a real
+    # corpus file — `hasattr(ws, "_charts")` is False in read_only mode,
+    # True otherwise), so a sheet's native charts are invisible in that
+    # mode by construction. read_only exists purely for large-workbook
+    # performance, which doesn't matter at this corpus's scale, and
+    # correctness (seeing the charts at all) matters more here.
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
     pages: list[PageText] = []
     for i, sheet_name in enumerate(workbook.sheetnames, start=1):
         sheet = workbook[sheet_name]
@@ -210,7 +312,14 @@ def _extract_xlsx(file_path: str) -> list[PageText]:
             ["" if cell is None else str(cell) for cell in row]
             for row in sheet.iter_rows(values_only=True)
         ]
-        pages.append(PageText(page_number=i, text=_sheet_to_text(sheet_name, rows)))
+        text = _sheet_to_text(sheet_name, rows)
+
+        charts = extract_chart_descriptions(sheet)
+        if charts:
+            chart_text = "\n".join(chart_description_to_text(c) for c in charts)
+            text = f"{text}\n{chart_text}"
+
+        pages.append(PageText(page_number=i, text=text))
     workbook.close()
     return pages
 
@@ -238,8 +347,17 @@ def extract_pages(
     detected_type: str,
     ocr_fn: OcrFn | None = None,
     audio_transcribe_fn: AudioTranscribeFn | None = None,
+    chart_image_fn: ChartImageFn | None = None,
 ) -> list[PageText]:
     """Extract text per RAG_SPEC.md §2 step 2, preserving page/sheet boundaries.
+
+    `chart_image_fn` is purely opt-in (no default anywhere in this
+    pipeline) — a PDF page's embedded chart PICTURE only ever gets
+    described if a caller explicitly passes this in. Native XLSX charts
+    need no such thing at all: their exact data is read directly,
+    deterministically, by xlsx_charts.py inside _extract_xlsx, with zero
+    vision model involved — see that module's docstring for why the two
+    cases are handled by genuinely different tools, not one.
 
     Raises:
         NotImplementedError: for a scanned/image page or an audio file
@@ -248,7 +366,7 @@ def extract_pages(
         ValueError: for a `detected_type` this pipeline doesn't handle.
     """
     if detected_type == "pdf":
-        return _extract_native_pdf_pages(file_path, ocr_fn)
+        return _extract_native_pdf_pages(file_path, ocr_fn, chart_image_fn)
     if detected_type == "docx":
         return _extract_docx(file_path)
     if detected_type == "txt":

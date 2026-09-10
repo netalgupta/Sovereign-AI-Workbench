@@ -1,0 +1,158 @@
+[
+  {
+    "chunk_size_tokens": 512,
+    "total_chunks": 21,
+    "raw_precision_at_k_fused": 0.35000000000000003,
+    "raw_precision_at_k_dense_only": 0.325,
+    "raw_precision_at_k_sparse_only": 0.2,
+    "mean_structural_ceiling": 0.35000000000000003,
+    "fraction_of_achievable_fused": 1.0,
+    "fraction_of_achievable_dense_only": 0.9285714285714285,
+    "questions_at_ceiling": 8,
+    "questions_scored": 8,
+    "per_question": [
+      {
+        "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+        "expected_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "chunks_in_expected_doc": 2,
+        "ceiling": 0.4,
+        "actual_fused": 0.4,
+        "at_ceiling": true
+      },
+      {
+        "question": "What caused the off-spec batch H110F-0847?",
+        "expected_source": "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "chunks_in_expected_doc": 2,
+        "ceiling": 0.4,
+        "actual_fused": 0.4,
+        "at_ceiling": true
+      },
+      {
+        "question": "What is the 8-hour TWA benzene exposure limit at the Aromatic Complex?",
+        "expected_source": "Aromatic_Complex_Benzene_Safety_Circular.docx",
+        "chunks_in_expected_doc": 1,
+        "ceiling": 0.2,
+        "actual_fused": 0.2,
+        "at_ceiling": true
+      },
+      {
+        "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+        "expected_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "chunks_in_expected_doc": 1,
+        "ceiling": 0.2,
+        "actual_fused": 0.2,
+        "at_ceiling": true
+      },
+      {
+        "question": "What was the root cause of the Hassan pumping station incident on 2026-07-22?",
+        "expected_source": "Pipeline_Incident_Report_Hassan_Segment.pdf",
+        "chunks_in_expected_doc": 2,
+        "ceiling": 0.4,
+        "actual_fused": 0.4,
+        "at_ceiling": true
+      },
+      {
+        "question": "Did any PSA unit fall below its purity target in the last reporting period?",
+        "expected_source": "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+        "chunks_in_expected_doc": 3,
+        "ceiling": 0.6,
+        "actual_fused": 0.6,
+        "at_ceiling": true
+      },
+      {
+        "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+        "expected_source": "Sulphur_Spec_Compliance_LabSheet.xlsx",
+        "chunks_in_expected_doc": 1,
+        "ceiling": 0.2,
+        "actual_fused": 0.2,
+        "at_ceiling": true
+      },
+      {
+        "question": "Which vendor supplies both the hydrocracker catalyst and the Ziegler-Natta catalyst component?",
+        "expected_source": "SAP_Mock_Materials_Master_Export.xlsx",
+        "chunks_in_expected_doc": 2,
+        "ceiling": 0.4,
+        "actual_fused": 0.4,
+        "at_ceiling": true
+      }
+    ]
+  },
+  {
+    "chunk_size_tokens": 256,
+    "total_chunks": 38,
+    "raw_precision_at_k_fused": 0.42500000000000004,
+    "raw_precision_at_k_dense_only": 0.525,
+    "raw_precision_at_k_sparse_only": 0.325,
+    "mean_structural_ceiling": 0.675,
+    "fraction_of_achievable_fused": 0.6296296296296297,
+    "fraction_of_achievable_dense_only": 0.7777777777777778,
+    "questions_at_ceiling": 1,
+    "questions_scored": 8,
+    "per_question": [
+      {
+        "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+        "expected_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "chunks_in_expected_doc": 4,
+        "ceiling": 0.8,
+        "actual_fused": 0.6,
+        "at_ceiling": false
+      },
+      {
+        "question": "What caused the off-spec batch H110F-0847?",
+        "expected_source": "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "chunks_in_expected_doc": 3,
+        "ceiling": 0.6,
+        "actual_fused": 0.2,
+        "at_ceiling": false
+      },
+      {
+        "question": "What is the 8-hour TWA benzene exposure limit at the Aromatic Complex?",
+        "expected_source": "Aromatic_Complex_Benzene_Safety_Circular.docx",
+        "chunks_in_expected_doc": 2,
+        "ceiling": 0.4,
+        "actual_fused": 0.4,
+        "at_ceiling": true
+      },
+      {
+        "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+        "expected_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "chunks_in_expected_doc": 3,
+        "ceiling": 0.6,
+        "actual_fused": 0.4,
+        "at_ceiling": false
+      },
+      {
+        "question": "What was the root cause of the Hassan pumping station incident on 2026-07-22?",
+        "expected_source": "Pipeline_Incident_Report_Hassan_Segment.pdf",
+        "chunks_in_expected_doc": 3,
+        "ceiling": 0.6,
+        "actual_fused": 0.4,
+        "at_ceiling": false
+      },
+      {
+        "question": "Did any PSA unit fall below its purity target in the last reporting period?",
+        "expected_source": "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+        "chunks_in_expected_doc": 6,
+        "ceiling": 1.0,
+        "actual_fused": 0.8,
+        "at_ceiling": false
+      },
+      {
+        "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+        "expected_source": "Sulphur_Spec_Compliance_LabSheet.xlsx",
+        "chunks_in_expected_doc": 3,
+        "ceiling": 0.6,
+        "actual_fused": 0.4,
+        "at_ceiling": false
+      },
+      {
+        "question": "Which vendor supplies both the hydrocracker catalyst and the Ziegler-Natta catalyst component?",
+        "expected_source": "SAP_Mock_Materials_Master_Export.xlsx",
+        "chunks_in_expected_doc": 4,
+        "ceiling": 0.8,
+        "actual_fused": 0.2,
+        "at_ceiling": false
+      }
+    ]
+  }
+]

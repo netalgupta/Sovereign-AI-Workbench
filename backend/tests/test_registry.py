@@ -20,7 +20,7 @@ def test_load_registry_returns_exact_four_entries():
     }
     assert registry["coder-model"].model == "qwen2.5-coder:7b"
     assert registry["reasoning-model"].model == "qwen2.5:14b"
-    assert registry["vision-model"].model == "qwen2-vl:7b"
+    assert registry["vision-model"].model == "qwen2.5vl:7b"
     assert registry["fast-router"].model == "phi-3.5-mini"
 
 
