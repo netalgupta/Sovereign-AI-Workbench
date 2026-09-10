@@ -127,23 +127,27 @@ def run(chunk_texts: list[str], model_id: str = "reasoning-model") -> dict:
 
 
 if __name__ == "__main__":
-    cache_path = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else "backend/evaluation/extraction_cache/mrpl_extractions.jsonl"
+    chunks_path = (
+        sys.argv[1] if len(sys.argv) > 1 else "backend/evaluation/inspection_data.json"
     )
     out_path = sys.argv[2] if len(sys.argv) > 2 else "backend/evaluation/extraction_prompt_ab.json"
     limit = int(sys.argv[3]) if len(sys.argv) > 3 else 8
 
-    # Reuse the chunks already captured in the extraction checkpoint —
-    # same text the original numbers were measured on, no re-ingestion.
-    texts = []
-    with open(cache_path, "r", encoding="utf-8") as f:
-        for line in f:
-            record = json.loads(line)
-            if record.get("chunk_text"):
-                texts.append(record["chunk_text"])
-    texts = texts[:limit]
+    # Chunk texts come from the inspection export, not the extraction
+    # checkpoint: the checkpoint deliberately stores only each chunk's
+    # metadata and its extraction RESULT, never the source text, so it
+    # cannot be replayed against a different prompt. The inspection
+    # export carries the same 21 chunks produced by the same ingestion
+    # run, which is what makes this a fair A/B rather than two prompts
+    # judged on different text.
+    with open(chunks_path, "r", encoding="utf-8") as f:
+        texts = [c["text"] for c in json.load(f)["chunks"]]
+
+    # Longest chunks first: a chunk with more entities in it gives both
+    # prompts more opportunity to produce a relationship, so the
+    # comparison is not dominated by chunks where the right answer is
+    # "no relationships" for either arm.
+    texts = sorted(texts, key=len, reverse=True)[:limit]
 
     print(f"A/B over {len(texts)} chunks, 2 prompts each ({len(texts) * 2} model calls)...")
     result = run(texts)
