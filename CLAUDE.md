@@ -178,3 +178,53 @@ Zero change on every individual question for fused retrieval. Only BM25-alone im
 2. Build the user an interactive way to browse chunks / images / embeddings / chunking behavior (semantic vs recursive) themselves — explicitly requested, not started.
 3. Decide on merging `origin/advay/frontend`.
 4. Optional: GPU torch in a dedicated venv (embeddings/OCR are CPU-only today; Ollama already uses the GPU fine).
+
+## UPDATE 4 (same session) — all 8 outstanding items worked; two CRITICAL bugs found
+
+Branch `aryan/rag-and-graphrag`. Everything below is measured, not asserted; each has a harness under `backend/evaluation/` that reproduces it.
+
+### CRITICAL 1 — NFR-4's refusal gate was unreachable code (FIXED, `ae7214c`)
+RAG_SPEC §3's confidence gate computed `(top - min) / (max - min)` where `top` IS `max` — always exactly `1.0`, so `1.0 < 0.35` never fired. **Measured: refused 0 of 16 questions**, including "What is the plot of Pride and Prejudice?" against a refinery corpus. Q9 passed only because the generation model declined on its own.
+
+Fixing the arithmetic does not rescue it: **RRF scores on RANK and discards magnitude** — something is always rank 1 — so no function of fused ranks can express "nothing here is relevant". The gate now reads raw dense cosine, threshold **0.60** chosen from measured separation (in-corpus 0.636–0.795 vs out 0.344–0.580; `calibrate_confidence.py`). After: refused 8/16 — in_scope **0/5**, off_domain **3/3**, unrelated **4/4**.
+- Limitation, documented at the constant: gap is narrow (0.056), calibrated on ONE 21-chunk corpus — **re-measure against the real MRPL corpus before the venue**. "Adjacent" questions (right domain, absent entity, e.g. HCU-9) straddle it, because embeddings encode topic not entity identity.
+- The old test accepted **either outcome** ("either is legitimate") — which is why a dead gate survived. Replaced with assertions in both directions plus one pinning that confidence comes from similarity, not fused rank.
+
+### CRITICAL 2 — the vision model invents numbers and calls them printed (MEASURED)
+12 generated charts as matched pairs (identical data, one WITH printed labels, one WITHOUT) — `generate_chart_corpus.py` + `chart_stress_test.py`, live report at `backend/evaluation/CHART_STRESS_REPORT.md` (embeds each chart image next to the model's full description).
+
+| measure | result |
+|---|---|
+| chart type / title | 100% / 100% |
+| category labels | 46% |
+| printed-value recall (labeled) | 88% |
+| **fabricated values (unlabeled)** | **10 across 2 of 6 charts** |
+
+`purity_unlabeled.png` (no printed numbers at all) produced twelve figures described as *"the numeric values printed as text on the chart"* — it read Y-axis ticks and presented them as data. This is an estimate misrepresented as a transcription; `is_estimate=True` is the only thing between it and a fabricated measurement in an MRPL report.
+
+### Graph relationship validity (FIXED, `a14eee8`)
+**8 of 11 extracted relationships violated GRAPH_SPEC §4's own domain/range table** and passed validation, which checked the type STRING and endpoint NAMES but never endpoint TYPES. Direct cause of the signature query returning no related incidents. Violations are now dropped, never auto-corrected. Also changed §5's verbatim prompt: it offered five relationship types, but REFERENCES/APPLIES_TO/AUTHORED_BY all have `Document` as domain and `Document` is never extracted from chunk text — three of five were **structurally impossible**, which is what invited the misuse. **A/B still to run**: `extraction_prompt_ab.py` (needs Ollama free).
+
+### Metrics no longer saturated (`3ef3d61`)
+precision@5 and recall@5 both sit at 100% of ceiling and can detect neither improvement nor regression. **MRR 0.812 / MAP 0.779**, 6 of 8 ranked first — two questions rank their correct document 4th, invisible to the old metrics.
+
+### Neo4j persistence PROVEN (`#3`)
+Container restarted deliberately: 101 nodes / 115 relationships survived. The volume fix works. Graph had been lost again earlier (pre-volume container) and was rebuilt from the committed cache in seconds, zero LLM calls.
+
+### Frontend — console shipped into the app (`9e16796`)
+`GraphExplorerPage` (full-page force-directed graph: drag, cursor-anchored zoom, label filter, search-and-centre, node inspector showing every property and every edge WITH ITS TYPE) and `KnowledgeBasePage` (chunks + all images with OCR text, chart readings tagged ESTIMATE, ground truth, invented values named). Fills `/graph` and `/sources`, both already reserved as stubs in FRONTEND.md §2. TOOLS.md rows 63/64 added.
+- **NOT routed and NOT run**: `App.jsx` belongs to `advay/frontend`; the two-line change is written up in `frontend/src/pages/README_INTEGRATION.md`. No `package.json` on this branch, so nothing has rendered in a browser — treat first run after merge as a first run.
+- Data: static snapshots in `frontend/public/pipeline/` from `export_frontend_assets.py`. `images.json` (~3.3MB base64) is gitignored and regenerated.
+- Standalone artifact version: https://claude.ai/code/artifact/bc69e707-02f4-49d0-adf8-d8813af305d1
+
+### `advay/frontend` merge — SAFE, verified read-only
+`git merge-tree` simulation: **zero conflicts**. My `qwen2.5vl:7b` fix survives (their stale `qwen2-vl:7b` does not come back), CARD 13 row survives, all 42 frontend files arrive. Their docs/ copies are stale-but-untouched, so 3-way merge keeps mine. Merging remains the user's call.
+
+### ⚠️ GPU offload claim in `989933b` is UNDER REVIEW — likely WRONG
+That commit claims "1.7x faster via partial GPU offload (num_gpu=12)". Since then, with `num_gpu: 12` being sent on every call and the model freshly loaded, `ollama ps` reports **100% CPU** and `nvidia-smi` shows ~200 MiB. The original benchmark stopped the model between runs, so it likely measured **cold-load vs warm**, not CPU vs GPU. Verification in progress (`scratchpad/verify_gpu.py`: cold+warm timings per arm, with `ollama ps` captured each time). **If confirmed, correct the record the same way `b2202ce` corrected the ceiling numbers — do not quietly drop it.** The DEPENDENCIES.md correction in that commit (13GB measured vs "~5GB" documented) is independently verified and stands regardless.
+
+### Harnesses added this session
+`refusal_at_scale.py`, `calibrate_confidence.py`, `generate_chart_corpus.py`, `chart_stress_test.py` (live markdown + resume that RE-SCORES rather than trusting cached scores), `precision_ceiling_analysis.py`, `retrieval_metrics.py`, `export_inspection_data.py`, `export_image_data.py`, `export_frontend_assets.py`, `extraction_prompt_ab.py`.
+
+### Recurring bug class worth remembering
+Three separate stale/self-deceiving-measurement bugs this session: a committed JSON artifact outliving the code that made it (ceiling numbers, corrected in `b2202ce`); a resume path caching a SCORE rather than the expensive model output (chart sweep — fixed to re-score); and a scorer whose `%g` formatting made whole-number values like `4.0` unmatchable, which understated fabrication 5x and deflated recall. **Anything derived from a stored artifact needs its provenance checked before it is trusted.**
