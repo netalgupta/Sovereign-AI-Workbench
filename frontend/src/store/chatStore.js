@@ -14,6 +14,7 @@
 
 import { create } from 'zustand'
 import { now } from '../lib/formatTime'
+import { MOCK_PLAN_STEPS } from '../lib/api'
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -29,9 +30,17 @@ export const useChatStore = create((set) => ({
   messages: [],
   sessionId: generateSessionId(),
   draft: '',
+  plan: MOCK_PLAN_STEPS,
 
   // ── Actions ────────────────────────────────────────────────────────────────
   setDraft: (draft) => set({ draft }),
+  setPlan: (plan) => set({ plan }),
+  updatePlanStepStatus: (stepId, status) =>
+    set((state) => ({
+      plan: state.plan.map((s) =>
+        s.id === stepId || s.step_id === stepId ? { ...s, status } : s
+      ),
+    })),
 
   /**
    * Add a message to the conversation.

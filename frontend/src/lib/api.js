@@ -100,6 +100,60 @@ if inlet_temp > 395:  # 5°C early-warning headroom
 > ⚠️ **Operator note:** If feed rate must exceed 110 % for operational reasons, engage the quench flow controller (QFC-18) first and increase the H₂/HC ratio above 1,000 Nm³/m³ before any ramp. [3]`
 }
 
+// ---------------------------------------------------------------------------
+// Mock plan steps — matches AGENTS_SPEC.md PlanStep schema exactly:
+// { id, step_id, description, assigned_agent, status, depends_on, tool_call_event_id }
+// Includes a fork: step-2 and step-3 both depend on step-1 in parallel.
+// tool_call_event_id strings match the DOM IDs in ChatPane.jsx string-for-string.
+// ---------------------------------------------------------------------------
+export const MOCK_PLAN_STEPS = [
+  {
+    id: 'step-1',
+    step_id: 'step-1',
+    description: 'Deconstruct refinery parameters and construct multi-phase verification plan',
+    assigned_agent: 'reasoning',
+    status: 'done',
+    depends_on: [],
+    tool_call_event_id: 'step-4-planning',
+  },
+  {
+    id: 'step-2',
+    step_id: 'step-2',
+    description: 'Query historical thermocouple sensor trends across 4 shifts (TC-201 array)',
+    assigned_agent: 'code',
+    status: 'done',
+    depends_on: ['step-1'],
+    tool_call_event_id: 'step-2-1-telemetry',
+  },
+  {
+    id: 'step-3',
+    step_id: 'step-3',
+    description: 'Retrieve plant safety limits and evaluate thermal runaway operating envelope',
+    assigned_agent: 'vision',
+    status: 'done',
+    depends_on: ['step-1'],
+    tool_call_event_id: 'step-2-2-limits',
+  },
+  {
+    id: 'step-4',
+    step_id: 'step-4',
+    description: 'Compile volumetric flow differential pressure equation in SymPy AST',
+    assigned_agent: 'math',
+    status: 'running',
+    depends_on: ['step-2', 'step-3'],
+    tool_call_event_id: 'step-2-computation',
+  },
+  {
+    id: 'step-5',
+    step_id: 'step-5',
+    description: 'Verify API-521 boundary threshold and confirm +18.2% operational headroom',
+    assigned_agent: 'reasoning',
+    status: 'pending',
+    depends_on: ['step-4'],
+    tool_call_event_id: 'step-1-verification',
+  },
+]
+
 export async function checkBackendHealth() {
   // Always "online" — this IS the backend for now, by design, not a fallback.
   return { ok: true }
@@ -110,6 +164,8 @@ export async function sendMessage(message, sessionId) {
   return {
     reply: buildMockReply(message),
     citations: MOCK_CITATIONS,
+    plan: MOCK_PLAN_STEPS,
     session_id: sessionId,
   }
 }
+
