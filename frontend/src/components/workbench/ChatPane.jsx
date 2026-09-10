@@ -27,6 +27,7 @@ import { sendMessage } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { SourcesUsedList } from '../../integrations/citations'
+import { NetworkMonitorBar } from '../../integrations/network'
 
 // Set of 12 phrases for completed thinking block word rotation
 const ROTATION_PHRASES = [
@@ -1131,55 +1132,8 @@ export function ChatPane() {
         </div>
       </div>
 
-      {/* ── 4. Persistent System Monitor Footer Strip ─────────────────── */}
-      <div
-        className="px-6 py-1.5 flex-shrink-0 flex items-center justify-between text-[11px] select-none"
-        style={{
-          background: 'var(--color-surface)',
-          borderTop: '1px solid var(--color-border)',
-        }}
-      >
-        {/* Left: System Status Pill */}
-        <div className="flex items-center gap-2">
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ background: 'var(--color-success)' }}
-          />
-          <span className="font-semibold text-xs" style={{ color: 'var(--color-text)' }}>
-            Air-gapped Sandbox Active
-          </span>
-          <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-          <span style={{ color: 'var(--color-success)' }} className="font-medium">
-            Zero Egress Verified
-          </span>
-        </div>
-
-        {/* Right: Three Small Telemetry Metrics + Signal Bars */}
-        <div className="flex items-center gap-4 text-[10px] font-mono" style={{ color: 'var(--color-text-muted)' }}>
-          <div className="flex items-center gap-1">
-            <span className="opacity-70">CPU:</span>
-            <span className="font-semibold" style={{ color: 'var(--color-text)' }}>14%</span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="opacity-70">MEM:</span>
-            <span className="font-semibold" style={{ color: 'var(--color-text)' }}>3.8 GB</span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="opacity-70">NET:</span>
-            <span className="font-semibold" style={{ color: 'var(--color-success)' }}>0.0 MB/s</span>
-          </div>
-
-          {/* 4 Stair-step Signal Bars */}
-          <div className="flex items-end gap-[2px] h-3 ml-1" title="Signal: 0 external sockets (Air-gap secure)">
-            <span className="w-[2.5px] h-1 rounded-xs" style={{ background: 'var(--color-success)' }} />
-            <span className="w-[2.5px] h-1.5 rounded-xs" style={{ background: 'var(--color-success)' }} />
-            <span className="w-[2.5px] h-2 rounded-xs" style={{ background: 'var(--color-success)' }} />
-            <span className="w-[2.5px] h-2.5 rounded-xs" style={{ background: 'var(--color-success)' }} />
-          </div>
-        </div>
-      </div>
+      {/* ── 4. Persistent Bottom System / Network Monitor Bar (§3.9) ───── */}
+      <NetworkMonitorBar />
     </div>
   )
 }
