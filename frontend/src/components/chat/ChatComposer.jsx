@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Send, Paperclip } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { useChatStore } from '../../store/chatStore'
 import { sendMessage } from '../../lib/api'
+import { MultimodalUpload } from '../../integrations/multimodal-upload'
 import { Spinner } from '../ui/Spinner'
 import { ErrorBanner } from '../ui/ErrorBanner'
 
@@ -101,17 +102,17 @@ export function ChatComposer() {
           }
         }}
       >
-        {/* Paperclip — stub, non-functional until Day 3-4 file upload */}
-        <button
-          className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg transition-fast"
-          style={{ color: 'var(--color-text-faint)' }}
-          disabled
-          title="File upload — coming Day 3-4"
-          aria-label="Attach file (not yet available)"
-          tabIndex={-1}
-        >
-          <Paperclip size={16} strokeWidth={1.75} />
-        </button>
+        {/* Multimodal upload integration boundary — owned by Sahil (FRONTEND.md §3.13) */}
+        <MultimodalUpload
+          isCompact={true}
+          disabled={mutation.isPending}
+          onUpload={(files) => {
+            if (files && files.length > 0) {
+              const fileNames = files.map((f) => f.name).join(', ')
+              setDraft((prev) => (prev ? `${prev} [Attached: ${fileNames}]` : `[Attached: ${fileNames}] `))
+            }
+          }}
+        />
 
         {/* Textarea */}
         <textarea

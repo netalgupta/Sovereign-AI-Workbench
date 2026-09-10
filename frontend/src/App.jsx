@@ -1,13 +1,15 @@
 import { Routes, Route } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell'
-import { WorkbenchPage }   from './pages/WorkbenchPage'
-import { PlanStubPage }    from './pages/PlanStubPage'
-import { SourcesStubPage } from './pages/SourcesStubPage'
-import { GraphStubPage }   from './pages/GraphStubPage'
-import { OutputsStubPage } from './pages/OutputsStubPage'
-import { AuditStubPage }   from './pages/AuditStubPage'
+import { WorkbenchPage } from './pages/WorkbenchPage'
+import { PlanStubPage } from './pages/PlanStubPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { MonitorStubPage } from './pages/MonitorStubPage'
+
+// Plug-and-play teammate integrations (FRONTEND.md §5 / /src/integrations/)
+import { SourcesPanel } from './integrations/sources-panel'
+import { GraphExplorer } from './integrations/graph-explorer'
+import { OutputCards } from './integrations/output-cards'
+import { AuditLog } from './integrations/audit-log'
+import { NetworkMonitor } from './integrations/network-monitor'
 
 /**
  * App — top-level router.
@@ -16,26 +18,27 @@ import { MonitorStubPage } from './pages/MonitorStubPage'
  * Route inventory (FRONTEND.md §2):
  *   /                  → WorkbenchPage  (three-pane, fully built Day 1-2)
  *   /plan/:sessionId   → PlanStubPage   (full-screen plan graph — Day 5)
- *   /sources           → SourcesStubPage (knowledge base manager — Day 8 Netal)
- *   /graph             → GraphStubPage  (graph explorer — Day 8 Netal)
- *   /outputs           → OutputsStubPage (file library — Day 8 Kanishka)
- *   /audit             → AuditStubPage  (audit log — Day 8 Kanishka)
+ *   /sources           → SourcesPanel   (knowledge base manager — Netal)
+ *   /graph             → GraphExplorer  (graph explorer — Netal)
+ *   /outputs           → OutputCards    (file library — Kanishka)
+ *   /audit             → AuditLog       (audit log — Kanishka)
  *   /settings          → SettingsPage   (model registry, RBAC, encrypted storage — §3.11)
- *   /monitor           → MonitorStubPage (network monitor — Day 6 Sahil)
+ *   /monitor           → NetworkMonitor (network monitor full view — Sahil)
  */
 export default function App() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/"                element={<WorkbenchPage />} />
+        <Route path="/" element={<WorkbenchPage />} />
         <Route path="/plan/:sessionId" element={<PlanStubPage />} />
-        <Route path="/sources"         element={<SourcesStubPage />} />
-        <Route path="/graph"           element={<GraphStubPage />} />
-        <Route path="/outputs"         element={<OutputsStubPage />} />
-        <Route path="/audit"           element={<AuditStubPage />} />
-        <Route path="/settings"        element={<SettingsPage />} />
-        <Route path="/monitor"         element={<MonitorStubPage />} />
+        <Route path="/sources" element={<SourcesPanel />} />
+        <Route path="/graph" element={<GraphExplorer />} />
+        <Route path="/outputs" element={<OutputCards />} />
+        <Route path="/audit" element={<AuditLog />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/monitor" element={<NetworkMonitor mode="full" />} />
       </Routes>
     </AppShell>
   )
 }
+

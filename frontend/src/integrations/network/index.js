@@ -1,2 +1,2 @@
-export { NetworkMonitorBar } from './NetworkMonitorBar'
-export { isValidConnection, DEFAULT_METRICS } from './contract'
+export * from '../network-monitor'
+export { default } from '../network-monitor'

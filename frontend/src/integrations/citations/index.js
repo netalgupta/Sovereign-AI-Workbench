@@ -1,18 +1,23 @@
-/**
- * index.js — Integration barrel for the Citations adapter.
- *
- * All consumers import from this path only — never a direct relative import.
- *
- * When Netal's real citation-source component lands:
- *   1. Add her component to this directory
- *   2. Change the relevant export line below — one line, zero component edits
- *
- * Current exports:
- *   SourcesUsedList — renders citations as a collapsible "Sources used" section
- *                     inside the thinking block (NOT inline in message text).
- *
- * CitationChip (inline superscripts) has been retired per Day 3-4 revision.
- * contract.js (shape definition) is unchanged.
- */
+import React from 'react'
+// Teammate swap: change the import below to:
+// import Component from './CitationCard'
+import Component from './Placeholder'
 
+import { validateProps } from './contract'
 export { SourcesUsedList } from './SourcesUsedList.jsx'
+export * from './contract'
+
+/**
+ * Adapter wrapper for CitationCard.
+ * Performs lightweight dev-time contract validation before delegating to implementation.
+ *
+ * @param {import('./contract').CitationCardProps} props
+ */
+export function CitationCard(props) {
+  if (process.env.NODE_ENV !== 'production') {
+    validateProps(props)
+  }
+  return React.createElement(Component, props)
+}
+
+export default CitationCard

@@ -1,52 +1,66 @@
 /**
  * contract.js — Citation shape contract for the integration boundary.
  *
- * This file is the single source of truth for the Citation data shape.
- * Both the API layer (api.js) and the UI layer (CitationChip.jsx) reference
- * this shape definition.
+ * Owner: Netal (CARD 01 / FRONTEND.md §3.2)
  *
- * When Aditya's real backend returns citations, the API response must conform
- * to this shape. No other file needs to change.
- *
- * When Netal's real Citation UI lands, she imports this contract to validate
- * her component props against it.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * Citation shape:
+ * Real CitationCard component MUST accept exactly this shape:
  * {
- *   id:      number,  — 1-indexed, matches the [N] chip in the message text
- *   doc:     string,  — human-readable document name (e.g. "HCU_Operations_Manual.pdf")
- *   section: string,  — page/section label (e.g. "Section 4.2 — Feed Rate Limits")
- *   passage: string,  — the exact retrieved text passage shown in the expansion card
+ *   citationId: string | number, // 1-indexed identifier matching chip in message text
+ *   sourceDocName: string,       // Human-readable doc name (e.g. "HCU_Operations_Manual.pdf")
+ *   pageOrSection: string,       // Location (e.g. "Section 4.2 — Feed Rate Limits")
+ *   passage: string,             // The exact retrieved text, rendered in monospace/serif
+ *   sourceUrl?: string,          // Link back to Sources panel entry
+ *   confidence?: number,         // Optional relevance score (0.0 - 1.0)
  * }
- * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Rendered inline, pushes content down (not overlay). Do not change this shape
+ * without updating MessageBubble / ChatPane's citation-click handler.
+ *
+ * @typedef {Object} CitationCardProps
+ * @property {string|number} citationId - Citation identifier or index
+ * @property {string} sourceDocName - Document name
+ * @property {string} pageOrSection - Page / section label
+ * @property {string} passage - Exact retrieved text
+ * @property {string} [sourceUrl] - Sources panel link
+ * @property {number} [confidence] - Relevance score
+ * @property {() => void} [onViewSource] - Optional click callback to open document in Sources panel
  */
 
 /**
- * Validate that a citation object conforms to the contract.
- * Returns true if valid, false otherwise. Used in dev/debug only.
+ * Lightweight runtime validation for CitationCard props.
+ * Logs a dev-only console.warn if required fields are missing.
  *
- * @param {unknown} citation
+ * @param {any} props
  * @returns {boolean}
  */
-export function isValidCitation(citation) {
-  return (
-    citation !== null &&
-    typeof citation === 'object' &&
-    typeof citation.id === 'number' &&
-    typeof citation.doc === 'string' &&
-    typeof citation.section === 'string' &&
-    typeof citation.passage === 'string'
-  )
+export function validateProps(props) {
+  if (!props) {
+    console.warn('[Integration: citations] Missing props: CitationCard requires props object.')
+    return false
+  }
+
+  const missing = []
+  if (props.citationId === undefined && props.id === undefined) missing.push('citationId')
+  if (!props.sourceDocName && !props.doc) missing.push('sourceDocName')
+  if (!props.pageOrSection && !props.section) missing.push('pageOrSection')
+  if (props.passage === undefined) missing.push('passage')
+
+  if (missing.length > 0) {
+    console.warn(
+      `[Integration: citations] Contract violation in CitationCard: missing required field(s): ${missing.join(
+        ', '
+      )}. Required shape: { citationId, sourceDocName, pageOrSection, passage }`,
+      props
+    )
+    return false
+  }
+  return true
 }
 
-/**
- * The canonical empty citation — used as a default prop fallback.
- * @type {{ id: number, doc: string, section: string, passage: string }}
- */
-export const EMPTY_CITATION = {
-  id: 0,
-  doc: '',
-  section: '',
-  passage: '',
+export const CANONICAL_CITATION = {
+  citationId: '1',
+  sourceDocName: 'HCU_Operations_Manual.pdf',
+  pageOrSection: 'Section 4.2 — Feed Rate Limits',
+  passage: 'Maximum allowable HCU fresh feed rate under current catalyst run length is 112% of design.',
+  sourceUrl: '/sources?doc=HCU_Operations_Manual.pdf',
 }

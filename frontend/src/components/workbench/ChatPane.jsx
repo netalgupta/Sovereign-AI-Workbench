@@ -28,7 +28,8 @@ import { sendMessage } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { SourcesUsedList } from '../../integrations/citations'
-import { NetworkMonitorBar } from '../../integrations/network'
+import { NetworkMonitorBar } from '../../integrations/network-monitor'
+import { CalcTraceCard } from '../../integrations/calc-trace'
 
 // Set of 12 phrases for completed thinking block word rotation
 const ROTATION_PHRASES = [
@@ -742,6 +743,9 @@ export function ChatPane() {
                 {CODE_SNIPPET}
               </SyntaxHighlighter>
             </div>
+
+            {/* Calculation Trace Viewer integration boundary — owned by Kanishka (FRONTEND.md §3.8) */}
+            <CalcTraceCard />
           </div>
 
           {/* ── TURN 2: User Query 2 ───────────────────────────────────── */}
