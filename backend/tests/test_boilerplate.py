@@ -7,6 +7,8 @@ suspiciously tight 0.029-0.033 band, with an unrelated document
 appearing in 6 of 9 top-5 result sets.
 """
 
+import pytest
+
 from backend.ingestion.boilerplate import detect_boilerplate_sentences, strip_boilerplate
 
 
@@ -40,15 +42,18 @@ def test_repeated_sentence_within_one_document_counts_once_not_many_times():
     like it recurred across 5 documents -- counting must be per-document
     presence, not raw occurrence count."""
     docs = [
-        "Repeat this phrase please. Repeat this phrase please. Repeat this phrase please. Unique content A.",
-        "Something else entirely. Unrelated content B.",
+        # Five occurrences in this one document.
+        "Repeat this phrase please. Repeat this phrase please. Repeat this phrase please. "
+        "Repeat this phrase please. Repeat this phrase please. Unique content A.",
+        "Repeat this phrase please. Unrelated content B.",
+        "Something else entirely. Unrelated content C.",
     ]
 
     report = detect_boilerplate_sentences(docs, min_doc_fraction=0.5)
 
-    # "Repeat this phrase please." appears in only 1 of 2 documents (50%),
-    # regardless of how many times it repeats WITHIN that one document.
-    assert report.doc_fraction_by_sentence.get("repeat this phrase please.", 0) == 0.5
+    # Present in 2 of 3 documents = 0.667, no matter that it occurs six
+    # times in total. Per-occurrence counting would give 6/3 = 2.0.
+    assert report.doc_fraction_by_sentence["repeat this phrase please."] == pytest.approx(2 / 3)
 
 
 def test_strip_boilerplate_removes_flagged_sentences_keeps_the_rest():
@@ -79,6 +84,31 @@ def test_strip_boilerplate_preserves_line_structure_of_what_it_keeps():
 def test_strip_boilerplate_with_empty_set_is_a_noop():
     text = "Some text here."
     assert strip_boilerplate(text, set()) == text
+
+
+def test_a_sentence_in_only_one_document_is_never_boilerplate_however_small_the_corpus():
+    """Real bug, caught by test_ingest_corpus.py rather than inspection:
+    with 2 documents, a sentence appearing in just ONE of them scores
+    1/2 = 0.5 and clears any threshold at or below that. Without a
+    minimum absolute document count, a 2-document ingest would flag --
+    and strip -- essentially every sentence in both documents. The
+    fraction math hides this completely at the 13-document corpus size
+    where everything else was validated."""
+    docs = [
+        "The WABT trigger is 415 degrees celsius.",
+        "PSA-3 purity dropped to 99.1 percent on Tuesday.",
+    ]
+
+    report = detect_boilerplate_sentences(docs, min_doc_fraction=0.4)
+
+    assert report.boilerplate_sentences == []
+
+
+def test_detect_on_a_single_document_corpus_returns_nothing():
+    report = detect_boilerplate_sentences(
+        ["Only one document here. It has several sentences in it."], min_doc_fraction=0.4
+    )
+    assert report.boilerplate_sentences == []
 
 
 def test_detect_on_empty_corpus_returns_nothing():

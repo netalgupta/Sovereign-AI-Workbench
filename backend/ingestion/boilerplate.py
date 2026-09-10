@@ -58,7 +58,14 @@ from pydantic import BaseModel
 # lookahead the "." branch already uses) fixes both: a genuine new
 # paragraph/list item starts with a capital letter, while a mid-sentence
 # line-wrap continuation (like "internal document.") does not.
-_SENTENCE_SPLIT_RULE = r"(?<=[.!?])\s+(?=[A-Z0-9])|\n+(?=[A-Z0-9])"
+# Branch 1 (terminator) deliberately does NOT require a capital letter
+# after the terminator, only some non-whitespace: this pipeline ingests
+# OCR'd scans, where capitalization is unreliable, so requiring a
+# capital would systematically under-split exactly the documents whose
+# text is already the least trustworthy. Branch 2 (newline) DOES require
+# a capital/digit — there it is load-bearing, distinguishing a genuine
+# paragraph start from a mid-sentence PDF line-wrap continuation.
+_SENTENCE_SPLIT_RULE = r"(?<=[.!?])\s+(?=\S)|\n+(?=[A-Z0-9])"
 _SENTENCE_SPLIT_PATTERN = re.compile(_SENTENCE_SPLIT_RULE)
 # Same rule, one capturing group around it, so re.split hands back the
 # separators as well as the sentences — strip_boilerplate needs them to
@@ -81,6 +88,18 @@ def _normalize(sentence: str) -> str:
 # real boilerplate candidate — see the comment at its use site in
 # detect_boilerplate_sentences for the real bug this guards against.
 MIN_BOILERPLATE_SENTENCE_WORDS = 4
+
+# Boilerplate means "recurring ACROSS documents", so appearing in a
+# single document disqualifies a sentence by definition, whatever
+# fraction that single document represents. This guard is what makes the
+# detector safe on a small corpus: with 2 documents, a sentence in just
+# ONE of them scores 1/2 = 0.5 and clears any threshold at or below
+# that, so without this rule a 2-document ingest would flag (and strip)
+# essentially every sentence in both documents. Caught by
+# test_ingest_corpus.py's single-document-sentence test, not by
+# inspection — the fraction math hides it completely at corpus sizes
+# where the real corpus (13 documents) behaves fine.
+MIN_BOILERPLATE_DOCUMENT_COUNT = 2
 
 
 class BoilerplateReport(BaseModel):
@@ -150,7 +169,12 @@ def detect_boilerplate_sentences(
             sentence_doc_counts[normalized] = sentence_doc_counts.get(normalized, 0) + 1
 
     fractions = {s: count / doc_count for s, count in sentence_doc_counts.items()}
-    flagged = sorted(s for s, frac in fractions.items() if frac >= min_doc_fraction)
+    flagged = sorted(
+        s
+        for s, frac in fractions.items()
+        if frac >= min_doc_fraction
+        and sentence_doc_counts[s] >= MIN_BOILERPLATE_DOCUMENT_COUNT
+    )
 
     return BoilerplateReport(
         boilerplate_sentences=flagged,
