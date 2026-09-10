@@ -1,268 +1,535 @@
-import { MoreHorizontal, Check, Signal } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import {
+  RotateCcw,
+  MoreHorizontal,
+  ChevronRight,
+  Search,
+  Cpu,
+  Calculator,
+  Layers,
+  FileCheck,
+  Terminal,
+} from 'lucide-react'
+import { showToast } from '../../store/toastStore'
+
+// Step categories mapped strictly to industrial tool-call schema
+// Retrieval: "Retrieving sources" (active) / "Retrieved sources" (completed)
+// Computation: "Running analysis" / "Ran analysis" or "Computing" / "Computed"
+// Verification: "Checking constraints" / "Checked constraints" or "Verifying" / "Verified"
+// Synthesis: "Drafting response" / "Drafted response"
+// Routing/Planning: "Planning next step" / "Planned next step" or "Classifying request" / "Classified request"
+
+const INITIAL_STEPS = [
+  {
+    id: 'step-retrieval',
+    category: 'retrieval',
+    activeLabel: 'Retrieving sources',
+    completedLabel: 'Retrieved sources',
+    status: 'active',
+    baseSeconds: 4,
+    icon: Search,
+    trace: [
+      { time: '10:14:05.12', text: 'Query router mapped intent to [hcu_refinery_operations, safety_sop]' },
+      { time: '10:14:05.34', text: 'Milvus hybrid search initiated on collection "hcu_docs" (dense + sparse BM25)' },
+      { time: '10:14:05.89', text: 'Embedding score matched 6 chunks from SOP-HCU-412 & API-521 standard' },
+      { time: '10:14:06.42', text: 'Cross-encoder reranking completed (threshold >= 0.82) -> 3 chunks isolated' },
+      { time: '10:14:07.01', text: 'Zero-egress memory buffer: 2,410 tokens isolated in local sandbox' },
+    ],
+  },
+  {
+    id: 'step-verification',
+    category: 'verification',
+    activeLabel: 'Checking constraints',
+    completedLabel: 'Checked constraints',
+    status: 'completed',
+    duration: '0.9s',
+    icon: FileCheck,
+    trace: [
+      { time: '10:14:04.10', text: 'Ingested plant safety parameter matrix: API-521 & Plant SOP §14.2' },
+      { time: '10:14:04.45', text: 'Evaluated boundary threshold: ΔP_max <= 420 m³/h at current feed-rate' },
+      { time: '10:14:04.98', text: 'Safety margin confirmed: +18.2% operational headroom (status: PASS)' },
+    ],
+  },
+  {
+    id: 'step-computation',
+    category: 'computation',
+    activeLabel: 'Running analysis',
+    completedLabel: 'Ran analysis',
+    status: 'completed',
+    duration: '1.8s',
+    icon: Calculator,
+    trace: [
+      { time: '10:14:02.30', text: 'SymPy AST compiled for volumetric flow conversion formula' },
+      { time: '10:14:02.85', text: 'Evaluated differential pressure equation: ΔP = k · Q^1.85' },
+      { time: '10:14:04.05', text: 'Dimensional consistency verified across metric unit parameters' },
+    ],
+  },
+  {
+    id: 'step-planning',
+    category: 'planning',
+    activeLabel: 'Planning next step',
+    completedLabel: 'Planned task graph',
+    status: 'completed',
+    duration: '1.2s',
+    icon: Layers,
+    trace: [
+      { time: '10:14:01.05', text: 'Router parsed intent: engineering parameter validation for Unit HCU-2' },
+      { time: '10:14:01.40', text: 'Constructed DAG execution plan: 5 sequential verification phases' },
+      { time: '10:14:02.22', text: 'Air-gap sandbox verified: 0 external network requests permitted' },
+    ],
+  },
+  {
+    id: 'step-routing',
+    category: 'routing',
+    activeLabel: 'Classifying request',
+    completedLabel: 'Classified request',
+    status: 'completed',
+    duration: '0.5s',
+    icon: Cpu,
+    trace: [
+      { time: '10:14:00.60', text: 'Prompt tokenized: 68 tokens parsed into semantic graph' },
+      { time: '10:14:00.95', text: 'Classified domain tags: [code_gen, formula_eval, safety_sop]' },
+    ],
+  },
+]
+
+const PLAN_PHASES = [
+  { num: 1, label: 'Understand query', status: 'done' },
+  { num: 2, label: 'Retrieve information', status: 'active' },
+  { num: 3, label: 'Analyze & reason', status: 'pending' },
+  { num: 4, label: 'Generate response', status: 'pending' },
+  { num: 5, label: 'Validate & finalize', status: 'pending' },
+]
 
 export function PlanRail() {
-  const STEPS = [
-    {
-      num: 1,
-      title: '1. Understand query',
-      desc: 'Parse intent and extract entities',
-      status: 'done', // green checkmark
-    },
-    {
-      num: 2,
-      title: '2. Retrieve information',
-      desc: 'Search relevant sources',
-      status: 'active', // amber pulsing ring
-    },
-    {
-      num: 3,
-      title: '3. Analyze & reason',
-      desc: 'Synthesize findings',
-      status: 'pending',
-    },
-    {
-      num: 4,
-      title: '4. Generate response',
-      desc: 'Draft answer with citations',
-      status: 'pending',
-    },
-    {
-      num: 5,
-      title: '5. Validate & finalize',
-      desc: 'Safety and accuracy checks',
-      status: 'pending',
-    },
-  ]
+  // Live date/time display
+  const [currentDateTime, setCurrentDateTime] = useState('')
+
+  // Live elapsed counter for active step (e.g. "4s", "5s"...)
+  const [activeElapsed, setActiveElapsed] = useState(4)
+
+  // Track expanded state for each step independently (collapsed by default)
+  const [expandedSteps, setExpandedSteps] = useState({})
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date()
+      const formatted =
+        now.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        }) +
+        ', ' +
+        now.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      setCurrentDateTime(formatted)
+    }
+    updateTime()
+    const clockTimer = setInterval(updateTime, 30000)
+    return () => clearInterval(clockTimer)
+  }, [])
+
+  // Live timer for active step elapsed seconds
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveElapsed((prev) => prev + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // Expose toggle to window for automated testing/capture
+  useEffect(() => {
+    window.__workbenchToggleStep = (stepId) => {
+      setExpandedSteps((prev) => ({
+        ...prev,
+        [stepId]: !prev[stepId],
+      }))
+    }
+    window.__workbenchExpandStep = (stepId, expand = true) => {
+      setExpandedSteps((prev) => ({
+        ...prev,
+        [stepId]: expand,
+      }))
+    }
+    return () => {
+      delete window.__workbenchToggleStep
+      delete window.__workbenchExpandStep
+    }
+  }, [])
+
+  const toggleStep = (stepId) => {
+    setExpandedSteps((prev) => ({
+      ...prev,
+      [stepId]: !prev[stepId],
+    }))
+  }
 
   return (
     <aside
       className="flex flex-col h-full flex-shrink-0 select-none overflow-hidden relative"
       style={{
-        width: 305,
+        width: 320,
         background: 'var(--color-bg)',
-        borderLeft: '1px solid rgba(42, 39, 36, 0.06)',
+        borderLeft: '1px solid var(--color-border)',
       }}
-      aria-label="Plan rail"
+      aria-label="Task execution plan and live reasoning trace"
     >
-      {/* ── Header: Title + Subtext + Overflow Menu ──────────────────── */}
-      <div className="flex items-start justify-between px-5 pt-4 pb-3 flex-shrink-0">
-        <div className="flex flex-col">
-          <h2
-            className="text-base font-bold tracking-tight leading-tight"
-            style={{ color: 'var(--color-text)' }}
-          >
-            Plan
-          </h2>
-          <span
-            className="text-[11px] leading-tight mt-0.5"
-            style={{ color: 'var(--color-text-muted)' }}
-          >
-            Agent's current task plan
-          </span>
+      {/* ── 1. Rail Header: Title + Replan Button + Live Time + Options ─── */}
+      <div
+        className="flex flex-col px-4 pt-3 pb-2.5 flex-shrink-0 gap-1.5"
+        style={{ borderBottom: '1px solid var(--color-border)' }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2
+              className="text-sm font-bold tracking-tight leading-tight"
+              style={{ color: 'var(--color-text)' }}
+            >
+              Plan
+            </h2>
+
+            {/* Replan Button */}
+            <button
+              type="button"
+              onClick={() =>
+                showToast(
+                  'Replanning — triggers adaptive task graph regeneration (CARD 10 / AGENTS_SPEC.md)',
+                  'info'
+                )
+              }
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] shadow-xs"
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-accent)',
+              }}
+              title="Trigger agent re-planning loop"
+            >
+              <RotateCcw size={10} strokeWidth={2.5} />
+              <span>Replan</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span
+              className="text-[10px] font-mono tracking-tight"
+              style={{ color: 'var(--color-text-muted)' }}
+              title="System local time"
+            >
+              {currentDateTime}
+            </span>
+
+            <button
+              type="button"
+              onClick={() =>
+                showToast('Execution graph settings — dagre graph available in /plan', 'info')
+              }
+              className="w-6 h-6 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+              style={{ color: 'var(--color-text-muted)' }}
+              title="Plan options"
+            >
+              <MoreHorizontal size={14} strokeWidth={2} />
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          className="w-7 h-7 rounded-lg flex items-center justify-center transition-fast hover:bg-[#EDE5DC] text-[var(--color-text-muted)]"
-          title="Plan options"
-        >
-          <MoreHorizontal size={15} strokeWidth={2} />
-        </button>
-      </div>
 
-      {/* ── Connected Vertical Timeline (Reference Design) ──────────── */}
-      <div className="flex-1 overflow-y-auto px-5 py-2 z-10">
-        <div className="relative flex flex-col gap-2">
-          {STEPS.map((step, idx) => {
-            const isLast = idx === STEPS.length - 1
-            const isDone = step.status === 'done'
-            const isActive = step.status === 'active'
-
-            return (
-              <div key={step.num} className="relative flex items-start gap-3.5">
-                {/* Timeline node + connector line */}
-                <div className="flex flex-col items-center flex-shrink-0 mt-0.5 relative">
-                  {/* Node icon */}
-                  {isDone ? (
+        {/* ── Compact Plan Strip (Tick marks / Progress bar, not circle tracker) ── */}
+        <div className="flex flex-col gap-1.5 pt-1">
+          {/* Segmented Progress Ticks */}
+          <div className="grid grid-cols-5 gap-1.5 w-full items-center" title="Plan Progress: Step 2 of 5 active (40%)">
+            {PLAN_PHASES.map((phase) => {
+              const isDone = phase.status === 'done'
+              const isActive = phase.status === 'active'
+              return (
+                <div
+                  key={phase.num}
+                  className="h-1.5 rounded-xs transition-fast relative overflow-hidden"
+                  style={{
+                    background: isDone
+                      ? 'var(--color-success)'
+                      : isActive
+                      ? 'var(--color-accent)'
+                      : 'var(--color-border)',
+                  }}
+                >
+                  {isActive && (
                     <div
-                      className="w-5 h-5 rounded-full flex items-center justify-center shadow-xs"
-                      style={{ background: '#2D7A4F', color: 'white' }}
-                    >
-                      <Check size={12} strokeWidth={2.5} />
-                    </div>
-                  ) : isActive ? (
-                    <div className="relative flex items-center justify-center w-5 h-5">
-                      <span
-                        className="absolute w-5 h-5 rounded-full animate-ping opacity-30"
-                        style={{ background: '#C67D34' }}
-                      />
-                      <div
-                        className="w-4 h-4 rounded-full border-2 border-white flex items-center justify-center shadow-xs"
-                        style={{ background: '#C67D34' }}
-                      >
-                        <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className="w-4 h-4 rounded-full border border-[var(--color-border-strong)] flex items-center justify-center mt-0.5"
-                      style={{ background: 'var(--color-overlay)' }}
-                    >
-                      <div
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{ background: 'var(--color-text-faint)' }}
-                      />
-                    </div>
-                  )}
-
-                  {/* Vertical line connecting to next step */}
-                  {!isLast && (
-                    <div
-                      className="w-[1.5px] my-1"
-                      style={{
-                        height: isActive ? 34 : 26,
-                        background: isDone
-                          ? '#2D7A4F'
-                          : isActive
-                          ? '#DDB08A'
-                          : 'rgba(42, 39, 36, 0.12)',
-                      }}
+                      className="absolute inset-0 opacity-40 animate-pulse"
+                      style={{ background: 'white' }}
                     />
                   )}
                 </div>
-
-                {/* Step content card */}
-                <div
-                  className={`flex-1 transition-fast ${
-                    isActive
-                      ? 'p-2.5 rounded-xl border -mt-1'
-                      : 'pb-1'
-                  }`}
-                  style={{
-                    background: isActive ? '#FAF3EC' : 'transparent',
-                    borderColor: isActive ? '#E2B994' : 'transparent',
-                    boxShadow: isActive ? 'var(--shadow-xs)' : 'none',
-                  }}
-                >
-                  <div
-                    className="text-xs font-bold leading-tight"
-                    style={{ color: 'var(--color-text)' }}
-                  >
-                    {step.title}
-                  </div>
-                  <div
-                    className="text-[11px] leading-tight mt-0.5"
-                    style={{ color: 'var(--color-text-muted)' }}
-                  >
-                    {step.desc}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* ── Network Monitor Section ────────────────────────────────── */}
-        <div className="mt-7 flex flex-col gap-2.5">
-          <span
-            className="text-xs font-bold tracking-tight"
-            style={{ color: 'var(--color-text)' }}
-          >
-            Network Monitor
-          </span>
-
-          {/* Operational row with stair-step signal bars */}
-          <div
-            className="flex items-center justify-between p-2.5 rounded-xl text-xs"
-            style={{
-              background: 'white',
-              border: '1px solid var(--color-border)',
-              boxShadow: 'var(--shadow-xs)',
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 rounded-full"
-                style={{ background: '#2D7A4F' }}
-              />
-              <span className="font-medium text-xs" style={{ color: 'var(--color-text)' }}>
-                All systems operational
-              </span>
-            </div>
-            {/* 4 stair-step signal strength bars */}
-            <div className="flex items-end gap-[2px] h-3.5" title="Signal: Optimal / Offline Localhost">
-              <span className="w-[3px] h-1.5 rounded-xs" style={{ background: '#2D7A4F' }} />
-              <span className="w-[3px] h-2 rounded-xs" style={{ background: '#2D7A4F' }} />
-              <span className="w-[3px] h-2.5 rounded-xs" style={{ background: '#2D7A4F' }} />
-              <span className="w-[3px] h-3.5 rounded-xs" style={{ background: '#2D7A4F' }} />
-            </div>
+              )
+            })}
           </div>
 
-          {/* Status quote card */}
-          <div
-            className="p-3 rounded-xl text-xs leading-relaxed"
-            style={{
-              background: 'var(--color-surface)',
-              border: '1px solid rgba(42, 39, 36, 0.05)',
-              color: 'var(--color-text-muted)',
-              fontStyle: 'italic',
-            }}
-          >
-            "Augmenting engineering expertise, responsibly."
+          {/* Compact Step Status Row */}
+          <div className="flex items-center justify-between text-[11px] leading-tight">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="font-semibold" style={{ color: 'var(--color-text)' }}>
+                Step 2/5
+              </span>
+              <span style={{ color: 'var(--color-text-muted)' }}>·</span>
+              <span className="truncate" style={{ color: 'var(--color-text-muted)' }}>
+                Retrieve information
+              </span>
+            </div>
+            <span className="font-mono text-[10px] font-medium" style={{ color: 'var(--color-accent)' }}>
+              40%
+            </span>
           </div>
         </div>
       </div>
 
-      {/* ── Subtle Refinery Silhouette Watermark (Bottom Right) ────── */}
-      <div
-        className="absolute bottom-0 right-0 pointer-events-none select-none flex items-end justify-end p-2 gap-2"
-        style={{ opacity: 0.14 }}
-        aria-hidden="true"
-      >
-        <div
-          className="flex flex-col text-[8px] font-mono leading-tight tracking-wider uppercase"
-          style={{ color: 'var(--color-text)' }}
-        >
-          <span>People</span>
-          <span>Process</span>
-          <span>Progress</span>
+      {/* ── 2. Scrollable Rail Body: Collapsible Reasoning Trace Stack ─── */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 z-10 flex flex-col gap-4">
+        {/* Section Header */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Terminal size={12} strokeWidth={2.4} style={{ color: 'var(--color-accent)' }} />
+              <span
+                className="text-xs font-bold tracking-tight uppercase"
+                style={{ color: 'var(--color-text)' }}
+              >
+                Reasoning Trace
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                showToast('Audit log exporter — full execution trail (CARD 10 / FRONTEND.md §3.10)', 'info')
+              }
+              className="text-[10px] font-medium transition-fast hover:underline cursor-pointer"
+              style={{ color: 'var(--color-text-muted)' }}
+              title="View full audit trail"
+            >
+              Audit log
+            </button>
+          </div>
+
+          {/* ── Collapsible Steps Stack (Most recent at top) ───────────── */}
+          <div className="flex flex-col gap-1.5">
+            {INITIAL_STEPS.map((step) => {
+              const isActive = step.status === 'active'
+              const isExpanded = !!expandedSteps[step.id]
+              const displayLabel = isActive ? step.activeLabel : step.completedLabel
+              const displayDuration = isActive ? `${activeElapsed}s` : step.duration
+
+              return (
+                <div
+                  key={step.id}
+                  className="flex flex-col rounded-md transition-fast"
+                  style={{
+                    background: isExpanded
+                      ? 'var(--color-surface)'
+                      : 'transparent',
+                  }}
+                >
+                  {/* Collapsed Single-Line Row (Clickable) */}
+                  <button
+                    type="button"
+                    onClick={() => toggleStep(step.id)}
+                    aria-expanded={isExpanded}
+                    className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-left transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] group"
+                    style={{
+                      border: isExpanded ? '1px solid var(--color-border)' : '1px solid transparent',
+                    }}
+                    title={`Click to ${isExpanded ? 'collapse' : 'expand'} reasoning trace for this step`}
+                  >
+                    {/* Left: Indicator dot + Status word + Duration */}
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      {/* Status Dot: Pulsing breathing dot while active, static muted dot once completed */}
+                      {isActive ? (
+                        <div className="relative flex items-center justify-center w-2 h-2 flex-shrink-0">
+                          <span
+                            className="w-2 h-2 rounded-full animate-breathing-dot"
+                            style={{
+                              background: 'var(--color-accent)',
+                              color: 'var(--color-accent)',
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                          style={{ background: 'var(--color-text-faint)' }}
+                        />
+                      )}
+
+                      {/* Status text + Elapsed time in a single row */}
+                      <div className="flex items-center gap-1.5 min-w-0 text-xs truncate">
+                        <span
+                          className={`truncate font-medium transition-fast ${
+                            isActive ? 'font-semibold' : ''
+                          }`}
+                          style={{
+                            color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
+                          }}
+                        >
+                          {displayLabel}
+                        </span>
+                        <span
+                          className="text-[10px]"
+                          style={{ color: 'var(--color-text-faint)' }}
+                        >
+                          ·
+                        </span>
+                        <span
+                          className="font-mono text-[11px] flex-shrink-0"
+                          style={{
+                            color: isActive ? 'var(--color-accent)' : 'var(--color-text-faint)',
+                          }}
+                        >
+                          {displayDuration}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Right: Chevron indicator (smooth rotation) */}
+                    <div
+                      className="ml-2 transition-transform duration-200 flex-shrink-0"
+                      style={{
+                        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                        color: 'var(--color-text-muted)',
+                      }}
+                    >
+                      <ChevronRight size={13} strokeWidth={2.2} />
+                    </div>
+                  </button>
+
+                  {/* ── Expanded Recessed Panel (Smooth Height Transition) ── */}
+                  <div className={`collapsible-grid ${isExpanded ? 'is-expanded' : ''}`}>
+                    <div className="collapsible-inner">
+                      <div
+                        className="mx-1 mt-1 mb-1.5 p-2.5 rounded-md font-mono text-[11px] leading-relaxed flex flex-col gap-1.5"
+                        style={{
+                          background: 'var(--color-overlay)',
+                          color: 'var(--color-text)',
+                        }}
+                      >
+                        {step.trace.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-start gap-1.5 text-[11px] leading-normal"
+                          >
+                            <span
+                              className="text-[9px] flex-shrink-0 select-none opacity-60 mt-0.5"
+                              style={{ color: 'var(--color-text-muted)' }}
+                            >
+                              {item.time}
+                            </span>
+                            <span
+                              className="break-words flex-1"
+                              style={{ color: 'var(--color-text)' }}
+                            >
+                              {item.text}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
 
-        {/* Industrial refinery cracking towers & piping silhouette */}
-        <svg
-          width="110"
-          height="80"
-          viewBox="0 0 110 80"
-          fill="none"
-          stroke="var(--color-text)"
-          strokeWidth="1.25"
-        >
-          {/* Main crude column */}
-          <rect x="15" y="10" width="16" height="68" rx="2" fill="currentColor" fillOpacity="0.1" />
-          <line x1="10" y1="20" x2="36" y2="20" />
-          <line x1="10" y1="35" x2="36" y2="35" />
-          <line x1="10" y1="50" x2="36" y2="50" />
-          <line x1="10" y1="65" x2="36" y2="65" />
-          {/* Flare / dome cap */}
-          <path d="M15 10 C15 4, 31 4, 31 10" />
-          <line x1="23" y1="4" x2="23" y2="0" />
+        {/* ── 3. Toned-Down System Monitor ─────────────────────────────── */}
+        <div className="flex flex-col gap-2 mt-auto pt-2" style={{ borderTop: '1px solid var(--color-border)' }}>
+          <div className="flex items-center justify-between">
+            <span
+              className="text-[11px] font-bold tracking-tight uppercase"
+              style={{ color: 'var(--color-text-muted)' }}
+            >
+              System Monitor
+            </span>
+            <div className="flex items-center gap-1.5" title="Air-gapped Sandbox Verified">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: 'var(--color-success)' }}
+              />
+              <span className="text-[10px] font-medium" style={{ color: 'var(--color-success)' }}>
+                Isolated
+              </span>
+            </div>
+          </div>
 
-          {/* Secondary reactor / cracker */}
-          <rect x="42" y="25" width="20" height="53" rx="3" fill="currentColor" fillOpacity="0.1" />
-          <path d="M42 25 C42 18, 62 18, 62 25" />
-          <line x1="42" y1="42" x2="62" y2="42" strokeDasharray="2 2" />
-          <line x1="42" y1="58" x2="62" y2="58" strokeDasharray="2 2" />
+          {/* Compact Telemetry Metrics (3-Column Grid) */}
+          <div className="grid grid-cols-3 gap-1.5">
+            {/* CPU */}
+            <div
+              className="p-1.5 rounded-md flex flex-col gap-0.5"
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              <div className="flex items-center justify-between text-[9px]" style={{ color: 'var(--color-text-muted)' }}>
+                <span>CPU</span>
+                <span className="font-mono font-semibold" style={{ color: 'var(--color-text)' }}>14%</span>
+              </div>
+              <svg className="w-full h-3.5" viewBox="0 0 60 14" fill="none">
+                <path
+                  d="M0 11 Q 15 8, 30 10 T 60 7"
+                  stroke="var(--color-accent)"
+                  strokeWidth="1.2"
+                  fill="none"
+                />
+              </svg>
+            </div>
 
-          {/* Process pipes / rack connecting towers */}
-          <path d="M31 25 H42" strokeWidth="1.5" />
-          <path d="M31 45 H42" strokeWidth="1.5" />
-          <path d="M62 35 H78 V78" strokeWidth="1.5" />
-          <path d="M62 55 H88 V78" strokeWidth="1.5" />
+            {/* Memory */}
+            <div
+              className="p-1.5 rounded-md flex flex-col gap-0.5"
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              <div className="flex items-center justify-between text-[9px]" style={{ color: 'var(--color-text-muted)' }}>
+                <span>MEM</span>
+                <span className="font-mono font-semibold" style={{ color: 'var(--color-text)' }}>3.8 GB</span>
+              </div>
+              <svg className="w-full h-3.5" viewBox="0 0 60 14" fill="none">
+                <path
+                  d="M0 10 Q 15 7, 30 9 T 60 6"
+                  stroke="var(--color-warning)"
+                  strokeWidth="1.2"
+                  fill="none"
+                />
+              </svg>
+            </div>
 
-          {/* Distillation pipe bridges */}
-          <rect x="88" y="45" width="18" height="33" rx="1" fill="currentColor" fillOpacity="0.08" />
-          <line x1="97" y1="45" x2="97" y2="35" />
-          <circle cx="97" cy="34" r="2" />
-        </svg>
+            {/* Zero Egress Network */}
+            <div
+              className="p-1.5 rounded-md flex flex-col gap-0.5"
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              <div className="flex items-center justify-between text-[9px]" style={{ color: 'var(--color-text-muted)' }}>
+                <span>NET</span>
+                <span className="font-mono font-semibold" style={{ color: 'var(--color-success)' }}>0.0 MB/s</span>
+              </div>
+              <svg className="w-full h-3.5" viewBox="0 0 60 14" fill="none">
+                <line
+                  x1="0"
+                  y1="10"
+                  x2="60"
+                  y2="10"
+                  stroke="var(--color-success)"
+                  strokeWidth="1.2"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
   )

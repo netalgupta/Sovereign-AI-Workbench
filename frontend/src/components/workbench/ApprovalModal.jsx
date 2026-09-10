@@ -2,20 +2,18 @@ import { AlertTriangle, X } from 'lucide-react'
 
 /**
  * ApprovalModal — Human approval gate modal matching the reference design.
- *
- * Positioned centered over the workbench, elevated with a deep soft shadow,
- * subtle backdrop blur, specific setpoint parameter values, and clear button hierarchy.
+ * Fully theme-tokenized for Light and Dark modes.
  */
 export function ApprovalModal({ isOpen, onClose, onConfirm }) {
   if (!isOpen) return null
 
   return (
     <div
-      className="fixed inset-0 top-14 z-40 flex items-center justify-center p-4 animate-fade-in"
+      className="fixed inset-0 top-14 z-50 flex items-center justify-center p-4 animate-fade-in"
       style={{
-        background: 'rgba(38, 35, 32, 0.10)',
-        backdropFilter: 'blur(1.5px)',
-        WebkitBackdropFilter: 'blur(1.5px)',
+        background: 'rgba(10, 8, 6, 0.45)',
+        backdropFilter: 'blur(3px)',
+        WebkitBackdropFilter: 'blur(3px)',
       }}
       role="dialog"
       aria-modal="true"
@@ -23,17 +21,17 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
     >
       {/* Modal Card */}
       <div
-        className="w-full max-w-[430px] rounded-2xl p-6 relative flex flex-col items-center text-center animate-fade-in"
+        className="w-full max-w-[430px] rounded-2xl p-6 relative flex flex-col items-center text-center animate-fade-in shadow-2xl"
         style={{
-          background: '#FFFFFF',
-          border: '1px solid #ECE4DB',
-          boxShadow: '0 24px 48px -12px rgba(42, 39, 36, 0.28), 0 10px 24px -4px rgba(42, 39, 36, 0.14)',
+          background: 'var(--color-card-bg)',
+          border: '1px solid var(--color-card-border)',
+          boxShadow: 'var(--shadow-lg)',
         }}
       >
         {/* Close button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 w-7 h-7 rounded-lg flex items-center justify-center transition-fast hover:bg-[#F3EDE3]"
+          className="absolute top-4 right-4 w-7 h-7 rounded-lg flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
           style={{ color: 'var(--color-text-muted)' }}
           title="Close dialog"
           aria-label="Close dialog"
@@ -45,7 +43,7 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
         <div
           className="w-12 h-12 rounded-full flex items-center justify-center mb-3.5"
           style={{
-            background: '#FDF0EE',
+            background: 'var(--color-accent-tint)',
             color: 'var(--color-accent)',
           }}
         >
@@ -71,10 +69,10 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
 
         {/* Inline Warning Callout Box */}
         <div
-          className="w-full mt-4 p-3 rounded-xl flex items-center gap-2.5 text-left"
+          className="w-full mt-4 p-3 rounded-xl flex items-center gap-2.5 text-left border"
           style={{
-            background: '#FDF2F0',
-            border: '1px solid #F6D8D2',
+            background: 'var(--color-error-tint)',
+            borderColor: 'var(--color-accent-border)',
           }}
         >
           <AlertTriangle
@@ -85,7 +83,7 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
           />
           <p
             className="text-xs font-medium leading-snug"
-            style={{ color: '#9E3E28' }}
+            style={{ color: 'var(--color-text)' }}
           >
             This may impact unit stability and safety systems. Please confirm before proceeding.
           </p>
@@ -96,14 +94,12 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer"
+            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border"
             style={{
-              background: 'transparent',
-              border: '1px solid var(--color-border-strong)',
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border-strong)',
               color: 'var(--color-text)',
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
           >
             Cancel
           </button>
@@ -114,8 +110,6 @@ export function ApprovalModal({ isOpen, onClose, onConfirm }) {
             style={{
               background: 'var(--color-accent)',
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-accent-hover)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-accent)' }}
           >
             Confirm
           </button>
