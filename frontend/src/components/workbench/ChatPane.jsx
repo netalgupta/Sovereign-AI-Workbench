@@ -500,7 +500,7 @@ export function ChatPane() {
                     {COMPLETED_REASONING_STEPS_1.map((step) => {
                       const isStepOpen = !!expandedCompletedSteps[step.id]
                       return (
-                        <div key={step.id} className="flex flex-col">
+                        <div key={step.id} id={step.id} data-tool-event-id={step.id} className="flex flex-col scroll-mt-12 transition-all rounded-xs">
                           <button
                             type="button"
                             onClick={() => toggleCompletedStep(step.id)}
@@ -693,7 +693,7 @@ export function ChatPane() {
                     {COMPLETED_REASONING_STEPS_2.map((step) => {
                       const isStepOpen = !!expandedCompletedSteps[step.id]
                       return (
-                        <div key={step.id} className="flex flex-col">
+                        <div key={step.id} id={step.id} data-tool-event-id={step.id} className="flex flex-col scroll-mt-12 transition-all rounded-xs">
                           <button
                             type="button"
                             onClick={() => toggleCompletedStep(step.id)}
