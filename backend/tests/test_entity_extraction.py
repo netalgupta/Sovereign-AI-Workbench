@@ -136,6 +136,91 @@ def test_unparseable_response_raises_value_error():
         extract_entities_and_relationships("text")
 
 
+@responses.activate
+def test_relationship_with_wrong_endpoint_types_is_dropped():
+    """GRAPH_SPEC.md §4 defines LOCATED_ON as Equipment -> PipelineSegment.
+    Measured against the real 21-chunk extraction cache, 8 of 11
+    extracted relationships violated the spec's own domain/range table
+    and passed straight through, because validation checked the type
+    STRING and the endpoint NAMES but never the endpoint TYPES. The most
+    common real violation is reproduced here verbatim: the model using
+    LOCATED_ON as a generic 'is associated with' to attach Equipment to
+    an Incident."""
+    _mock_generate(
+        {
+            "entities": [
+                {"type": "Equipment", "name": "Tank TK-K-01", "attributes": {}},
+                {"type": "Incident", "name": "Tank Calibration Discrepancy", "attributes": {}},
+                {"type": "PipelineSegment", "name": "Mangalore-Hassan", "attributes": {}},
+            ],
+            "relationships": [
+                # Invalid: LOCATED_ON's range is PipelineSegment, not Incident.
+                {"from": "Tank TK-K-01", "to": "Tank Calibration Discrepancy", "type": "LOCATED_ON"},
+                # Valid: Equipment -> PipelineSegment.
+                {"from": "Tank TK-K-01", "to": "Mangalore-Hassan", "type": "LOCATED_ON"},
+            ],
+        }
+    )
+
+    result = extract_entities_and_relationships("some text")
+
+    assert len(result.relationships) == 1
+    assert result.relationships[0].to_entity == "Mangalore-Hassan"
+
+
+@responses.activate
+def test_incident_to_incident_relationship_is_dropped():
+    """Real violation from the corpus: REPORTS_INCIDENT_AT (domain
+    Incident, range Equipment/PipelineSegment) used to link one Incident
+    to another Incident."""
+    _mock_generate(
+        {
+            "entities": [
+                {"type": "Incident", "name": "H2S monitoring lapse", "attributes": {}},
+                {"type": "Incident", "name": "Pyrophoric catalyst hazard", "attributes": {}},
+            ],
+            "relationships": [
+                {
+                    "from": "H2S monitoring lapse",
+                    "to": "Pyrophoric catalyst hazard",
+                    "type": "REPORTS_INCIDENT_AT",
+                },
+            ],
+        }
+    )
+
+    result = extract_entities_and_relationships("some text")
+
+    assert result.relationships == []
+
+
+@responses.activate
+def test_incident_reporting_at_equipment_survives_validation():
+    """The inverse guard: a genuinely valid REPORTS_INCIDENT_AT must not
+    be collateral damage. This is the shape GRAPH_SPEC.md §6's signature
+    query depends on for its related-incidents leg."""
+    _mock_generate(
+        {
+            "entities": [
+                {"type": "Incident", "name": "Seal leak incident", "attributes": {}},
+                {"type": "Equipment", "name": "Hassan pumping station", "attributes": {}},
+            ],
+            "relationships": [
+                {
+                    "from": "Seal leak incident",
+                    "to": "Hassan pumping station",
+                    "type": "REPORTS_INCIDENT_AT",
+                },
+            ],
+        }
+    )
+
+    result = extract_entities_and_relationships("some text")
+
+    assert len(result.relationships) == 1
+    assert result.relationships[0].type == "REPORTS_INCIDENT_AT"
+
+
 # --- deduplicate_entities: pure logic, no network at all ---
 
 def _entity(name: str, type_: str = "Equipment") -> ExtractedEntity:
