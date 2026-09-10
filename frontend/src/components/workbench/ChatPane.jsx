@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   MoreHorizontal,
   Paperclip,
@@ -190,6 +190,9 @@ export function ChatPane() {
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
   const finishStreaming = useChatStore((s) => s.finishStreaming)
   const sessionId = useChatStore((s) => s.sessionId)
+  const plan = useChatStore((s) => s.plan) || []
+  const setPlan = useChatStore((s) => s.setPlan)
+  const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
 
@@ -223,6 +226,43 @@ export function ChatPane() {
   const [isCompleted1Expanded, setIsCompleted1Expanded] = useState(false)
   const [isCompleted2Expanded, setIsCompleted2Expanded] = useState(false)
   const [expandedCompletedSteps, setExpandedCompletedSteps] = useState({})
+
+  // ── Node Click -> Scroll & Expand Tool Event Trace ───────────────────────
+  useEffect(() => {
+    const targetId = searchParams.get('scrollTo')
+    if (!targetId) return
+
+    const timer = setTimeout(() => {
+      if (COMPLETED_REASONING_STEPS_1.some((s) => s.id === targetId)) {
+        setIsCompleted1Expanded(true)
+      }
+      if (COMPLETED_REASONING_STEPS_2.some((s) => s.id === targetId)) {
+        setIsCompleted2Expanded(true)
+      }
+
+      setExpandedCompletedSteps((prev) => ({ ...prev, [targetId]: true }))
+
+      const el = document.getElementById(targetId)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        el.style.outline = '2px solid var(--color-accent)'
+        el.style.borderRadius = '4px'
+        el.style.padding = '4px 8px'
+        el.style.background = 'var(--color-surface-hover)'
+        setTimeout(() => {
+          el.style.outline = 'none'
+          el.style.background = 'transparent'
+          el.style.padding = '0px'
+        }, 2400)
+      }
+    }, 50)
+
+    searchParams.delete('scrollTo')
+    setSearchParams(searchParams, { replace: true })
+
+    return () => clearTimeout(timer)
+  }, [searchParams, setSearchParams])
 
   // Live timer for active mid-response thinking
   useEffect(() => {
@@ -266,6 +306,9 @@ export function ChatPane() {
     setIsPending(true)
     try {
       const res = await sendMessage(text, sessionId)
+      if (res.plan) {
+        setPlan(res.plan)
+      }
       // Add the assistant message with streaming=true so MessageBubble
       // starts the typewriter reveal. appendStreamChunk pushes the full
       // text into the queue (mock: one chunk; real SSE: called per chunk).
@@ -372,22 +415,68 @@ export function ChatPane() {
           </div>
         </div>
 
-        {/* Right Header Actions: Plan DAG Jump Link + Overflow Menu */}
+        {/* Right Header Actions: Plan DAG Compact Progress Strip + Overflow Menu */}
         <div className="flex items-center gap-2">
-          {/* Subtle jump link to full-screen Plan DAG per §3.4 */}
-          <Link
-            to="/plan/session-1"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer"
-            style={{
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-border)',
-              color: 'var(--color-accent)',
-            }}
-            title="Open full-screen Plan DAG execution graph (/plan)"
-          >
-            <Network size={13} strokeWidth={2.2} />
-            <span className="text-[11px] font-semibold">Plan DAG</span>
-          </Link>
+          {(() => {
+            const doneSteps = plan.filter((s) => s.status === 'done').length
+            const runningStep = plan.find((s) => s.status === 'running')
+            const currentStepNum = doneSteps + (runningStep ? 1 : 0)
+            const totalSteps = plan.length || 5
+
+            return (
+              <Link
+                to={`/plan/${sessionId}`}
+                className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none"
+                style={{
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                }}
+                title="Open full-screen Plan DAG execution graph (/plan)"
+              >
+                <div className="flex items-center gap-1.5" style={{ color: 'var(--color-accent)' }}>
+                  <Network size={13} strokeWidth={2.2} className="group-hover:scale-110 transition-transform" />
+                  <span className="text-[11px] font-semibold">Plan DAG</span>
+                </div>
+
+                <div className="w-[1px] h-3" style={{ background: 'var(--color-border)' }} />
+
+                <span className="font-mono text-[10px] font-medium" style={{ color: 'var(--color-text)' }}>
+                  Step {currentStepNum}/{totalSteps}
+                </span>
+
+                {/* Segmented Progress Ticks */}
+                <div
+                  className="flex items-center gap-1 w-12"
+                  title={`Plan Progress: Step ${currentStepNum} of ${totalSteps} active`}
+                >
+                  {plan.map((step, idx) => {
+                    const isDone = step.status === 'done'
+                    const isRunning = step.status === 'running'
+                    return (
+                      <div
+                        key={step.id || idx}
+                        className="h-1 flex-1 rounded-xs transition-all relative overflow-hidden"
+                        style={{
+                          background: isDone
+                            ? 'var(--color-success)'
+                            : isRunning
+                            ? 'var(--color-accent)'
+                            : 'var(--color-border)',
+                        }}
+                      >
+                        {isRunning && (
+                          <div
+                            className="absolute inset-0 opacity-60 animate-pulse"
+                            style={{ background: 'white' }}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </Link>
+            )
+          })()}
 
           <button
             type="button"
