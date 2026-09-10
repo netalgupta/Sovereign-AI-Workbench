@@ -15,6 +15,34 @@ def _path(name: str) -> str:
     return os.path.join(FIXTURES, name)
 
 
+def test_pages_to_chunks_strips_boilerplate_when_given():
+    from backend.ingestion.document_ingestion import pages_to_chunks
+    from backend.ingestion.text_extraction import PageText
+
+    pages = [PageText(page_number=1, text="Real content about WABT triggers. Standard disclaimer text.")]
+
+    chunks = pages_to_chunks(
+        pages, "doc.pdf", "pdf", boilerplate_sentences={"standard disclaimer text."}
+    )
+
+    assert len(chunks) == 1
+    assert "disclaimer" not in chunks[0].text.lower()
+    assert "WABT triggers" in chunks[0].text
+
+
+def test_pages_to_chunks_without_boilerplate_arg_behaves_exactly_like_ingest_document():
+    """No boilerplate_sentences passed -- must be a pure passthrough,
+    identical to the pre-refactor behavior (backward compatibility)."""
+    from backend.ingestion.document_ingestion import pages_to_chunks
+    from backend.ingestion.text_extraction import PageText
+
+    pages = [PageText(page_number=1, text="Some real content here.")]
+    chunks = pages_to_chunks(pages, "doc.pdf", "pdf")
+
+    assert len(chunks) == 1
+    assert chunks[0].text == "Some real content here."
+
+
 def test_ingest_native_pdf_produces_chunks_with_correct_metadata():
     chunks = ingest_document(_path("sample_native.pdf"))
 

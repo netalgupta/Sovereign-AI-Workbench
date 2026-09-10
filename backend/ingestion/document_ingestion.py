@@ -11,12 +11,14 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.ingestion.boilerplate import strip_boilerplate
 from backend.ingestion.chunking import chunk_text
 from backend.ingestion.document_types import detect_document_type
 from backend.ingestion.text_extraction import (
     AudioTranscribeFn,
     ChartImageFn,
     OcrFn,
+    PageText,
     extract_pages,
 )
 
@@ -92,19 +94,45 @@ def ingest_document(
         chart_image_fn=chart_image_fn,
     )
 
-    source_document = Path(file_path).name
+    return pages_to_chunks(pages, Path(file_path).name, type_info.detected_type)
+
+
+def pages_to_chunks(
+    pages: list[PageText],
+    source_document: str,
+    document_type: str,
+    boilerplate_sentences: set[str] | None = None,
+) -> list[IngestedChunk]:
+    """Chunk + tag already-extracted pages — the second half of
+    ingest_document(), split out so a corpus-level caller can run a
+    cross-document pass (boilerplate detection — RAG_SPEC.md §2; see
+    ingest_corpus.py's `ingest_corpus_with_boilerplate_removal`) BETWEEN
+    extraction and chunking, without paying for extraction (OCR/ASR
+    calls included) a second time. `ingest_document` above is just this
+    function preceded by detect+extract, for the common single-file case
+    that doesn't need cross-document boilerplate awareness.
+
+    `boilerplate_sentences`, if given, is stripped from every page's
+    text (via backend.ingestion.boilerplate.strip_boilerplate) before
+    chunking — sentences recurring near-verbatim across many documents
+    (letterhead, footers, standard disclaimers) that would otherwise
+    become shared noise in every chunk's embedding and BM25 tokens.
+    """
     ingestion_date = datetime.date.today().isoformat()
 
     chunks: list[IngestedChunk] = []
     chunk_index = 0
     for page in pages:
-        for piece in chunk_text(page.text):
+        text = page.text
+        if boilerplate_sentences:
+            text = strip_boilerplate(text, boilerplate_sentences)
+        for piece in chunk_text(text):
             chunks.append(
                 IngestedChunk(
                     text=piece,
                     metadata=ChunkMetadata(
                         source_document=source_document,
-                        document_type=type_info.detected_type,
+                        document_type=document_type,
                         page_number=page.page_number,
                         chunk_index=chunk_index,
                         ingestion_date=ingestion_date,
