@@ -15,8 +15,8 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 3 | Image super-resolution (Real-ESRGAN) | 🟡 | Improves OCR accuracy on poor scans |
 | 4 | Denoise/deskew/binarize (OpenCV) | 🔴 | Cheap, always run before OCR |
 | 5 | Layout & table extraction (LayoutLMv3) | 🟡 | Structures inspection report tables |
-| 6 | P&ID symbol/connection extraction (Qwen2-VL) | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
-| 62 | Chart image description (Qwen2-VL) | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
+| 6 | P&ID symbol/connection extraction (Qwen2.5-VL) | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
+| 62 | Chart image description (Qwen2.5-VL) | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
 | 7 | Defect/anomaly detection (YOLOv8) | 🟡 | Public dataset fine-tune |
 | 8 | Photo-to-report matching | ⚪ | Registry-listed |
 | 9 | Document type classifier | 🔴 | Routes scans to correct pipeline |

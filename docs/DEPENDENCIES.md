@@ -9,7 +9,7 @@
 | phi-3.5-mini | Fast router / classifier / verifier | Q4_K_M, ~2GB | Same — this model is cheap enough that upgrading it isn't worth the swap |
 | qwen2.5-coder:7b/14b/32b | Code sub-agent | 7b, Q4_K_M, ~5GB | 32b, Q4_K_M or higher precision, if VRAM allows |
 | qwen2.5:14b/32b/70b | Reasoning/drafting sub-agent | 14b, Q4_K_M, ~8-9GB (tight, CPU offload a few layers) | 32b or 70b class, per PS's own "use a smaller model if 120B-class hardware isn't available" allowance |
-| qwen2-vl:7b/32b | Vision sub-agent | 7b, Q4_K_M, ~5GB | 32b-class VL model if available |
+| qwen2.5vl:7b/32b | Vision sub-agent | 7b, Q4_K_M, ~5GB | 32b-class VL model if available |
 | bge-large-en | Embeddings for dense retrieval | fp16, <1GB | Same — embedding model doesn't benefit much from upsizing here |
 
 **Two `models.yaml` files should exist and be tested independently before demo day:** `models.dev.yaml` (4060-safe, this is what CI/local dev runs against) and `models.venue.yaml` (upgrade tier). Whoever sets up the venue machine confirms actual available VRAM first, then either uses `models.venue.yaml` as-is or edits it — this is exactly the live "add/upgrade a model" moment FR-4 wants to demonstrate, so treat testing this switch beforehand as a rehearsal requirement, not just an infra nicety.

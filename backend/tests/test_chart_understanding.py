@@ -47,7 +47,7 @@ def test_request_includes_base64_image_and_correct_model():
     describe_chart_image(FIXTURE)
 
     sent = json.loads(responses.calls[0].request.body)
-    assert sent["model"] == "qwen2-vl:7b"  # models.yaml's vision-model, resolved through the registry
+    assert sent["model"] == "qwen2.5vl:7b"  # models.yaml's vision-model, resolved through the registry
     assert len(sent["images"]) == 1
     # Confirm it's real base64 of the actual file, not a placeholder.
     decoded = base64.b64decode(sent["images"][0])

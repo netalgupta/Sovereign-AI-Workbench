@@ -34,7 +34,7 @@ class ModelConfig(BaseModel):
   task_tags: [summarization, drafting, approval_notes, planning]
 - id: vision-model
   backend: ollama
-  model: qwen2-vl:7b
+  model: qwen2.5vl:7b
   task_tags: [ocr, image_understanding, diagram_reading]
 - id: fast-router
   backend: ollama
