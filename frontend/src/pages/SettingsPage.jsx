@@ -304,7 +304,7 @@ export function SettingsPage() {
       </header>
 
       {/* ── 2. Scrollable Body Content ──────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-8 max-w-6xl mx-auto w-full">
+      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-8 max-w-6xl mx-auto w-full min-w-0">
         {/* ─────────────────────────────────────────────────────────────────
             SECTION 1: Model Registry (FRONTEND.md §3.11 / FR-4)
            ───────────────────────────────────────────────────────────────── */}
@@ -695,17 +695,17 @@ export function SettingsPage() {
           </div>
 
           <div
-            className="rounded-xl p-5 border shadow-xs flex flex-col gap-5"
+            className="rounded-xl p-5 border shadow-xs flex flex-col gap-5 min-w-0 overflow-hidden"
             style={{
               background: 'var(--color-card-bg)',
               borderColor: 'var(--color-card-border)',
             }}
           >
             {/* Top Drive Status Banner */}
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 min-w-0">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
                 <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
                   style={{
                     background: 'var(--color-surface)',
                     border: '1px solid var(--color-border)',
@@ -714,13 +714,13 @@ export function SettingsPage() {
                 >
                   <HardDrive size={20} strokeWidth={2} />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
                       Portable Drive: Mounted &amp; Encrypted
                     </h3>
                     <span
-                      className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold"
+                      className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold whitespace-nowrap"
                       style={{
                         background: 'var(--color-success-tint)',
                         color: 'var(--color-success)',
@@ -730,16 +730,17 @@ export function SettingsPage() {
                       ● Volume Healthy
                     </span>
                   </div>
-                  <div className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                    Device: <span className="font-semibold" style={{ color: 'var(--color-text)' }}>/dev/mapper/sovereign-storage</span> · Mount: <span className="font-semibold" style={{ color: 'var(--color-text)' }}>/media/sovereign-data</span>
+                  <div className="font-mono text-[11px] mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 min-w-0" style={{ color: 'var(--color-text-muted)' }}>
+                    <span>Device: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>/dev/mapper/sovereign-storage</strong></span>
+                    <span>· Mount: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>/media/sovereign-data</strong></span>
                   </div>
                 </div>
               </div>
 
-              {/* Encryption Pills */}
-              <div className="flex items-center gap-2">
+              {/* Encryption Pills — Wraps properly on narrower viewports without clipping */}
+              <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
                 <div
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap"
                   style={{
                     background: 'var(--color-error-tint)',
                     border: '1px solid var(--color-accent-border)',
@@ -750,7 +751,7 @@ export function SettingsPage() {
                   <span>LUKS2 / AES-256-XTS</span>
                 </div>
                 <div
-                  className="px-2.5 py-1 rounded-md text-[11px] font-semibold"
+                  className="px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap"
                   style={{
                     background: 'var(--color-overlay)',
                     color: 'var(--color-text-muted)',
@@ -762,13 +763,13 @@ export function SettingsPage() {
             </div>
 
             {/* Storage Meter Bar (matching Knowledge Base card pattern) */}
-            <div className="flex flex-col gap-2 pt-1">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-medium" style={{ color: 'var(--color-text)' }}>
+            <div className="flex flex-col gap-2 pt-1 min-w-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs min-w-0">
+                <span className="font-medium whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
                   Total Encrypted Storage Capacity
                 </span>
-                <span className="font-mono font-semibold" style={{ color: 'var(--color-accent)' }}>
-                  246.8 GB used / 512.0 GB (48.2% utilized · 265.2 GB free)
+                <span className="font-mono font-semibold break-words text-left sm:text-right" style={{ color: 'var(--color-accent)' }}>
+                  246.8 GB used / 512.0 GB <span className="opacity-80 font-normal">(48.2% utilized · 265.2 GB free)</span>
                 </span>
               </div>
 
