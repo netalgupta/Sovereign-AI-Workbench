@@ -7,7 +7,6 @@ import {
   Send,
   ChevronRight,
   CheckCheck,
-  Play,
   Copy,
   Check,
   BookOpen,
@@ -19,10 +18,15 @@ import {
   FileCheck,
   Calculator,
   Search,
+  Play,
 } from 'lucide-react'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
 import { sendMessage } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
+import { MessageBubble } from '../chat/MessageBubble'
+import { SourcesUsedList } from '../../integrations/citations'
 
 // Set of 12 phrases for completed thinking block word rotation
 const ROTATION_PHRASES = [
@@ -147,9 +151,44 @@ const COMPLETED_REASONING_STEPS_2 = [
   },
 ]
 
+// Mock citation data for the STATIC demo turns (pre-loaded session)
+// These match the same shape as api.js MOCK_CITATIONS.
+const DEMO_CITATIONS = [
+  {
+    id: 1,
+    doc: 'HCU_Operations_Manual.pdf',
+    section: 'Section 4.2 — Feed Rate Operating Limits',
+    passage:
+      'The design-basis feed rate for the Hydrocracking Unit (HCU-2) shall not exceed 110 % of the nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Exceedance for more than 15 minutes triggers an automatic interlock via DCS feed-forward controller (FFC-201).',
+  },
+  {
+    id: 2,
+    doc: 'Safety_Guidelines_2024.docx',
+    section: 'Page 14 — High-Temperature Catalyst Runaway Prevention',
+    passage:
+      'At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable. H₂/HC ratio must be maintained above 1,000 Nm³/m³ to suppress runaway. See Table 3-A for alarm setpoints.',
+  },
+  {
+    id: 3,
+    doc: 'Emissions_Regulations_2024.pdf',
+    section: 'Section 9 — Downstream Fractionation Column Flooding Criteria',
+    passage:
+      'At feed rates above 110 % of design capacity, flooding probability increases to 34 % based on the correlation: F_factor = u_v × √ρ_v. Immediate operator intervention is required per MOC procedure.',
+  },
+  {
+    id: 4,
+    doc: 'Historical_Trend_Data.csv',
+    section: 'Row 1042–1090 — Thermocouple Array TC-201 (4 Shifts)',
+    passage:
+      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C. Rolling average: 381.95 °C. Upper limit: 400 °C. Rate-of-change: +0.4 °C/hr.',
+  },
+]
+
 export function ChatPane() {
   const messages = useChatStore((s) => s.messages)
   const addMessage = useChatStore((s) => s.addMessage)
+  const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
+  const finishStreaming = useChatStore((s) => s.finishStreaming)
   const sessionId = useChatStore((s) => s.sessionId)
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
@@ -227,7 +266,15 @@ export function ChatPane() {
     setIsPending(true)
     try {
       const res = await sendMessage(text, sessionId)
-      addMessage('assistant', res.reply)
+      // Add the assistant message with streaming=true so MessageBubble
+      // starts the typewriter reveal. appendStreamChunk pushes the full
+      // text into the queue (mock: one chunk; real SSE: called per chunk).
+      const msgId = addMessage('assistant', '', {
+        streaming: true,
+        citations: res.citations || [],
+      })
+      appendStreamChunk(msgId, res.reply)
+      finishStreaming(msgId)
     } finally {
       setIsPending(false)
     }
@@ -448,9 +495,7 @@ export function ChatPane() {
                 <div className="collapsible-inner">
                   <div
                     className="pl-3.5 my-1.5 flex flex-col gap-1.5"
-                    style={{
-                      borderLeft: '2px solid var(--color-border)',
-                    }}
+                    style={{ borderLeft: '2px solid var(--color-border)' }}
                   >
                     {COMPLETED_REASONING_STEPS_1.map((step) => {
                       const isStepOpen = !!expandedCompletedSteps[step.id]
@@ -503,54 +548,21 @@ export function ChatPane() {
                         </div>
                       )
                     })}
+
+                    {/* Sources used — below pipeline steps, same indent/border */}
+                    <SourcesUsedList citations={DEMO_CITATIONS} />
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Answer Text */}
-            <p>
-              Increasing the feed rate in the HCU beyond 110% can lead to several operational and safety risks,
-              including reduced catalyst life, higher temperatures, and potential off-spec products.{' '}
-              <span className="inline-flex gap-1 ml-1 select-none">
-                <span
-                  className="px-1.5 py-0.2 rounded border text-[10px] font-mono cursor-pointer transition-fast hover:border-[var(--color-accent)]"
-                  style={{
-                    background: 'var(--color-surface)',
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text)',
-                  }}
-                  onClick={() => showToast('Citation 1: HCU_Operations_Manual.pdf, Section 4.2', 'info')}
-                >
-                  1
-                </span>
-                <span
-                  className="px-1.5 py-0.2 rounded border text-[10px] font-mono cursor-pointer transition-fast hover:border-[var(--color-accent)]"
-                  style={{
-                    background: 'var(--color-surface)',
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text)',
-                  }}
-                  onClick={() => showToast('Citation 2: Safety_Guidelines_2024.docx, Page 14', 'info')}
-                >
-                  2
-                </span>
-                <span
-                  className="px-1.5 py-0.2 rounded border text-[10px] font-mono cursor-pointer transition-fast hover:border-[var(--color-accent)]"
-                  style={{
-                    background: 'var(--color-surface)',
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text)',
-                  }}
-                  onClick={() => showToast('Citation 3: Emissions_Regulations.pdf, Section 9', 'info')}
-                >
-                  3
-                </span>
-              </span>
-              .
+            {/* Answer Text — plain, no inline citation markers */}
+            <p className="leading-relaxed">
+              Increasing the feed rate in the HCU beyond 110% can lead to several operational and safety
+              risks, including reduced catalyst life, higher temperatures, and potential off-spec products.
             </p>
 
-            {/* Bullet points based on manual */}
+            {/* Bullet points */}
             <div className="flex flex-col gap-1.5">
               <span className="font-semibold">Based on the operator manual:</span>
               <div className="flex flex-col gap-1 pl-2">
@@ -560,14 +572,12 @@ export function ChatPane() {
               </div>
             </div>
 
-            {/* Code Block with QUIET, PLAIN-TEXT "python" label (Fix §2: No pill, no orange badge) */}
+            {/* Code Block — real syntax highlighting (§3.1) */}
             <div
               className="rounded-md overflow-hidden shadow-xs border flex flex-col"
-              style={{
-                background: 'var(--color-code-bg)',
-                borderColor: 'var(--color-code-border)',
-              }}
+              style={{ borderColor: 'var(--color-code-border)' }}
             >
+              {/* Header bar: plain-text language + filename + action buttons */}
               <div
                 className="flex items-center justify-between px-3.5 py-2 border-b text-xs select-none"
                 style={{
@@ -575,80 +585,51 @@ export function ChatPane() {
                   background: 'var(--color-overlay)',
                 }}
               >
-                {/* Plain-text language label sitting quietly next to filename */}
-                <div className="flex items-center gap-2 text-xs">
-                  <span
-                    className="font-mono text-xs"
-                    style={{ color: 'var(--color-text-muted)' }}
-                  >
-                    python
-                  </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs" style={{ color: 'var(--color-text-muted)' }}>python</span>
                   <span style={{ color: 'var(--color-text-faint)' }}>•</span>
-                  <span
-                    className="font-mono text-xs font-medium"
-                    style={{ color: 'var(--color-text)' }}
-                  >
-                    feed_rate_guard.py
-                  </span>
+                  <span className="font-mono text-xs font-medium" style={{ color: 'var(--color-text)' }}>feed_rate_guard.py</span>
                 </div>
-
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => showToast('Sandboxed code execution — coming in Day 3-4', 'info')}
+                    onClick={() => showToast('Sandboxed code execution — coming in Day 5', 'info')}
                     className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
-                    style={{
-                      background: 'var(--color-surface)',
-                      border: '1px solid var(--color-border)',
-                      color: 'var(--color-text)',
-                    }}
+                    style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
                   >
                     <Play size={11} strokeWidth={2.2} style={{ color: 'var(--color-accent)' }} />
                     <span>Run</span>
                   </button>
-
                   <button
                     type="button"
                     onClick={copyToClipboard}
                     className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
-                    style={{
-                      background: 'var(--color-surface)',
-                      border: '1px solid var(--color-border)',
-                      color: 'var(--color-text)',
-                    }}
+                    style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
                   >
                     {copiedCode ? (
-                      <>
-                        <Check size={11} strokeWidth={2.5} style={{ color: 'var(--color-success)' }} />
-                        <span style={{ color: 'var(--color-success)' }}>Copied!</span>
-                      </>
+                      <><Check size={11} strokeWidth={2.5} style={{ color: 'var(--color-success)' }} /><span style={{ color: 'var(--color-success)' }}>Copied!</span></>
                     ) : (
-                      <>
-                        <Copy size={11} strokeWidth={2} />
-                        <span>Copy</span>
-                      </>
+                      <><Copy size={11} strokeWidth={2} /><span>Copy</span></>
                     )}
                   </button>
                 </div>
               </div>
-
-              <div
-                className="p-3.5 font-mono text-xs overflow-x-auto leading-relaxed"
-                style={{ color: 'var(--color-text)' }}
+              {/* Real syntax-highlighted Python code */}
+              <SyntaxHighlighter
+                language="python"
+                style={document.documentElement.dataset.theme === 'dark' ? oneDark : oneLight}
+                customStyle={{
+                  margin: 0,
+                  borderRadius: 0,
+                  fontSize: '11px',
+                  background: 'var(--color-code-bg)',
+                  padding: '12px 14px',
+                  lineHeight: 1.6,
+                }}
+                codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
               >
-                <div className="flex gap-4">
-                  <span className="opacity-40 select-none text-right w-3">1</span>
-                  <span>if feed_rate &gt; 1.10 * design_capacity:</span>
-                </div>
-                <div className="flex gap-4">
-                  <span className="opacity-40 select-none text-right w-3">2</span>
-                  <span className="pl-4">alert("High risk: exceeds design threshold")</span>
-                </div>
-                <div className="flex gap-4">
-                  <span className="opacity-40 select-none text-right w-3">3</span>
-                  <span className="pl-4">suggest_mitigation(cool_quench=True)</span>
-                </div>
-              </div>
+                {CODE_SNIPPET}
+              </SyntaxHighlighter>
             </div>
           </div>
 
@@ -707,9 +688,7 @@ export function ChatPane() {
                 <div className="collapsible-inner">
                   <div
                     className="pl-3.5 my-1.5 flex flex-col gap-1.5"
-                    style={{
-                      borderLeft: '2px solid var(--color-border)',
-                    }}
+                    style={{ borderLeft: '2px solid var(--color-border)' }}
                   >
                     {COMPLETED_REASONING_STEPS_2.map((step) => {
                       const isStepOpen = !!expandedCompletedSteps[step.id]
@@ -761,27 +740,88 @@ export function ChatPane() {
                         </div>
                       )
                     })}
+
+                    {/* Sources used — Turn 2 citations (sensor data) */}
+                    <SourcesUsedList citations={[DEMO_CITATIONS[3]]} />
                   </div>
                 </div>
               </div>
             </div>
 
-            <p>
-              The current reactor inlet temperature is <span className="font-semibold">382°C</span>, which is safely
-              within the normal operating range (360–400°C) with an 18°C safety margin.{' '}
-              <span
-                className="inline-flex px-1.5 py-0.2 rounded border text-[10px] font-mono select-none cursor-pointer hover:border-[var(--color-accent)]"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-text)',
-                }}
-                onClick={() => showToast('Citation 4: Historical_Trend_Data.csv, Row 1042', 'info')}
-              >
-                4
-              </span>
-              .
+            {/* Answer — plain text, no inline citation markers */}
+            <p className="leading-relaxed">
+              The current reactor inlet temperature is <span className="font-semibold">382°C</span>, safely
+              within the normal operating range (360–400°C) with an 18°C safety margin.
             </p>
+
+            {/* Markdown table demo — proves §3.1 table rendering works */}
+            <div className="mt-1">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wide mb-1.5"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Thermocouple Array — Last 4 Shifts
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: '11px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-md)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: 'var(--color-surface)' }}>
+                      {['Sensor', 'Reading (°C)', 'Limit (°C)', 'Status'].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            padding: '5px 10px',
+                            textAlign: 'left',
+                            fontWeight: 600,
+                            fontSize: '10px',
+                            letterSpacing: '0.03em',
+                            color: 'var(--color-text-muted)',
+                            borderBottom: '1px solid var(--color-border)',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ['TC-201A', '381.4', '400', '✓ Normal'],
+                      ['TC-201B', '382.1', '400', '✓ Normal'],
+                      ['TC-201C', '383.0', '400', '✓ Normal'],
+                      ['TC-201D', '380.9', '400', '✓ Normal'],
+                      ['TC-201E', '382.6', '400', '✓ Normal'],
+                      ['TC-201F', '381.7', '400', '✓ Normal'],
+                    ].map((row, i) => (
+                      <tr
+                        key={i}
+                        style={{ borderBottom: '1px solid var(--color-border)' }}
+                      >
+                        {row.map((cell, j) => (
+                          <td
+                            key={j}
+                            style={{
+                              padding: '4px 10px',
+                              color: j === 3 ? 'var(--color-success)' : 'var(--color-text)',
+                              fontFamily: j === 0 ? 'var(--font-mono)' : 'inherit',
+                              fontWeight: j === 0 ? 500 : 400,
+                            }}
+                          >{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           {/* ── TURN 3: User Query 3 (Actively being processed) ───────── */}
@@ -880,29 +920,9 @@ export function ChatPane() {
             </div>
           )}
 
-          {/* Dynamic Messages sent by user during live conversation */}
+          {/* Dynamic Messages — streaming typewriter + markdown + citation chips */}
           {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className="rounded-md px-4 py-2.5 text-xs leading-relaxed max-w-[76%] shadow-xs"
-                style={{
-                  background:
-                    m.role === 'user'
-                      ? 'var(--color-chat-bubble-user)'
-                      : 'var(--color-chat-bubble-asst)',
-                  border:
-                    m.role === 'user'
-                      ? '1px solid var(--color-chat-bubble-user-border)'
-                      : '1px solid var(--color-chat-bubble-asst-border)',
-                  color: 'var(--color-text)',
-                }}
-              >
-                {m.content}
-              </div>
-            </div>
+            <MessageBubble key={m.id} message={m} />
           ))}
         </div>
       )}

@@ -1,6 +1,3 @@
-import { create } from 'zustand'
-import { now } from '../lib/formatTime'
-
 /**
  * chatStore.js — Zustand store for conversation state.
  *
@@ -8,10 +5,15 @@ import { now } from '../lib/formatTime'
  *   sessionId → AgentState.session_id
  *   messages  → derived from AgentState.tool_call_log + draft_output
  *
- * When Aditya's real backend is wired in, the message list will be
- * augmented with ToolCallEvent rendering (Day 3-4), but this store
- * shape stays stable.
+ * Day 3-4 additions:
+ *   - messages now carry `streaming`, `displayedContent`, and `citations`
+ *   - appendStreamChunk(id, chunk) — generic reveal buffer, works for mock
+ *     (single chunk) and real SSE (multiple variable-size chunks)
+ *   - finishStreaming(id) — called when the last chunk has been queued
  */
+
+import { create } from 'zustand'
+import { now } from '../lib/formatTime'
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -33,17 +35,74 @@ export const useChatStore = create((set) => ({
 
   /**
    * Add a message to the conversation.
+   * For assistant messages, content starts empty; displayedContent is revealed
+   * progressively by the typewriter hook via appendStreamChunk.
+   *
    * @param {'user' | 'assistant'} role
-   * @param {string} content
+   * @param {string} content       — full content (immediately visible for user msgs)
+   * @param {object} [opts]
+   * @param {boolean} [opts.streaming] — if true, start with empty displayedContent
+   * @param {Array}   [opts.citations] — citation objects from the API response
    */
-  addMessage: (role, content) => {
+  addMessage: (role, content, opts = {}) => {
+    const { streaming = false, citations = [] } = opts
     const message = {
-      id: generateSessionId(), // reuse uuid generator for msg IDs
+      id: generateSessionId(),
       role,
       content,
+      displayedContent: streaming ? '' : content,
+      streaming,
+      citations,
       timestamp: now(),
     }
     set((state) => ({ messages: [...state.messages, message] }))
+    return message.id
+  },
+
+  /**
+   * Append a chunk of text to a streaming message's full content buffer.
+   * The typewriter hook reads `content` and drains into `displayedContent`.
+   * Calling this repeatedly (for real SSE chunks) is safe — it just extends
+   * the queue without resetting.
+   *
+   * @param {string} id      — message id
+   * @param {string} chunk   — new text to append
+   */
+  appendStreamChunk: (id, chunk) => {
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === id ? { ...m, content: m.content + chunk } : m
+      ),
+    }))
+  },
+
+  /**
+   * Mark streaming as done for a message.
+   * The typewriter continues draining until displayedContent === content.
+   *
+   * @param {string} id
+   */
+  finishStreaming: (id) => {
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === id ? { ...m, streaming: false } : m
+      ),
+    }))
+  },
+
+  /**
+   * Called by the typewriter hook every tick to advance displayedContent.
+   * This is the only place displayedContent is mutated.
+   *
+   * @param {string} id
+   * @param {string} newDisplayed — the updated displayed string
+   */
+  setDisplayedContent: (id, newDisplayed) => {
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === id ? { ...m, displayedContent: newDisplayed } : m
+      ),
+    }))
   },
 
   /**
