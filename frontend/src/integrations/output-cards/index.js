@@ -1,7 +1,7 @@
 import React from 'react'
 // Teammate swap: change the import below to:
-// import Component from './OutputCards'
-import Component from './Placeholder'
+// import Component from './Placeholder'
+import Component from './RealOutputCards'
 
 import { validateProps } from './contract'
 export * from './contract'
