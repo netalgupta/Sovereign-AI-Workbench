@@ -15,54 +15,61 @@
 @import "@fontsource/inter/600.css";
 
 @theme {
-  /* ── Palette ─────────────────────────────────────────────────────────────── */
-  --color-bg:             #FAF7F2;   /* warm cream — primary page background   */
-  --color-surface:        #F3EDE3;   /* rail / panel tint (slightly warmer)    */
-  --color-surface-hover:  #EDE6D8;   /* hover state on surface elements        */
-  --color-overlay:        #EAE3D6;   /* subtle overlay / selected state        */
+  /* ── Palette variables mapping ────────────────────────────────────────── */
+  --color-bg:             var(--color-bg);
+  --color-surface:        var(--color-surface);
+  --color-surface-hover:  var(--color-surface-hover);
+  --color-overlay:        var(--color-overlay);
 
-  --color-text:           #2A2724;   /* deep charcoal — primary text           */
-  --color-text-muted:     #7A7370;   /* secondary / label text                 */
-  --color-text-faint:     #B0A89F;   /* timestamps, placeholders               */
+  --color-text:           var(--color-text);
+  --color-text-muted:     var(--color-text-muted);
+  --color-text-faint:     var(--color-text-faint);
 
-  --color-accent:         #B5654A;   /* terracotta — THE ONLY accent color     */
-  --color-accent-hover:   #9E4E35;   /* accent on hover                        */
-  --color-accent-tint:    #FAF0EB;   /* user message background (accent@5%)    */
-  --color-accent-border:  #DBA898;   /* accent-tinted borders                  */
+  --color-accent:         var(--color-accent);
+  --color-accent-hover:   var(--color-accent-hover);
+  --color-accent-tint:    var(--color-accent-tint);
+  --color-accent-border:  var(--color-accent-border);
+
+  /* Specific component surfaces */
+  --color-card-bg:                var(--color-card-bg);
+  --color-card-border:            var(--color-card-border);
+  --color-chat-bubble-user:       var(--color-chat-bubble-user);
+  --color-chat-bubble-user-border:var(--color-chat-bubble-user-border);
+  --color-chat-bubble-asst:       var(--color-chat-bubble-asst);
+  --color-chat-bubble-asst-border:var(--color-chat-bubble-asst-border);
+  --color-tool-bg:                var(--color-tool-bg);
+  --color-tool-border:            var(--color-tool-border);
+  --color-code-bg:                var(--color-code-bg);
+  --color-code-border:            var(--color-code-border);
+  --color-input-bg:               var(--color-input-bg);
+  --color-input-border:           var(--color-input-border);
 
   /* Semantic colors — strict usage per FRONTEND.md §6 */
-  --color-success:        #3D7A5F;   /* green  = done / safe ONLY              */
-  --color-success-tint:   #EEF6F2;
-  --color-warning:        #C08552;   /* amber  = active / in-progress ONLY     */
-  --color-warning-tint:   #FDF4EC;
-  --color-error:          #C0392B;   /* red    = failed / external-conn ONLY   */
-  --color-error-tint:     #FDECEA;
-  --color-pending:        #9E9A96;   /* grey   = inactive / pending ONLY       */
-  --color-pending-tint:   #F2F0EE;
+  --color-success:        var(--color-success);
+  --color-success-tint:   var(--color-success-tint);
+  --color-warning:        var(--color-warning);
+  --color-warning-tint:   var(--color-warning-tint);
+  --color-error:          var(--color-error);
+  --color-error-tint:     var(--color-error-tint);
+  --color-pending:        var(--color-pending);
+  --color-pending-tint:   var(--color-pending-tint);
 
-  --color-border:         #E5DFD7;   /* default border                         */
-  --color-border-strong:  #CFC8BE;   /* emphasized border                      */
+  --color-border:         var(--color-border);
+  --color-border-strong:  var(--color-border-strong);
 
   /* ── Typography ─────────────────────────────────────────────────────────── */
   --font-ui:   "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-  /* --font-doc reserved for Day 3-4 document previews (DOCX/PPTX) */
 
-  /* ── Border Radius ───────────────────────────────────────────────────────── */
-  --radius-xs:  4px;
-  --radius-sm:  8px;
-  --radius-md:  12px;
-  --radius-lg:  16px;
-  --radius-xl:  24px;
+  /* ── Border Radius (Refined industrial precision) ───────────────────────── */
+  --radius-xs:  2px;
+  --radius-sm:  4px;
+  --radius-md:  6px;
+  --radius-lg:  8px;
+  --radius-xl:  10px;
   --radius-full: 9999px;
 
-  /* ── Shadows (soft, no harsh drops per FRONTEND.md §1) ──────────────────── */
-  --shadow-xs:  0 1px 2px rgba(42, 39, 36, 0.05);
-  --shadow-sm:  0 1px 3px rgba(42, 39, 36, 0.07), 0 1px 2px rgba(42, 39, 36, 0.04);
-  --shadow-md:  0 4px 16px rgba(42, 39, 36, 0.08), 0 1px 4px rgba(42, 39, 36, 0.04);
-  --shadow-lg:  0 8px 32px rgba(42, 39, 36, 0.10), 0 2px 8px rgba(42, 39, 36, 0.05);
-
-  /* ── Motion (nothing snaps — FRONTEND.md §1) ─────────────────────────────── */
+  /* ── Motion ─────────────────────────────────────────────────────────────── */
   --transition-fast: 120ms ease;
   --transition-base: 200ms ease;
   --transition-slow: 350ms ease;
@@ -74,6 +81,115 @@
   --z-overlay: 40;
   --z-modal:   50;
   --z-toast:   60;
+}
+
+/* ── Light Theme (Default) ────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --color-bg:             #FAF7F2;   /* warm cream — primary page background */
+  --color-surface:        #F3EDE3;   /* rail / panel tint (slightly warmer) */
+  --color-surface-hover:  #EDE6D8;   /* hover state on surface elements */
+  --color-overlay:        #EAE3D6;   /* subtle overlay / selected state */
+
+  --color-text:           #2A2724;   /* deep charcoal — primary text */
+  --color-text-muted:     #7A7370;   /* secondary / label text */
+  --color-text-faint:     #B0A89F;   /* timestamps, placeholders */
+
+  --color-accent:         #B5654A;   /* terracotta — THE accent color */
+  --color-accent-hover:   #9E4E35;   /* accent on hover */
+  --color-accent-tint:    #FAF0EB;   /* user message background (accent@5%) */
+  --color-accent-border:  #DBA898;   /* accent-tinted borders */
+
+  --color-card-bg:                #ECE4DB;
+  --color-card-border:            #DFD7CE;
+  --color-chat-bubble-user:       #DFCAC0;
+  --color-chat-bubble-user-border:#D2B7AC;
+  --color-chat-bubble-asst:       #E8DFD5;
+  --color-chat-bubble-asst-border:#DBD1C5;
+  --color-tool-bg:                #E2D9CF;
+  --color-tool-border:            #D7CDC2;
+  --color-code-bg:                #DFD6CB;
+  --color-code-border:            #D4C9BC;
+  --color-input-bg:               #FFFFFF;
+  --color-input-border:           #DFD7CE;
+
+  /* Semantic colors */
+  --color-success:        #3D7A5F;   /* green  = done / safe ONLY */
+  --color-success-tint:   #EEF6F2;
+  --color-warning:        #C08552;   /* amber  = active / in-progress ONLY */
+  --color-warning-tint:   #FDF4EC;
+  --color-error:          #C0392B;   /* red    = failed / external-conn ONLY */
+  --color-error-tint:     #FDECEA;
+  --color-pending:        #9E9A96;   /* grey   = inactive / pending ONLY */
+  --color-pending-tint:   #F2F0EE;
+
+  --color-border:         #E5DFD7;   /* default border */
+  --color-border-strong:  #CFC8BE;   /* emphasized border */
+
+  /* Shadows */
+  --shadow-xs:  0 1px 2px rgba(42, 39, 36, 0.05);
+  --shadow-sm:  0 1px 3px rgba(42, 39, 36, 0.07), 0 1px 2px rgba(42, 39, 36, 0.04);
+  --shadow-md:  0 4px 16px rgba(42, 39, 36, 0.08), 0 1px 4px rgba(42, 39, 36, 0.04);
+  --shadow-lg:  0 8px 32px rgba(42, 39, 36, 0.10), 0 2px 8px rgba(42, 39, 36, 0.05);
+
+  --divider-subtle: rgba(42, 39, 36, 0.06);
+  --color-sidebar-scrim: linear-gradient(to bottom, #FAF7F2 0%, rgba(250, 247, 242, 0.45) 25%, rgba(250, 247, 242, 0.08) 60%, rgba(250, 247, 242, 0.25) 100%);
+}
+
+/* ── Dark Theme ───────────────────────────────────────────────────────────── */
+[data-theme="dark"],
+.dark {
+  color-scheme: dark;
+
+  --color-bg:             #14120F;   /* near-black / deep charcoal (no harsh black) */
+  --color-surface:        #1C1916;   /* panel surface */
+  --color-surface-hover:  #27221E;   /* hover state */
+  --color-overlay:        #231E19;   /* segmented control / pill container */
+
+  --color-text:           #F0EDE7;   /* off-white text (never harsh pure #FFF) */
+  --color-text-muted:     #9E978F;   /* secondary / label text */
+  --color-text-faint:     #68625B;   /* timestamps, placeholders */
+
+  --color-accent:         #D97757;   /* terracotta, brightened for contrast on dark */
+  --color-accent-hover:   #E58A6C;   /* hover state */
+  --color-accent-tint:    rgba(217, 119, 87, 0.16);
+  --color-accent-border:  rgba(217, 119, 87, 0.45);
+
+  --color-card-bg:                #1B1815;
+  --color-card-border:            #2D2722;
+  --color-chat-bubble-user:       #3A2720;
+  --color-chat-bubble-user-border:#53372C;
+  --color-chat-bubble-asst:       #211D19;
+  --color-chat-bubble-asst-border:#352E27;
+  --color-tool-bg:                #241F1B;
+  --color-tool-border:            #38312A;
+  --color-code-bg:                #171412;
+  --color-code-border:            #2D2620;
+  --color-input-bg:               #1E1B17;
+  --color-input-border:           #342E28;
+
+  /* Semantic colors (dark-mode-safe, adjusted lightness) */
+  --color-success:        #4E9B75;   /* green = done / safe */
+  --color-success-tint:   rgba(78, 155, 117, 0.18);
+  --color-warning:        #D99452;   /* amber = active / in-progress */
+  --color-warning-tint:   rgba(217, 148, 82, 0.18);
+  --color-error:          #D9534F;   /* red = failed / external-conn */
+  --color-error-tint:     rgba(217, 83, 79, 0.18);
+  --color-pending:        #807A73;   /* grey = inactive / pending */
+  --color-pending-tint:   rgba(128, 122, 115, 0.18);
+
+  --color-border:         #2B2520;   /* dark border */
+  --color-border-strong:  #3E362E;   /* emphasized dark border */
+
+  /* Shadows */
+  --shadow-xs:  0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.50), 0 1px 4px rgba(0, 0, 0, 0.35);
+  --shadow-lg:  0 8px 32px rgba(0, 0, 0, 0.60), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --divider-subtle: rgba(240, 237, 231, 0.08);
+  --color-sidebar-scrim: linear-gradient(to bottom, #14120F 0%, rgba(20, 18, 15, 0.45) 25%, rgba(20, 18, 15, 0.1) 60%, rgba(20, 18, 15, 0.3) 100%);
 }
 
 /* ── Base styles ──────────────────────────────────────────────────────────── */
@@ -95,6 +211,7 @@ body {
   font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.6;
+  transition: background-color var(--transition-base), color var(--transition-base);
 }
 
 #root {
@@ -143,7 +260,7 @@ body {
   transition: all var(--transition-slow);
 }
 
-/* ── Fade-in animation (used by MessageBubble on mount) ──────────────────── */
+/* ── Fade-in animation ────────────────────────────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -168,3 +285,37 @@ body {
 .animate-spin-smooth {
   animation: spin 0.8s linear infinite;
 }
+
+/* ── Breathing pulse dot animation for live thinking ────────────────────── */
+@keyframes breathing-dot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: drop-shadow(0 0 1px currentColor);
+  }
+  50% {
+    transform: scale(1.28);
+    opacity: 0.45;
+    filter: drop-shadow(0 0 3px currentColor);
+  }
+}
+.animate-breathing-dot {
+  animation: breathing-dot 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Smooth Collapsible Accordion Grid (Zero-Snapping) ──────────────────── */
+.collapsible-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 260ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease;
+  opacity: 0;
+}
+.collapsible-grid.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.collapsible-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
