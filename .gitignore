@@ -24,3 +24,13 @@ build/
 /models/vision/
 /models/audio/
 *.zip
+
+# Automated UI test & screenshot capture profiles
+edge_*_profile/
+edge_temp_*/
+.temp_edge*/
+capture.js
+capture_twopane.js
+capture_fixes.js
+test_theme.js
+
