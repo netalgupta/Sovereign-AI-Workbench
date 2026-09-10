@@ -145,7 +145,7 @@ def _entity(name: str, type_: str = "Equipment") -> ExtractedEntity:
 def test_exact_normalized_duplicate_merges_silently():
     entities = [_entity("V-204"), _entity("v204")]
 
-    canonical, decisions = deduplicate_entities(entities)
+    canonical, decisions, name_map = deduplicate_entities(entities)
 
     assert len(canonical) == 1
     assert decisions == []  # unambiguous case-only match needs no audit entry
@@ -156,7 +156,7 @@ def test_the_specs_own_worked_example():
     # must all resolve to one node.
     entities = [_entity("V-204"), _entity("v204"), _entity("Valve V-204")]
 
-    canonical, decisions = deduplicate_entities(entities)
+    canonical, decisions, name_map = deduplicate_entities(entities)
 
     assert len(canonical) == 1
     # "Valve V-204" is NOT an exact case/whitespace match for "V-204" --
@@ -166,11 +166,41 @@ def test_the_specs_own_worked_example():
     assert isinstance(decisions[0], MergeDecision)
     assert decisions[0].merged_alias == "Valve V-204"
 
+    # name_map must resolve EVERY original name to the same canonical
+    # entity -- this is what a caller needs to remap a relationship's
+    # {"from": "V-204", ...} to whichever name actually ended up in the
+    # graph. All three inputs collapsed to one canonical entity, so all
+    # three keys must map to that same canonical name.
+    canonical_name = canonical[0].name
+    assert name_map[("Equipment", "V-204")] == canonical_name
+    assert name_map[("Equipment", "v204")] == canonical_name
+    assert name_map[("Equipment", "Valve V-204")] == canonical_name
+
+
+def test_garbage_single_letter_entity_does_not_fuzzy_merge_into_everything():
+    """Regression test for a REAL bug found running this against the
+    full MRPL corpus graph: a garbage single-letter entity ("N",
+    extraction noise from an OCR'd P&ID diagram) has normalized form
+    "n" -- a substring of nearly anything, including "mangalorehassan"
+    (which contains the letter n). With no length guard, "N" fuzzy-
+    merged straight into the canonical "Mangalore-Hassan" PipelineSegment
+    node, and the diagram it came from got a spurious REFERENCES edge in
+    the graph to a pipeline segment it has nothing to do with -- found
+    by inspecting an actual query result, not by reading the code.
+    """
+    entities = [_entity("Mangalore-Hassan", type_="PipelineSegment"), _entity("N", type_="PipelineSegment")]
+
+    canonical, decisions, name_map = deduplicate_entities(entities)
+
+    assert len(canonical) == 2  # "N" must stay its own (garbage) entity, not merge
+    assert decisions == []
+    assert name_map[("PipelineSegment", "N")] == "N"
+
 
 def test_different_entity_types_never_merge_even_if_names_overlap():
     entities = [_entity("V-204", type_="Equipment"), _entity("V-204", type_="PipelineSegment")]
 
-    canonical, decisions = deduplicate_entities(entities)
+    canonical, decisions, name_map = deduplicate_entities(entities)
 
     assert len(canonical) == 2
     assert decisions == []
@@ -179,7 +209,7 @@ def test_different_entity_types_never_merge_even_if_names_overlap():
 def test_genuinely_distinct_entities_stay_separate():
     entities = [_entity("Valve V-204"), _entity("Pump P-1"), _entity("Compressor C-9")]
 
-    canonical, decisions = deduplicate_entities(entities)
+    canonical, decisions, name_map = deduplicate_entities(entities)
 
     assert len(canonical) == 3
     assert decisions == []

@@ -26,6 +26,11 @@ _OLLAMA_HOST = "http://localhost:11434"
 # derived from document metadata, not chunk text; MAINTENANCE_PERFORMED_ON
 # is SAP-sourced, same as MaintenanceRecord itself).
 VALID_ENTITY_TYPES = ["Equipment", "PipelineSegment", "Person", "Incident"]
+
+# deduplicate_entities' fuzzy-match tier requires a normalized name to be
+# at least this long to participate in substring-containment matching --
+# see the real bug this fixes in deduplicate_entities' inline comment.
+MIN_FUZZY_MATCH_LENGTH = 3
 VALID_RELATIONSHIP_TYPES = [
     "REFERENCES", "APPLIES_TO", "LOCATED_ON", "AUTHORED_BY", "REPORTS_INCIDENT_AT",
 ]
@@ -91,12 +96,16 @@ def _call_extraction_model(prompt: str, model_name: str) -> str:
     response = requests.post(
         f"{_OLLAMA_HOST}/api/generate",
         json={"model": model_name, "prompt": prompt, "stream": False},
-        # 120s, not 60s: a real run of the live test against the actual
-        # 14B reasoning model took 61s in isolation and timed out when
-        # run as part of the full suite (CPU inference under contention
-        # from other tests running back to back) -- 60s was already
-        # marginal even in the best case, not a safe margin at all.
-        timeout=120,
+        # 240s: qwen2.5:14b at Q4_K_M is ~8-9GB, tight on an 8GB card --
+        # DEPENDENCIES.md §1 already documents this needs partial CPU
+        # offload of a few layers, which is inherently much slower than
+        # full GPU residency. A trivial one-word prompt measured at 45s
+        # on this exact machine (nvidia-smi showing 95% GPU utilization
+        # at the time -- genuinely computing, not hung); a full
+        # extraction prompt over a real 512-token chunk is longer still.
+        # 120s was already too tight even before accounting for any
+        # concurrent load on the machine.
+        timeout=240,
     )
     response.raise_for_status()
     return response.json()["response"]
@@ -187,7 +196,7 @@ def _normalize_name(name: str) -> str:
 
 def deduplicate_entities(
     entities: list[ExtractedEntity],
-) -> tuple[list[ExtractedEntity], list[MergeDecision]]:
+) -> tuple[list[ExtractedEntity], list[MergeDecision], dict[tuple[str, str], str]]:
     """Merge duplicate entities — GRAPH_SPEC.md §5 step 3.
 
     Two tiers, matching the spec's own two-tier language:
@@ -202,9 +211,22 @@ def deduplicate_entities(
        MergeDecision.
     Only merges entities of the SAME `type` — never lets a Person and an
     Equipment merge just because their name strings happen to overlap.
+
+    Also returns `name_map`: {(type, original_name): canonical_name} for
+    EVERY input entity, not just the ones that got merged. Real gap this
+    closes, found while wiring this function into the actual ingestion
+    pipeline for the first time (it was built and unit-tested here, but
+    nothing had ever called it for real): callers need to remap
+    relationship endpoints and document-link references from whatever
+    per-chunk name the LLM used to the canonical name this function
+    picked, or a relationship extracted as {"from": "V-204", ...} would
+    fail to find "V-204" once the graph only has a node named "Valve
+    V-204". Returning just the deduplicated entity list was never enough
+    to actually use this function correctly.
     """
     canonical: list[ExtractedEntity] = []
     merge_decisions: list[MergeDecision] = []
+    name_map: dict[tuple[str, str], str] = {}
 
     for entity in entities:
         norm = _normalize_name(entity.name)
@@ -214,17 +236,32 @@ def deduplicate_entities(
             None,
         )
         if exact_match is not None:
+            name_map[(entity.type, entity.name)] = exact_match.name
             continue
 
-        fuzzy_match = next(
-            (
-                c
-                for c in canonical
-                if c.type == entity.type
-                and (norm in _normalize_name(c.name) or _normalize_name(c.name) in norm)
-            ),
-            None,
-        )
+        fuzzy_match = None
+        # Real bug found running this against the full MRPL corpus, not
+        # a hypothetical: a garbage single-letter entity ("N", extraction
+        # noise from OCR'd diagram text) has normalized form "n" -- a
+        # substring of nearly anything, including "mangalorehassan"
+        # (which contains the letter n). With no length guard, that
+        # "N" PipelineSegment entity fuzzy-merged straight into the
+        # canonical "Mangalore-Hassan" node, and the P&ID diagram it
+        # came from got a spurious REFERENCES edge to a pipeline segment
+        # it has nothing to do with. MIN_FUZZY_MATCH_LENGTH excludes
+        # exactly this failure mode while still allowing the spec's own
+        # worked example ("v204", 4 characters) to match correctly.
+        if len(norm) >= MIN_FUZZY_MATCH_LENGTH:
+            fuzzy_match = next(
+                (
+                    c
+                    for c in canonical
+                    if c.type == entity.type
+                    and len(_normalize_name(c.name)) >= MIN_FUZZY_MATCH_LENGTH
+                    and (norm in _normalize_name(c.name) or _normalize_name(c.name) in norm)
+                ),
+                None,
+            )
         if fuzzy_match is not None:
             merge_decisions.append(
                 MergeDecision(
@@ -234,8 +271,10 @@ def deduplicate_entities(
                     reason="substring match after case/whitespace normalization",
                 )
             )
+            name_map[(entity.type, entity.name)] = fuzzy_match.name
             continue
 
         canonical.append(entity)
+        name_map[(entity.type, entity.name)] = entity.name
 
-    return canonical, merge_decisions
+    return canonical, merge_decisions, name_map

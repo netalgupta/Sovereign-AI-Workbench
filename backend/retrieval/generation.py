@@ -38,6 +38,7 @@ class GeneratedAnswer(BaseModel):
     found: bool
     sources: list[RetrievedChunk]
     invalid_citations_stripped: list[int]
+    unresolved_placeholders_stripped: int  # count of literal "[N]"-shaped markers the model never resolved — see citation_validation.py
 
 
 def _format_sources(chunks: list[RetrievedChunk]) -> str:
@@ -82,6 +83,7 @@ def generate_grounded_answer(
             found=False,
             sources=[],
             invalid_citations_stripped=[],
+            unresolved_placeholders_stripped=0,
         )
 
     model_name = resolve_model_name(model_id)
@@ -96,4 +98,5 @@ def generate_grounded_answer(
         found=True,
         sources=grounding.chunks,
         invalid_citations_stripped=validation.invalid_citation_numbers,
+        unresolved_placeholders_stripped=validation.unresolved_placeholder_count,
     )

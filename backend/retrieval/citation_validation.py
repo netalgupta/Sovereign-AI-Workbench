@@ -7,6 +7,21 @@ retrieved), or cite [3] for a claim that chunk never supported. This
 module catches the first failure mode mechanically (the second — does
 the cited text actually support the claim — needs a semantic check,
 out of scope for this pass and not what RAG_SPEC.md §4 asks for here).
+
+Real bug found running this against the MRPL corpus, not by re-reading
+the code: RAG_SPEC.md §4's own locked, verbatim-required prompt text
+describes the citation format using the literal string "[N]" ("include
+a citation marker [N] referring to the source number") — and a model
+can echo that placeholder literally instead of substituting a real
+digit (observed once for real: Q1 of the corpus test set answered
+correctly, sourced correctly, but ended with a bare "[N]" instead of
+"[1]"). Because `[N]` isn't numeric, the original digit-only pattern
+below silently let it through — neither validated as correct nor
+flagged as wrong, exactly what RAG_SPEC.md §4's "do not silently pass
+it through" rule exists to prevent. `_UNRESOLVED_PLACEHOLDER_PATTERN`
+below catches this narrow, specific shape (a single uppercase letter in
+brackets — real citations are always `[<digits>]`, never a bare
+letter) without risking false positives on unrelated bracketed text.
 """
 
 import re
@@ -15,11 +30,17 @@ from pydantic import BaseModel
 
 _CITATION_MARKER_PATTERN = re.compile(r"\[(\d+)\]")
 
+# Matches an unresolved placeholder like "[N]" -- see module docstring.
+# Deliberately narrow (a single uppercase letter only) so it can't
+# false-positive on some unrelated bracketed abbreviation in real text.
+_UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"\[([A-Z])\]")
+
 
 class CitationValidationResult(BaseModel):
     valid_citation_numbers: list[int]
     invalid_citation_numbers: list[int]  # cited but out of range for the sources actually retrieved
-    cleaned_text: str  # invalid citation markers stripped; valid ones left as-is
+    unresolved_placeholder_count: int  # e.g. a literal "[N]" the model never substituted a real number into
+    cleaned_text: str  # invalid citation markers AND unresolved placeholders stripped; valid ones left as-is
 
 
 def validate_citations(generated_text: str, num_retrieved_chunks: int) -> CitationValidationResult:
@@ -46,8 +67,12 @@ def validate_citations(generated_text: str, num_retrieved_chunks: int) -> Citati
 
     cleaned_text = _CITATION_MARKER_PATTERN.sub(_strip_invalid, generated_text)
 
+    unresolved_matches = _UNRESOLVED_PLACEHOLDER_PATTERN.findall(cleaned_text)
+    cleaned_text = _UNRESOLVED_PLACEHOLDER_PATTERN.sub("", cleaned_text)
+
     return CitationValidationResult(
         valid_citation_numbers=valid,
         invalid_citation_numbers=invalid,
+        unresolved_placeholder_count=len(unresolved_matches),
         cleaned_text=cleaned_text,
     )

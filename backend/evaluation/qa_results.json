@@ -1,0 +1,128 @@
+[
+  {
+    "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+    "expected_answer": "> 410 \u00b0C",
+    "expected_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+    "actual_answer": "The WABT (Weighted Average Bed Temperature) end-of-run trigger temperature for HCU-2 is > 410 \u00b0C. [N] \n\n[N] Source: SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx, Revision History section indicates this value was updated based on catalyst vendor guidance in Rev 2 (2023-11-18).",
+    "actual_sources": [
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "Aromatic_Complex_Benzene_Safety_Circular.docx",
+      "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+    ],
+    "found": true
+  },
+  {
+    "question": "What caused the off-spec batch H110F-0847?",
+    "expected_answer": "Catalyst feed rate excursion during grade changeover, ~40 min before DCS alarm response",
+    "expected_source": "Novolen_Batch_QA_Report_Aug2026.pdf",
+    "actual_answer": "According to the Novolen Batch QA Report from August 2026 [5], the root cause of the off-spec batch H110F-0847 was a catalyst feed rate excursion during the grade changeover process from Homopolymer H030SG [2].",
+    "actual_sources": [
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf"
+    ],
+    "found": true
+  },
+  {
+    "question": "What is the 8-hour TWA benzene exposure limit at the Aromatic Complex?",
+    "expected_answer": "1 ppm",
+    "expected_source": "Aromatic_Complex_Benzene_Safety_Circular.docx",
+    "actual_answer": "The 8-hour Time Weighted Average (TWA) benzene exposure limit at the Aromatic Complex for personnel working in or near the Benzene storage and loading area (TK-701 to TK-704) is 1 ppm [1].",
+    "actual_sources": [
+      "Aromatic_Complex_Benzene_Safety_Circular.docx",
+      "Inspection_Report_CCR1_Regeneration_Cycle.pdf",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "SAP_Mock_Materials_Master_Export.xlsx",
+      "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+    ],
+    "found": true
+  },
+  {
+    "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+    "expected_answer": "0.6% calibration variance exceeding the 0.3% internal tolerance",
+    "expected_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+    "actual_answer": "Tank TK-K-03 at Kasargod was held out of service because the third-party calibration agency's dip-chart figures showed a variance of 0.6% against the previous calibration certificate, which is above the internal tolerance of 0.3% for MS tanks as per Depot Operations Manual Section 5.2 [1]. This discrepancy required re-calibration before the tank could be returned to receipt service [1].",
+    "actual_sources": [
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Pipeline_Incident_Report_Hassan_Segment.pdf",
+      "Aromatic_Complex_Benzene_Safety_Circular.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+    ],
+    "found": true
+  },
+  {
+    "question": "What was the root cause of the Hassan pumping station incident on 2026-07-22?",
+    "expected_answer": "Minor seal leak at pump P-HS-02 discharge flange",
+    "expected_source": "Pipeline_Incident_Report_Hassan_Segment.pdf",
+    "actual_answer": "The root cause of the Hassan pumping station incident on 2026-07-22 was a minor seal leak at pump P-HS-02 discharge flange. [1]",
+    "actual_sources": [
+      "Pipeline_Incident_Report_Hassan_Segment.pdf",
+      "Pipeline_Segment_Map_Mangalore_Hassan.png",
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Pipeline_Incident_Report_Hassan_Segment.pdf",
+      "Aromatic_Complex_Benzene_Safety_Circular.docx"
+    ],
+    "found": true
+  },
+  {
+    "question": "Did any PSA unit fall below its purity target in the last reporting period?",
+    "expected_answer": "Yes, PSA-3, in the final 3 weeks of the log",
+    "expected_source": "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+    "actual_answer": "Yes, PSA-3 fell below its purity target of 99.9% during the final weeks of the reporting period. Specifically:\n\n- On 2026-08-09, PSA-3 Purity was 99.641%, which is below the target.\n- This trend continued with further declines on subsequent dates: \n  - On 2026-08-16, PSA-3 Purity was 99.63%.\n  - On 2026-08-23, PSA-3 Purity was 99.633%.\n\nThis downward drift in purity for PSA-3 was noted as a deliberate test case in the provided synthetic data [1][3].",
+    "actual_sources": [
+      "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+      "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+      "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Pipeline_Incident_Report_Hassan_Segment.pdf"
+    ],
+    "found": true
+  },
+  {
+    "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+    "expected_answer": "2026-08-19, 11.2 ppm vs 10 ppm limit",
+    "expected_source": "Sulphur_Spec_Compliance_LabSheet.xlsx",
+    "actual_answer": "The Kero Merox sample that exceeded the sulphur spec limit was taken on 2026-08-19, with a Sulphur content of 11.2 ppm, which exceeds the Spec Limit of 10 ppm [1].",
+    "actual_sources": [
+      "Sulphur_Spec_Compliance_LabSheet.xlsx",
+      "Maintenance_Log_Q3_2026.xlsx",
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx"
+    ],
+    "found": true
+  },
+  {
+    "question": "Which vendor supplies both the hydrocracker catalyst and the Ziegler-Natta catalyst component?",
+    "expected_answer": "VEND-1042",
+    "expected_source": "SAP_Mock_Materials_Master_Export.xlsx",
+    "actual_answer": "Vendor code VEND-1042 supplies both the hydrocracker catalyst (NiMo Hydrocracking Catalyst) and the Ziegler-Natta Catalyst Component for the Novolen Plant, according to the material master export data provided [4].",
+    "actual_sources": [
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "SAP_Mock_Materials_Master_Export.xlsx",
+      "SAP_Mock_Materials_Master_Export.xlsx"
+    ],
+    "found": true
+  },
+  {
+    "question": "What is MRPL's crude oil sourcing strategy for 2027?",
+    "expected_answer": "Not found in the provided corpus \u2014 out-of-corpus negative test case for RAG_SPEC.md \u00a73's refusal behavior",
+    "expected_source": "None \u2014 negative test case",
+    "actual_answer": "The sources provided do not contain information regarding MRPL's crude oil sourcing strategy for 2027. Therefore, I cannot answer this question based on the given documents.",
+    "actual_sources": [
+      "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "Pipeline_Incident_Report_Hassan_Segment.pdf",
+      "Maintenance_Log_Q3_2026.xlsx",
+      "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+    ],
+    "found": true
+  }
+]

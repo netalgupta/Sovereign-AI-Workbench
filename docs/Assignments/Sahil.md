@@ -6,7 +6,7 @@
 - Defect/annotation overlay viewer (FRONTEND.md §3.14) — bounding-box rendering over inspection photos from YOLOv8 output
 
 ## Explicitly Not Your Job
-- The OCR/vision models themselves (Aryan integrates PaddleOCR/TrOCR/Qwen2-VL) — you build the UI that displays their output
+- The OCR/vision models themselves (Aryan integrates PaddleOCR/TrOCR/Qwen2.5-VL) — you build the UI that displays their output
 - The network monitor's actual detection mechanism (CARD 07, Aditya) — you render the feed, you do not compute connection status yourself
 - App shell, chat, plan graph, approval modal, settings (Advay)
 - Sources panel, citations, graph explorer (Netal)

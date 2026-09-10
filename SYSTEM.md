@@ -34,8 +34,8 @@
 ┌──────▼───┐ ┌────▼─────┐ ┌──▼──────┐ ┌─▼────────┐ ┌▼─────────┐
 │ Vision   │ │ Code     │ │ Reason  │ │ Math Tool│ │ Retrieval│
 │ Sub-Agent│ │ Sub-Agent│ │ Sub-    │ │ Layer    │ │ Layer    │
-│ (Qwen2-VL│ │ (Qwen2.5-│ │ Agent   │ │ (SymPy/  │ │ (Hybrid  │
-│ )        │ │ Coder)   │ │ (Qwen2.5│ │ Maxima/  │ │ RAG +    │
+│ (Qwen2.5-│ │ (Qwen2.5-│ │ Agent   │ │ (SymPy/  │ │ (Hybrid  │
+│ VL-7B)   │ │ Coder)   │ │ (Qwen2.5│ │ Maxima/  │ │ RAG +    │
 │          │ │          │ │ -14B)   │ │ NumPy/   │ │ GraphRAG)│
 │          │ │          │ │         │ │ CoolProp)│ │          │
 └──────────┘ └────┬─────┘ └─────────┘ └──────────┘ └────┬─────┘
@@ -71,7 +71,7 @@
 |---|---|---|
 | Task Router | Classifies incoming request(s) into task type(s) | phi-3.5-mini via Ollama |
 | Orchestrator Agent | Decomposes multi-step tasks, builds visible plan graph, dispatches to sub-agents | LangGraph (Python) |
-| Vision Sub-Agent | OCR, diagram/photo understanding, + local voice-note transcription (team addition, not PS-traceable — see REQUIREMENTS.md §6) | Qwen2-VL-7B, PaddleOCR, Real-ESRGAN, faster-whisper (ASR) |
+| Vision Sub-Agent | OCR, diagram/photo understanding, + local voice-note transcription (team addition, not PS-traceable — see REQUIREMENTS.md §6) | Qwen2.5-VL-7B, PaddleOCR, Real-ESRGAN, faster-whisper (ASR) |
 | Code Sub-Agent | Writes and iterates on code | Qwen2.5-Coder-7B/14B |
 | Reasoning Sub-Agent | Drafting, summarization, planning text | Qwen2.5-14B |
 | Math Tool Layer | Verified numeric/symbolic computation, called as a direct tool (not through an LLM) | SymPy, Maxima, NumPy/SciPy, Pint, CoolProp |

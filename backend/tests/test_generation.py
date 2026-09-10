@@ -107,6 +107,57 @@ def test_grounded_question_calls_the_llm_with_formatted_sources():
 
 
 @responses.activate
+def test_citation_resolves_correctly_when_the_answer_is_not_the_top_ranked_chunk(monkeypatch):
+    """Regression test for a hypothesis raised about the "[N]" citation
+    bug: that citation resolution "assumes the model's cited source is
+    always the top-ranked chunk" and breaks when it isn't. Per code
+    inspection, generation.py has NO rank-based citation logic at all —
+    _format_sources numbers whatever grounding.chunks returns 1..N in
+    THAT order (which happens to be rank order, but that's just a label,
+    not an assumption about which one gets cited), and the LLM is free
+    to cite any [1]-[N]. This test forces the correct-answer chunk to be
+    at rank 3 (not rank 1) via a controlled, mocked grounding result, has
+    the model correctly cite [3], and confirms it resolves exactly like
+    citing [1] would — proving the hypothesis doesn't hold against the
+    actual code path, with evidence rather than just an assertion.
+    """
+    import backend.retrieval.generation as generation_module
+    from backend.retrieval.hybrid_search import RetrievedChunk
+    from backend.retrieval.grounded_retrieval import GroundedRetrievalResult
+
+    # Chunk order is deliberately NOT relevance order — the genuinely
+    # correct answer (WABT) is planted at index 2 (rank 3), with two
+    # unrelated-but-higher-scored chunks ahead of it.
+    chunks = [
+        RetrievedChunk(text="Unrelated content about depot correspondence.", source_document="a.docx", page_number=1, score=0.9),
+        RetrievedChunk(text="Unrelated content about sulphur spec limits.", source_document="b.xlsx", page_number=1, score=0.8),
+        RetrievedChunk(text="WABT end-of-run trigger is > 410 C.", source_document="SOP-114.docx", page_number=1, score=0.5),
+    ]
+    monkeypatch.setattr(
+        generation_module,
+        "retrieve_with_grounding_check",
+        lambda store, query, top_k: GroundedRetrievalResult(found=True, chunks=chunks),
+    )
+
+    responses.add(
+        responses.POST,
+        GENERATE_URL,
+        json={"response": "The WABT end-of-run trigger temperature is > 410 C [3]."},
+        status=200,
+    )
+
+    result = generation_module.generate_grounded_answer(_build_store([("x", "y.pdf")]), "What is the WABT trigger?")
+
+    assert "[3]" in result.answer_text  # kept, not stripped as invalid
+    assert result.invalid_citations_stripped == []
+    assert result.unresolved_placeholders_stripped == 0
+    # Position 3 (1-indexed) in the returned sources really is the
+    # correct chunk -- proving the numbering genuinely tracks whichever
+    # chunk the model cited, not an assumption that it's always #1.
+    assert result.sources[2].source_document == "SOP-114.docx"
+
+
+@responses.activate
 def test_hallucinated_citation_number_is_stripped_from_the_final_answer():
     from backend.retrieval.generation import generate_grounded_answer
 
