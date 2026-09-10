@@ -220,8 +220,20 @@ Container restarted deliberately: 101 nodes / 115 relationships survived. The vo
 ### `advay/frontend` merge — SAFE, verified read-only
 `git merge-tree` simulation: **zero conflicts**. My `qwen2.5vl:7b` fix survives (their stale `qwen2-vl:7b` does not come back), CARD 13 row survives, all 42 frontend files arrive. Their docs/ copies are stale-but-untouched, so 3-way merge keeps mine. Merging remains the user's call.
 
-### ⚠️ GPU offload claim in `989933b` is UNDER REVIEW — likely WRONG
-That commit claims "1.7x faster via partial GPU offload (num_gpu=12)". Since then, with `num_gpu: 12` being sent on every call and the model freshly loaded, `ollama ps` reports **100% CPU** and `nvidia-smi` shows ~200 MiB. The original benchmark stopped the model between runs, so it likely measured **cold-load vs warm**, not CPU vs GPU. Verification in progress (`scratchpad/verify_gpu.py`: cold+warm timings per arm, with `ollama ps` captured each time). **If confirmed, correct the record the same way `b2202ce` corrected the ceiling numbers — do not quietly drop it.** The DEPENDENCIES.md correction in that commit (13GB measured vs "~5GB" documented) is independently verified and stands regardless.
+### GPU offload claim in `989933b` was WRONG — corrected
+That commit claimed "1.7x faster via partial GPU offload". It is false, and the way it was false is the lesson: the benchmark ran `ollama stop` before every arm, so **every measurement was a cold load**, and the spread it credited to GPU offload was load-time variance.
+
+Re-measured with cold AND warm timings per arm, and `ollama ps` actually inspected instead of inferred:
+
+| num_gpu | cold | warm | ollama ps |
+|---|---|---|---|
+| (unset) | 86.7s | 6.9s | **100% CPU** |
+| 12 | 59.3s | 11.9s | **100% CPU** |
+| 99 | 57.6s | 8.9s | **100% CPU** |
+
+`num_gpu=99` means "every layer on GPU" and still reports 100% CPU, with nvidia-smi at ~200MiB. **The option does nothing on this box** — the model is 13GB against an 8GB card and Ollama places it entirely on CPU regardless.
+
+The real effect, hidden by making every run cold: **model residency, 86.7s → 6.9s (~12x)**. Anything issuing many vision calls should keep the model loaded rather than let it unload. The `num_gpu` parameter is kept (costs nothing, may help on venue hardware) but is no longer presented as a measured speedup. The DEPENDENCIES.md correction in that commit (13GB measured vs "~5GB" documented) is independently verified and stands.
 
 ### Harnesses added this session
 `refusal_at_scale.py`, `calibrate_confidence.py`, `generate_chart_corpus.py`, `chart_stress_test.py` (live markdown + resume that RE-SCORES rather than trusting cached scores), `precision_ceiling_analysis.py`, `retrieval_metrics.py`, `export_inspection_data.py`, `export_image_data.py`, `export_frontend_assets.py`, `extraction_prompt_ab.py`.

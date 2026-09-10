@@ -34,42 +34,42 @@ from backend.models.registry import resolve_model_name
 
 _OLLAMA_HOST = "http://localhost:11434"
 
-# How many transformer layers to place on the GPU. None = let Ollama
-# decide, which is what this tool did originally and which measured
-# badly on the dev box: Ollama sized qwen2.5vl:7b at ~13GB against an
-# 8GB RTX 4060, concluded it did not fit, and ran the model at 100% CPU
-# — 76-122 seconds per chart image. The model genuinely does not fit
-# whole, but that is not the same as it not fitting AT ALL: offloading a
-# subset of layers puts the heaviest matmuls on the GPU and leaves the
-# remainder on CPU.
+# How many transformer layers to ASK Ollama to place on the GPU.
 #
-# This is exactly the situation CLAUDE.md's VRAM discipline section
-# describes ("do not write code that assumes all models can be resident
-# in VRAM simultaneously ... make concurrency configurable, not
-# assumed"), so the split is a parameter with a documented default
-# rather than a hardcoded constant: venue hardware with more VRAM should
-# raise it, and a machine with less should lower it.
+# CORRECTION TO AN EARLIER CLAIM IN THIS FILE (commit 989933b). This
+# comment previously reported "any offload beats none (~1.7x)" from a
+# benchmark of 109s / 63.1s / 71.8s / 63.7s at num_gpu unset / 12 / 20 /
+# 28. That conclusion was WRONG, and the way it was wrong is worth
+# keeping written down: the benchmark ran `ollama stop` before every
+# arm, so every single measurement included a cold model load, and the
+# spread it attributed to GPU offload was load-time variance.
 #
-# Measured on the 8GB dev card, same chart image, model stopped and
-# reloaded between runs so each number includes its own cold start:
+# Re-measured properly — same image, cold AND warm timing per arm, and
+# `ollama ps` actually inspected rather than inferred:
 #
-#   num_gpu   time     note
-#   (unset)   109.0s   Ollama's own choice: 100% CPU
-#   12         63.1s   fastest measured
-#   20         71.8s   SLOWER than 12 — spills past 8GB and thrashes
-#   28         63.7s   ~tied with 12
+#   num_gpu   cold     warm    ollama ps PROCESSOR
+#   (unset)   86.7s    6.9s    100% CPU
+#   12        59.3s   11.9s    100% CPU
+#   99        57.6s    8.9s    100% CPU
 #
-# Any offload beats none (~1.7x), but the curve is NOT monotonic, which
-# is why this is a measured constant rather than "as many layers as
-# possible". 12 is chosen over the statistically-tied 28 because it
-# leaves the most VRAM headroom — CLAUDE.md's VRAM discipline is
-# explicit that code must not assume a model can be resident alongside
-# others, and this tool shares an 8GB card with the embedding model.
+# num_gpu=99 means "put every layer on the GPU" and STILL reports 100%
+# CPU, with nvidia-smi showing ~200MiB used. On this box the option has
+# no effect whatsoever: qwen2.5vl:7b measures 13GB resident against an
+# 8GB card (see docs/DEPENDENCIES.md), and Ollama places it entirely on
+# CPU regardless of what is requested. There is no partial-offload win
+# to be had here — the earlier 1.7x was an artifact of measurement.
 #
-# Overridable per call, and via OLLAMA_NUM_GPU_LAYERS for deployment
-# tuning without a code change: venue hardware with more VRAM should
-# raise it, and this exact curve should be re-measured there rather than
-# assumed to transfer.
+# The real effect, which the first benchmark hid by making every run
+# cold, is model RESIDENCY: 86.7s cold versus 6.9s warm is ~12x, an
+# order of magnitude larger than anything num_gpu did. Anything issuing
+# many vision calls should keep the model loaded (Ollama's keep_alive)
+# rather than let it unload between batches.
+#
+# The parameter is KEPT rather than deleted, for two honest reasons: it
+# costs nothing, and venue hardware with enough VRAM to actually fit
+# this model would benefit from it. But it is no longer presented as a
+# measured speedup on this hardware, because it is not one. Re-measure
+# on the venue machine — including `ollama ps`, not just a stopwatch.
 _DEFAULT_NUM_GPU_LAYERS = int(os.environ.get("OLLAMA_NUM_GPU_LAYERS", "12"))
 
 _CHART_DESCRIPTION_PROMPT = (
