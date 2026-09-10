@@ -14,14 +14,20 @@ written down instead of made:
 ```diff
 - import { GraphStubPage }   from './pages/GraphStubPage'
 - import { SourcesStubPage } from './pages/SourcesStubPage'
-+ import { GraphExplorerPage } from './pages/GraphExplorerPage'
-+ import { KnowledgeBasePage } from './pages/KnowledgeBasePage'
++ import { GraphExplorerPage }   from './pages/GraphExplorerPage'
++ import { KnowledgeBasePage }   from './pages/KnowledgeBasePage'
++ import { InstrumentationPage } from './pages/InstrumentationPage'
 
 -        <Route path="/graph"           element={<GraphStubPage />} />
 -        <Route path="/sources"         element={<SourcesStubPage />} />
 +        <Route path="/graph"           element={<GraphExplorerPage />} />
 +        <Route path="/sources"         element={<KnowledgeBasePage />} />
++        <Route path="/instrumentation" element={<InstrumentationPage />} />
 ```
+
+`/instrumentation` is a NEW route (the others fill existing stubs), so it
+also needs a nav entry in `AppShell.jsx`. It is the one-stop view — every
+other page above is a focused slice of what it shows.
 
 Both routes already exist in `App.jsx` with stubs reserved for them
 (`/graph` — "Knowledge Graph Explorer … Day 8", `/sources` — knowledge
@@ -79,3 +85,45 @@ as far as syntax, and the data files they load are real exports with the
 shapes the code expects, but nothing has rendered them in a browser.
 First run after the merge should be treated as a first run, not a
 regression check.
+
+
+---
+
+## Backend API
+
+`InstrumentationPage` and `pipelineApi.js` talk to the FastAPI backend:
+
+```bash
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Bound to loopback deliberately — this API reads the user's filesystem and
+has no authentication, so it must not appear on a plant network. CORS is
+restricted to the Vite dev origins for the same reason.
+
+| route | serves |
+|---|---|
+| `GET /api/health` | per-dependency status (graph up? corpus loaded? how many images?) |
+| `GET /api/graph` | all nodes + relationships, live from Neo4j |
+| `GET /api/chunks` | chunks, metadata, PCA coords, similarity matrix |
+| `GET /api/images` | every stored image + OCR + reading (pixels NOT inlined) |
+| `GET /api/images/{id}/raw` | the actual pixels |
+| `POST /api/images/select` | pick the right image for a request |
+| `GET /api/metrics` | every measured evaluation result, each with `measured_at` |
+| `GET /api/sources` / `POST` / `DELETE` | watched folders, registry, queue |
+| `POST /api/sources/scan` | scan and enqueue, newest first |
+| `POST /api/search` | grounded retrieval, or an explicit refusal |
+| `GET /api/preview` | one rendered page + highlight rects |
+
+Override the base URL with `VITE_API_BASE` if the backend runs elsewhere.
+
+### The client falls back, on purpose
+
+`pipelineApi.js` tries the API and falls back to the static
+`/pipeline/*.json` snapshots when it is not running. The frontend and
+backend are separate processes a developer starts separately, and a UI
+showing nothing but a connection error is useless exactly when you are
+working out which one is down. **Every result carries `source`**
+(`api` / `snapshot` / `unavailable`) and the UI prints it — showing a
+stale export as live data is the same failure as citing a document that
+has since been edited.
