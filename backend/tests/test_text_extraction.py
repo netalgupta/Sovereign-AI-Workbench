@@ -66,6 +66,49 @@ def test_mixed_pdf_without_ocr_fn_raises_naming_only_the_actually_blank_page():
     assert "page(s) [2]" in str(exc_info.value)
 
 
+def test_pdf_table_extracts_as_clean_tab_separated_cells():
+    """Structural regression test using a synthetic, well-spaced table
+    fixture (sample_pdf_with_table.pdf) — proves table cells come back
+    tab-delimited (reliable to split on downstream) rather than
+    space-joined prose (ambiguous when a cell's own value contains a
+    space, e.g. "Random Copolymer RP340" from the real corpus data).
+    """
+    pages = extract_pages(_path("sample_pdf_with_table.pdf"), "pdf")
+
+    assert len(pages) == 1
+    assert "Name\tValue\tUnit" in pages[0].text
+    assert "WABT\t410\tC" in pages[0].text
+    assert "LHSV\t1.2\thr-1" in pages[0].text
+
+
+def test_real_corpus_table_data_rows_are_correctly_column_separated():
+    """The actual regression test for the real bug: Novolen_Batch_QA_
+    Report_Aug2026.pdf's table used to extract as one interleaved blob
+    per row via extract_text() alone — e.g. "Batches ProduceAdvg MFI
+    (g/10minS)pec MFI Range" instead of separate cells. DATA rows must
+    now be correctly column-separated (the header row has a disclosed,
+    unrelated limitation — see _extract_pdf_page_text's docstring —
+    this test only asserts what the fix actually guarantees: the data).
+    """
+    corpus_pdf = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "MRPL_RAG_Test_Corpus", "03_Quality_and_Process_Data",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+    )
+    if not os.path.exists(corpus_pdf):
+        pytest.skip("test corpus not present")
+
+    pages = extract_pages(corpus_pdf, "pdf")
+    text = pages[0].text
+
+    # Every data row's 6 values must appear as their own tab-separated
+    # cells, not fused into neighboring columns.
+    assert "Homopolymer H030SG\t22\t3.4\t3.0 - 3.8\t0.905\t0" in text
+    assert "Homopolymer H110F\t16\t11.2\t10.0 - 12.0\t0.905\t1" in text
+    assert "Random Copolymer RP340\t12\t3.9\t3.5 - 4.5\t0.900\t0" in text
+    assert "Impact Copolymer HP500\t9\t0.8\t0.6 - 1.0\t0.900\t0" in text
+
+
 def test_pdf_with_embedded_image_calls_chart_image_fn_when_provided():
     """sample_native.pdf has no embedded images, so this needs a fixture
     that does -- reuse the corpus's real inspection-report PDF, which

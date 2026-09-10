@@ -101,6 +101,68 @@ def _render_pdf_page_to_png(file_path: str, page_index: int) -> str:
     return png_path
 
 
+def _extract_pdf_page_text(page) -> str:
+    """Extract one pdfplumber page's text, handling detected tables
+    specially.
+
+    Real bug this fixes, confirmed against the corpus's own PDFs, not
+    hypothetical: `page.extract_text()` alone garbles adjacent table
+    columns together character-by-character whenever a table's columns
+    are tight or unruled — e.g. "Batches ProduceAdvg MFI (g/10minS)pec
+    MFI Range" in the Novolen QA report (should read "Batches Produced",
+    "Avg MFI (g/10min)", "Spec MFI Range" as separate cells), and
+    "HassParno/cNeesrsiy Ea nsgtaintieoenrsing" in the Pipeline Incident
+    Report's corrective-actions table (should read "Hassan/Neriya
+    stations", "Process Engineering").
+
+    Fix: `find_tables()` + `.extract()` on each detected table gives
+    correctly column-separated DATA rows — verified directly, e.g. the
+    Novolen table's data now extracts as
+    ['Homopolymer H030SG', '22', '3.4', '3.0 - 3.8', '0.905', '0'],
+    each value in its own cell. Prose text (everything outside a table's
+    bounding box) still comes from extract_text(), via outside_bbox() to
+    avoid extracting table content twice.
+
+    KNOWN RESIDUAL LIMITATION, disclosed rather than hidden, and broader
+    than first thought: any cell — header OR data — whose content is too
+    long for its column still shows character overlap after this fix.
+    Confirmed in two different ways on two different files: the Novolen
+    table's HEADER row (['Grade', 'Batches Produ', 'ceAdvg MFI (g/10m',
+    ...] — header labels wider than their columns), and the Pipeline
+    Incident Report's own DATA row (['Review seal replacement interval
+    SOP for Ha', 'ssParno/cNeesrsiy Ea nsgtaintieoenrsing', ...] — an
+    unusually long action-item sentence overflowing its cell). Visually
+    inspected the rendered PDF directly for the first case — the label
+    text is genuinely wider than its column in the SOURCE document,
+    causing real glyph-level overlap, reproduced identically even at
+    word-tokenization level (`extract_words()` returns "ProduceAdvg" as
+    one fused token). This is a source-document authoring defect with no
+    text-layer signal left to recover from — not a pdfplumber parsing
+    bug, not row-position-specific, and not something this function can
+    fix. Every OTHER cell in an affected row (e.g. "Target Date"/
+    "Status" in the Incident Report's garbled row) still extracts
+    correctly — this fix is a real, substantial improvement over
+    extract_text() alone (which fused an ENTIRE row into one blob), not
+    a complete one.
+    """
+    tables = page.find_tables()
+    if not tables:
+        return page.extract_text() or ""
+
+    prose_page = page
+    for table in tables:
+        prose_page = prose_page.outside_bbox(table.bbox)
+    prose_text = prose_page.extract_text() or ""
+
+    table_texts = []
+    for table in tables:
+        rows = table.extract()
+        table_lines = ["\t".join(cell or "" for cell in row) for row in rows]
+        table_texts.append("\n".join(table_lines))
+
+    return (prose_text + "\n" + "\n\n".join(table_texts)).strip()
+
+
 def _extract_native_pdf_pages(
     file_path: str,
     ocr_fn: OcrFn | None,
@@ -112,7 +174,7 @@ def _extract_native_pdf_pages(
 
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
+            text = _extract_pdf_page_text(page)
             if not text.strip():
                 blank_page_numbers.append(i)
             if page.images:
