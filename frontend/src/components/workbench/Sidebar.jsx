@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Search,
   Sun,
@@ -732,16 +733,15 @@ export function Sidebar() {
           </div>
 
           {/* Settings / Overflow trigger */}
-          <button
-            type="button"
-            onClick={() => showToast('System settings & user credentials — Local air-gapped mode active', 'info')}
+          <Link
+            to="/settings"
             className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
             style={{ color: 'var(--color-text-muted)' }}
-            title="Settings"
+            title="Settings & System Configuration (/settings)"
             aria-label="Settings"
           >
             <Settings size={14} strokeWidth={2} />
-          </button>
+          </Link>
         </div>
       </aside>
 

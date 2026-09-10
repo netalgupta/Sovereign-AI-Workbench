@@ -6,7 +6,7 @@ import { SourcesStubPage } from './pages/SourcesStubPage'
 import { GraphStubPage }   from './pages/GraphStubPage'
 import { OutputsStubPage } from './pages/OutputsStubPage'
 import { AuditStubPage }   from './pages/AuditStubPage'
-import { SettingsStubPage } from './pages/SettingsStubPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { MonitorStubPage } from './pages/MonitorStubPage'
 
 /**
@@ -20,7 +20,7 @@ import { MonitorStubPage } from './pages/MonitorStubPage'
  *   /graph             → GraphStubPage  (graph explorer — Day 8 Netal)
  *   /outputs           → OutputsStubPage (file library — Day 8 Kanishka)
  *   /audit             → AuditStubPage  (audit log — Day 8 Kanishka)
- *   /settings          → SettingsStubPage (model registry — Day 7)
+ *   /settings          → SettingsPage   (model registry, RBAC, encrypted storage — §3.11)
  *   /monitor           → MonitorStubPage (network monitor — Day 6 Sahil)
  */
 export default function App() {
@@ -33,7 +33,7 @@ export default function App() {
         <Route path="/graph"           element={<GraphStubPage />} />
         <Route path="/outputs"         element={<OutputsStubPage />} />
         <Route path="/audit"           element={<AuditStubPage />} />
-        <Route path="/settings"        element={<SettingsStubPage />} />
+        <Route path="/settings"        element={<SettingsPage />} />
         <Route path="/monitor"         element={<MonitorStubPage />} />
       </Routes>
     </AppShell>
