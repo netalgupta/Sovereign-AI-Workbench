@@ -22,7 +22,7 @@ function generateSessionId() {
   })
 }
 
-export const useChatStore = create((set, get) => ({
+export const useChatStore = create((set) => ({
   // ── State ──────────────────────────────────────────────────────────────────
   messages: [],
   sessionId: generateSessionId(),
