@@ -53,3 +53,73 @@ Dev hardware is an RTX 4060 (8GB). Do not write code that assumes all models can
 
 ## Demo-Day Priorities
 If time runs short, protect the 🔴-priority rows in TOOLS.md first. 🟡 and ⚪ rows can remain registry-listed (present in the model/tool config, not necessarily polished) without breaking the "boundless, pluggable" architecture claim — see TOOLS.md §I for the exact demo script these priorities are built around.
+
+---
+
+# SESSION HANDOFF — 2026-09-10 (Aryan / RAG-GraphRAG validation session)
+
+**This is a point-in-time session handoff, not project policy.** Written before an imminent auto-compaction so the next session (or a fresh context window in this one) can resume without re-deriving state. Branch: `aryan/rag-and-graphrag`.
+
+## What this session was doing
+Building out Aryan's full RAG/AI/ML scope (model registry, math tools, ingestion, OCR/ASR, hybrid retrieval, GraphRAG, generation), then running a real end-to-end validation against a synthetic `MRPL_RAG_Test_Corpus/` (13 docs: DOCX/PDF/XLSX/XLS/PNG), fixing every real bug found along the way — not a demo, an actual working pipeline with tests for everything.
+
+## Files/modules built this session (all under `backend/`)
+- `models/registry.py` — `resolve_model_name()` (registry id -> real Ollama tag)
+- `orchestrator/router.py` — CARD 03, reuses `resolve_model_name` + shared `strip_code_fences`
+- `utils/llm_output.py` — shared `strip_code_fences` (used by router + entity_extraction)
+- `tools/math/{symbolic_calc,unit_calc,thermophysical}.py` — CARD 08/10/11 (SymPy/Pint/CoolProp)
+- `ingestion/model_cache.py` — the fetch-once/offline-forever pattern every model-backed tool uses
+- `ingestion/{embeddings,fetch_models}.py` — bge-large-en-v1.5, forced offline
+- `ingestion/{document_types,text_extraction,chunking,document_ingestion,xlsx_charts,semantic_chunking}.py` — full RAG_SPEC §2 pipeline
+- `tools/vision/{ocr_printed,chart_understanding}.py` — CARD 05 (PaddleOCR), CARD 13 (chart image vision estimate)
+- `tools/audio/voice_transcription.py` — CARD 12 (faster-whisper)
+- `retrieval/{vector_store,hybrid_search,grounded_retrieval,citation_validation,generation}.py` — CARD 09 + RAG_SPEC §3/§4
+- `graph/{entity_extraction,neo4j_client}.py` — GRAPH_SPEC §5/§6
+- `evaluation/` — reusable harness: `ingest_corpus.py`, `build_graph.py`, `extract_corpus.py`, `run_qa_tests.py`, `generate_report.py`, `precision_at_k.py`, `chunk_size_experiment.py`, `run_signature_query.py`, `mrpl_qa_test_set.json`
+
+## Key architecture decisions made
+1. **Fetch-once/offline-forever**: every model-backed tool (embeddings, whisper, PaddleOCR, chart vision) forces offline mode and loads only from a local `models/<category>/` path — never trusts a library's default Hub-reachability check.
+2. **Neo4j MUST use a named Docker volume** (`-v <name>:/data`) + `NEO4J_dbms_usage__report_enabled=false`. Documented in GRAPH_SPEC.md. Learned this the hard way (see "what broke" below).
+3. **Entity extraction (expensive, LLM) is decoupled from graph-loading (cheap, replayable)**: `extract_corpus.py` checkpoints every chunk's extraction to a JSON-Lines file on disk *as it's produced* (flushed per line, so a crash loses at most 1 chunk); `build_graph.py`'s `build_graph_from_extractions()` loads that cache into Neo4j with zero LLM calls. This is the actual fix for "we can't afford to lose 40 minutes of extraction to an environment reset."
+4. **Semantic chunking is opt-in** (`semantic_chunking.py`), never the default — RAG_SPEC §2 locks 512/64 token chunking because retrieval-quality tuning (the 0.35 confidence threshold) assumes it.
+5. **Chart handling is two genuinely different tools**: `xlsx_charts.py` (native Excel charts — exact cached values, zero vision model) vs `chart_understanding.py` (CARD 13, chart *images* — vision model estimate, `is_estimate` hardcoded `True`, never presented with the confidence of a real number).
+6. **Citation validation** strips both invalid numeric citations (`[7]` when only 5 sources exist) and unresolved placeholders (literal `"[N]"` — the model echoing RAG_SPEC §4's own prompt syntax instead of substituting a digit).
+
+## What's confirmed WORKING (verified live, not assumed)
+- Full ingestion: all 13 corpus files, 21 chunks, zero errors (DOCX/PDF/XLSX/XLS/PNG/CSV/TXT/EML/audio all exercised)
+- CARD 05 OCR: correctly reads the deliberately noisy/rotated scanned checklist
+- CARD 12 voice transcription: real TTS-generated fixture, correct transcription incl. domain vocab
+- Hybrid retrieval + RRF fusion: dense-only and sparse-only test cases both pass independently
+- Generation pipeline: 8/8 real QA questions correct on value AND source (before the newest round of fixes below)
+- GraphRAG: signature query (`Mangalore-Hassan`) confirmed **twice**, independently — `segment_found=True`, `related_documents` includes both the PDF and the OCR'd diagram PNG, edge type confirmed via direct Cypher as `REFERENCES` (never `APPLIES_TO`, per §8 — this is hardcoded in `link_document_to_entities`, not a per-run behavior)
+- Citation `"[N]"` bug: root-caused (RAG_SPEC §4's own locked prompt text uses literal `"[N]"` as format description; model occasionally echoes it), fixed in `citation_validation.py`, regression test added
+- Real model-tag bug found+fixed: `qwen2-vl:7b` doesn't exist on Ollama; `qwen2.5vl:7b` does. Fixed across `models.yaml` + 9 doc references (incl. an ASCII-box realignment in SYSTEM.md broken by the longer name)
+
+## What's BROKEN / mid-investigation when compaction hit
+User sent 4 new findings from a "detailed retrieval trace" (their words) — status on each:
+
+1. **CONFIRMED REAL BUG, fix in progress, NOT YET APPLIED**: PDF table extraction character-interleaves adjacent columns. Confirmed in `Novolen_Batch_QA_Report_Aug2026.pdf` (`"Batches ProduceAdvg MFI (g/10minS)pec MFI Range"`) and `Pipeline_Incident_Report_Hassan_Segment.pdf` (`"HassParno/cNeesrsiy Ea nsgtaintieoenrsing"`). Root cause: `_extract_native_pdf_pages` in `text_extraction.py` uses `page.extract_text()` alone, which pdfplumber garbles for un-lined/tight tabular columns. **Partial fix found and verified**: `page.find_tables()` + `.extract()` with `vertical_strategy='lines'` gives clean DATA rows (verified: `['Homopolymer H030SG', '22', '3.4', '3.0 - 3.8', '0.905', '0']` — correct). **Unsolved part**: the HEADER row still bleeds even with table-aware extraction (`['Grade', 'Batches Produ', 'ceAdvg MFI (g/10m', ...]`) — tried tolerance tuning (`snap_tolerance`, `intersection_tolerance`, `join_tolerance`), no change. Was about to visually inspect the rendered PDF table region (`scratch_novolen_table_crop.png`, already generated via PyMuPDF) to determine whether this is a genuine source-PDF header-text-overflow (header label wider than its column in the actual PDF — not fixable pdfplumber-side) vs a misparse of clean content. **NEXT STEP: look at that PNG, then decide — if source overflow, document as a known limitation and ship the data-row fix (which is the load-bearing one); if misparse, keep tuning.** Then: wire `find_tables()`-based extraction into `_extract_native_pdf_pages` for real (currently only tested ad-hoc in bash, not in the actual pipeline code), write tests, re-extract both flagged files, diff field-by-field as the user asked.
+
+2. **LIKELY FALSE HYPOTHESIS, needs the regression test anyway**: user hypothesizes citation-index bug is because "citation assignment assumes top-1 ranked chunk." Per code inspection, `generation.py` has **no rank-based citation logic at all** — `_format_sources` numbers chunks 1..N in whatever order `grounding.chunks` returns (rank order, but that's just *labeling*, not an assumption about which one gets cited), and the LLM is free to cite any `[1]`-`[N]`. The original `"[N]"` bug (already fixed) was the model echoing the prompt's own placeholder syntax — unrelated to rank position. **NEXT STEP: write the regression test anyway** (force a fixture where the correct answer is at rank 3 not rank 1, confirm `generate_grounded_answer`/`validate_citations` still resolves `[3]` correctly) since it's cheap, valid, and directly falsifies or confirms the hypothesis with evidence rather than assertion. Then explain clearly to the user, with the test as proof, why the hypothesis doesn't match the actual code path.
+
+3. **PLAUSIBLE, PARTIALLY EVIDENCED, NOT YET FIXED**: boilerplate contamination. Every corpus doc ends with near-identical disclaimer ("This is a synthetic, illustrative document generated for RAG/retrieval testing purposes..."). Fused retrieval scores DO cluster tightly (0.029-0.033 band, confirmed from Q1's retrieval trace in `VALIDATION_REPORT.md`). `Correspondence_Depot_HQ_Thread_Kasargod.docx` does appear repeatedly in unrelated top-5 result sets (visible in `precision_512.json`). **NEXT STEP**: add a boilerplate-detection step to the ingestion pipeline (RAG_SPEC.md §2) — detect sentences recurring near-verbatim across many documents (e.g. exact or near-exact match across >N% of ingested documents) and strip or down-weight them before chunking/embedding. Must be general (real MRPL docs will have their own letterhead/footers), not hardcoded to this corpus's specific disclaimer text. Re-run the 8 content questions' precision@5 after, report before/after.
+
+4. **ALREADY DONE — TWICE — user's "still missing" claim is incorrect**: signature query for `Mangalore-Hassan` has been run and confirmed independently after both the original full graph build AND after the Neo4j data-loss incident (scoped 3-chunk rebuild). Edge type confirmed as `REFERENCES` via direct Cypher (`MATCH (d:Document)-[r]->(seg:PipelineSegment)... RETURN type(r)`) both times. **NEXT STEP: politely correct this with the user, re-confirm once more against the FULL graph** (once the in-progress full extraction — see below — is loaded) so the final confirmation is against complete data, not the 3-chunk scoped subset, then present that as the definitive answer.
+
+## Background jobs status at handoff time (check these first on resume)
+- **`bryafb5xy`**: full 21-chunk corpus extraction via new `extract_corpus.py`, writing to `backend/evaluation/extraction_cache/mrpl_extractions.jsonl`. Started ~18:54, expect ~40 min (~19:35). **CRITICAL: once done, run `build_graph.py` against this file to load Neo4j (fast, no LLM), then `git add`/commit the `.jsonl` file itself — that's the durable checkpoint, must not be lost.**
+- **`bazynkpl1`**: 512-token precision@5, clean re-run (first attempt had a bad `/tmp_err.log` path on Windows — empty file, caught it). Output: `backend/evaluation/precision_512.json`. Check it landed correctly (verify non-empty, valid JSON) before trusting it.
+- **`bd8yfiqh4`**: 256-token precision@5 — notification said completed. Output: `backend/evaluation/precision_256.json`. Same verify-before-trust caveat.
+
+## Infra state (all ephemeral — sandbox already reset once this session, wiping Neo4j)
+- Neo4j: Docker container `sih26117-neo4j-test`, **now** with named volume `sih26117_neo4j_data` (fixed after the data-loss incident — was NOT persistent before). Auth `neo4j`/`testpassword123`, bolt on `7687`.
+- Ollama: host-level service (survived the reset). Models pulled: `qwen2.5:14b` (reasoning, ~65-135s/call on this CPU-offloaded 8GB card), `qwen2.5:7b`, `llama3:8b`, `nomic-embed-text`, `budget-bandhu`, `qwen2.5vl:7b` (vision, just pulled, untested in the real pipeline yet).
+- `torch` is deliberately CPU-only (`2.9.1+cpu`) — a GPU-build attempt hit cascading version conflicts (torch<->torchvision<->torchao<->triton) in this **shared system-wide** Python env (not a venv) and was reverted. Recommendation left for the user: dedicated venv before retrying GPU acceleration for embeddings/OCR (Ollama itself already uses GPU fine, confirmed via `nvidia-smi` showing 95% util / 7.4GB VRAM during real extraction calls).
+- Model caches on disk (gitignored, NOT in git): `models/embeddings/` (bge-large), `models/ocr/` (PaddleOCR, ~177MB), `models/audio/` (faster-whisper).
+
+## Not yet started (from the user's original multi-part ask, deprioritized by the 4 new findings above)
+- Generate more chart images, add to corpus, stress-test `chart_understanding.py` at scale (model's pulled and ready)
+- Build an interactive artifact for the user to visually browse chunks/images/embeddings/chunking behavior themselves
+
+## Uncommitted work at handoff time (must be committed once the current fixes land)
+Citation placeholder fix + tests, `generation.py`'s new `unresolved_placeholders_stripped` field, the model-tag fix (~9 files), `build_graph.py` refactor + new `extract_corpus.py` + its tests, GRAPH_SPEC.md's Neo4j-volume documentation, `chunk_size_experiment.py`, `precision_at_k.py`, `generate_report.py` + `VALIDATION_REPORT.md`, `qa_results.json` (repo root, untracked). Plus whatever comes out of findings 1-4 above. Commit in the same granular, one-concern-per-commit style used all session; push to `origin/aryan/rag-and-graphrag` (never force, never touch `main` directly).
