@@ -71,6 +71,13 @@ ChartImageFn = Callable[[str], str]
 class PageText(BaseModel):
     page_number: int | None  # None only if genuinely unpaginated, per RAG_SPEC.md §2 step 4
     text: str
+    # Content-hash ids of images embedded on this page, in
+    # backend/ingestion/image_store.py. Carried through to chunk
+    # metadata so a retrieved chunk can hand back the actual picture —
+    # "show me that diagram" is unanswerable without this link. Empty
+    # for pages with no images, and for any ingestion run that did not
+    # pass an image store.
+    image_ids: list[str] = []
 
 
 def _render_pdf_page_to_png(file_path: str, page_index: int) -> str:
@@ -167,6 +174,8 @@ def _extract_native_pdf_pages(
     file_path: str,
     ocr_fn: OcrFn | None,
     chart_image_fn: ChartImageFn | None = None,
+    image_store=None,
+    image_describe_fn: ChartImageFn | None = None,
 ) -> list[PageText]:
     pages: list[PageText] = []
     blank_page_numbers: list[int] = []
@@ -216,7 +225,37 @@ def _extract_native_pdf_pages(
                 pages[idx] = PageText(
                     page_number=page_number,
                     text=f"{pages[idx].text}\n{chart_text}".strip(),
+                    image_ids=pages[idx].image_ids,
                 )
+
+    # Embedded images: extracted individually at their own resolution,
+    # stored permanently, and represented in the page text by a block
+    # carrying both their OCR text and their description. This is
+    # additive to whatever text extraction already found — a page is
+    # routinely prose AND a figure, and describing the figure must not
+    # displace the prose.
+    #
+    # Distinct from chart_image_fn above, which rasterises the WHOLE
+    # page: that describes "the page", which on a page holding two
+    # figures and a table describes none of them usefully and leaves
+    # nothing retrievable afterwards.
+    if image_store is not None:
+        from backend.ingestion.image_extraction import extract_pdf_page_images
+
+        for page_number in pages_with_images:
+            extracted = extract_pdf_page_images(
+                file_path, page_number, image_store,
+                ocr_fn=ocr_fn, describe_fn=image_describe_fn,
+            )
+            if not extracted:
+                continue
+            idx = page_number - 1
+            blocks = "\n\n".join(e.block_text for e in extracted)
+            pages[idx] = PageText(
+                page_number=page_number,
+                text=f"{pages[idx].text}\n\n{blocks}".strip(),
+                image_ids=[e.record.image_id for e in extracted],
+            )
 
     return pages
 
@@ -248,7 +287,12 @@ def _iter_block_items(doc):
             yield DocxTable(child, doc)
 
 
-def _extract_docx(file_path: str) -> list[PageText]:
+def _extract_docx(
+    file_path: str,
+    image_store=None,
+    ocr_fn: OcrFn | None = None,
+    image_describe_fn: ChartImageFn | None = None,
+) -> list[PageText]:
     # DOCX has no reliable page boundaries at the file-format level
     # (pagination depends on the renderer/font/margins) — per spec,
     # page_number is genuinely None here, not a missing value.
@@ -261,7 +305,24 @@ def _extract_docx(file_path: str) -> list[PageText]:
         else:  # DocxTable
             for row in block.rows:
                 parts.append("\t".join(cell.text for cell in row.cells))
-    return [PageText(page_number=None, text="\n".join(parts))]
+    image_ids: list[str] = []
+    if image_store is not None:
+        # DOCX images are in document flow with no coordinates, so their
+        # occurrences carry page_number=None rather than a fabricated
+        # position (SOURCES_SPEC.md §5). The blocks are appended at the
+        # end because that flow position is genuinely unknown -- claiming
+        # a specific point in the text would be inventing structure the
+        # format does not record.
+        from backend.ingestion.image_extraction import extract_docx_images
+
+        extracted = extract_docx_images(
+            file_path, image_store, ocr_fn=ocr_fn, describe_fn=image_describe_fn
+        )
+        if extracted:
+            parts.extend(e.block_text for e in extracted)
+            image_ids = [e.record.image_id for e in extracted]
+
+    return [PageText(page_number=None, text="\n".join(parts), image_ids=image_ids)]
 
 
 def _extract_txt(file_path: str) -> list[PageText]:
@@ -348,8 +409,23 @@ def extract_pages(
     ocr_fn: OcrFn | None = None,
     audio_transcribe_fn: AudioTranscribeFn | None = None,
     chart_image_fn: ChartImageFn | None = None,
+    image_store=None,
+    image_describe_fn: ChartImageFn | None = None,
 ) -> list[PageText]:
     """Extract text per RAG_SPEC.md §2 step 2, preserving page/sheet boundaries.
+
+    `image_store` (backend/ingestion/image_store.py) is the seam that
+    makes embedded images retrievable rather than merely described: when
+    given, every image in the document is extracted at its own
+    resolution, stored by content hash, given both an OCR reading and a
+    description, and represented in the page text by a block carrying
+    both. The page then reports its `image_ids`, which flow into chunk
+    metadata so an answer can hand back the actual picture. See
+    docs/Technical_Specs/SOURCES_SPEC.md §4.
+
+    Opt-in, like chart_image_fn: without a store, extraction behaves
+    exactly as before, which keeps every existing caller and test
+    unchanged.
 
     `chart_image_fn` is purely opt-in (no default anywhere in this
     pipeline) — a PDF page's embedded chart PICTURE only ever gets
@@ -366,9 +442,11 @@ def extract_pages(
         ValueError: for a `detected_type` this pipeline doesn't handle.
     """
     if detected_type == "pdf":
-        return _extract_native_pdf_pages(file_path, ocr_fn, chart_image_fn)
+        return _extract_native_pdf_pages(
+            file_path, ocr_fn, chart_image_fn, image_store, image_describe_fn
+        )
     if detected_type == "docx":
-        return _extract_docx(file_path)
+        return _extract_docx(file_path, image_store, ocr_fn, image_describe_fn)
     if detected_type == "txt":
         return _extract_txt(file_path)
     if detected_type == "csv":

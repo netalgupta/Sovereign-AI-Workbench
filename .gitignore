@@ -30,3 +30,10 @@ build/
 # images.json in particular is multi-MB of base64 chart images, derived
 # entirely from files already tracked in the corpus directories.
 frontend/public/pipeline/images.json
+
+# Runtime stores: image pixels extracted from documents, the registry of
+# where the user's source files live, and the ingestion queue. All are
+# machine-local state derived from the user's own filesystem, and the
+# registry in particular contains absolute paths from their machine.
+image_store/
+document_registry/
