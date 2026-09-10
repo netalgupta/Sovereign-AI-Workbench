@@ -8,6 +8,16 @@ Plain vector retrieval cannot answer "show every SOP referencing this valve" or 
 
 **Hard constraint, verified by actually running the default Docker image:** Neo4j's default config sends anonymous usage telemetry on every startup — its own log prints "Anonymous Usage Data is being sent to Neo4j" unless disabled. This is exactly the kind of default phone-home behavior CLAUDE.md's hard constraint #1 requires auditing every dependency for. It is NOT disabled by default — whoever builds the real `docker-compose.yml` (SYSTEM.md §5 / DEPENDENCIES.md §10) MUST set `NEO4J_dbms_usage__report_enabled=false` as an environment variable on the Neo4j container. Confirmed fixed: the exact same container with this flag set produces a clean startup log with no telemetry line at all.
 
+**Second hard constraint, paid for directly during development, not theoretical:** a Neo4j container started with `docker run` and no volume mount keeps its data ONLY in that container's own writable layer. When the dev environment this was built in got recycled, the container came back with zero nodes — roughly 40 minutes of real LLM-driven entity extraction (GRAPH_SPEC.md §5) was gone, with no way to recover it short of re-running every extraction call. Every Neo4j container this project ever starts — dev, portable-drive demo, real MRPL deployment — MUST mount a named volume for `/data`:
+```
+docker run -d --name <container> \
+  -v <volume-name>:/data \
+  -e NEO4J_AUTH=neo4j/<password> \
+  -e NEO4J_dbms_usage__report_enabled=false \
+  neo4j:5-community
+```
+This is necessary but not sufficient on its own — see `backend/evaluation/extract_corpus.py`'s module docstring for the other half of the actual fix: the expensive part of graph construction (LLM extraction) is now checkpointed to a durable JSON Lines file on disk BEFORE anything touches Neo4j at all, so even total loss of the graph database costs a few seconds to recover from (reload the checkpoint), never another 40 minutes of re-extraction.
+
 ## 3. Node Types (exact labels, do not invent variants)
 
 | Label | Properties | Example |
