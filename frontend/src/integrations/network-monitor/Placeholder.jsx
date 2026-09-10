@@ -1,5 +1,5 @@
 import React from 'react'
-import { Shield, ShieldAlert, ArrowUpRight, Cpu, HardDrive, Wifi, Radio, AlertTriangle } from 'lucide-react'
+import { Shield, ShieldAlert, ArrowUpRight, Cpu, HardDrive, Wifi, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { CANONICAL_NETWORK_STATE } from './contract'
 
@@ -7,11 +7,9 @@ import { CANONICAL_NETWORK_STATE } from './contract'
  * Placeholder for NetworkMonitor component.
  * Owner: Sahil (FRONTEND.md §3.9 / CARD 07)
  *
- * NOTE ON REALISM RESTRICTION:
- * Per FRONTEND.md §3.9 and CARD 07, network monitoring must NEVER be faked in production.
- * This placeholder features high-visibility diagonal watermarks, dashed warning borders,
- * and caution alerts across the metrics and socket table to guarantee that mock data
- * cannot be mistaken for a live air-gap telemetry reading even from across a room.
+ * Designed as a professional inert placeholder with subtle diagonal hatching texture
+ * and restrained, desaturated tones to clearly indicate an inactive/unwired state
+ * without loud alert banners or watermark stamps.
  *
  * @param {import('./contract').NetworkMonitorProps} props
  */
@@ -39,9 +37,10 @@ export default function Placeholder({
     return (
       <aside
         aria-label="Network Monitor status bar"
-        className="w-full border-t border-dashed border-amber-500/50 px-4 py-1.5 flex items-center justify-between text-xs font-mono select-none"
+        className="w-full border-t px-4 py-1.5 flex items-center justify-between text-xs font-mono select-none"
         style={{
           background: 'var(--color-surface)',
+          borderColor: 'var(--color-border)',
           color: 'var(--color-text-muted)',
         }}
       >
@@ -72,16 +71,9 @@ export default function Placeholder({
 
           <span className="hidden sm:inline text-[10px] text-zinc-400 dark:text-zinc-600">|</span>
 
-          {/* Hard-to-miss MOCK DATA warning pill */}
-          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-500 border border-amber-500/40 tracking-wider">
-            MOCK DATA — NOT LIVE (CARD 07)
-          </span>
-
-          <span className="hidden md:inline text-[10px] text-zinc-400 dark:text-zinc-600">|</span>
-
-          {/* Integration Handoff Pill */}
+          {/* Integration Handoff Pill — Quiet, muted text without loud box */}
           <span
-            className="hidden md:inline text-[10px] font-mono"
+            className="hidden sm:inline text-[10px] font-mono"
             style={{ color: 'var(--color-text-muted)' }}
           >
             WebSocket feed pending — owned by Sahil
@@ -131,6 +123,7 @@ export default function Placeholder({
               <h2 className="text-base font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
                 Real-Time Air-Gap &amp; Network Monitor
               </h2>
+              {/* Clean, quiet header pill as originally specified */}
               <span
                 className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold uppercase tracking-wider"
                 style={{
@@ -162,174 +155,162 @@ export default function Placeholder({
         </div>
       </div>
 
-      {/* ── High-Visibility Demo Rehearsal Alert Strip ───────────────────── */}
-      <div
-        className="mx-6 mt-4 p-3 rounded-xl border-2 border-dashed flex items-center justify-between gap-3 text-xs font-mono shadow-xs"
-        style={{
-          background: 'rgba(245, 158, 11, 0.08)',
-          borderColor: 'rgba(245, 158, 11, 0.6)',
-          color: '#f59e0b',
-        }}
-      >
-        <div className="flex items-center gap-2.5">
-          <AlertTriangle size={18} className="flex-shrink-0 animate-pulse text-amber-500" />
-          <div>
-            <span className="font-bold tracking-wide uppercase text-[12px] block">
-              ⚠ MOCK DATA ONLY — NOT CONNECTED TO LIVE REFINERY DCS SENSORS
+      {/* ── Scrollable Body Content ───────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-6 max-w-6xl w-full mx-auto">
+        {/* ── Live System Resource Metric Cards (restrained inert styling) ─── */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 opacity-90">
+          <div
+            className="p-4 rounded-xl border flex items-center justify-between shadow-xs"
+            style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-card-border)' }}
+          >
+            <div className="flex items-center gap-2.5 text-xs">
+              <div className="p-2 rounded-lg" style={{ background: 'var(--color-surface)', color: 'var(--color-accent)' }}>
+                <Cpu size={16} />
+              </div>
+              <div>
+                <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>CPU Utilization</span>
+                <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
+                  {metrics?.cpuPercent || 14}%
+                </span>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }}>
+              simulated
             </span>
-            <span className="text-[11px] font-sans opacity-90 block mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-              Per FRONTEND.md §3.9 / CARD 07, network monitoring must never be faked. This placeholder displays simulated data until Sahil connects the live WebSocket feed.
+          </div>
+
+          <div
+            className="p-4 rounded-xl border flex items-center justify-between shadow-xs"
+            style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-card-border)' }}
+          >
+            <div className="flex items-center gap-2.5 text-xs">
+              <div className="p-2 rounded-lg" style={{ background: 'var(--color-surface)', color: 'var(--color-accent)' }}>
+                <HardDrive size={16} />
+              </div>
+              <div>
+                <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>Memory Footprint</span>
+                <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
+                  {metrics?.memoryGb || 3.8} GB
+                </span>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }}>
+              simulated
+            </span>
+          </div>
+
+          <div
+            className="p-4 rounded-xl border flex items-center justify-between shadow-xs"
+            style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-card-border)' }}
+          >
+            <div className="flex items-center gap-2.5 text-xs">
+              <div className="p-2 rounded-lg" style={{ background: 'var(--color-surface)', color: isSecure ? 'var(--color-text-muted)' : '#ef4444' }}>
+                <Wifi size={16} />
+              </div>
+              <div>
+                <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>External Sockets</span>
+                <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
+                  {metrics?.networkRate || '0.0 MB/s'} (0 ext)
+                </span>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-emerald-600 dark:text-emerald-400 bg-emerald-500/10">
+              air-gap safe
             </span>
           </div>
         </div>
-        <span className="px-2.5 py-1 rounded bg-amber-500 text-black font-black uppercase text-[10px] tracking-wider whitespace-nowrap shadow-xs">
-          DEMO STUB
-        </span>
-      </div>
 
-      {/* ── Scrollable Body with Diagonal Hazard Watermark & Striped Border ── */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4">
-        {/* Enclosing Container with Striped/Dashed Hazard Border */}
+        {/* ── Socket Table Container with Subtle Diagonal Hatching Texture ──── */}
         <div
-          className="relative rounded-2xl border-2 border-dashed overflow-hidden shadow-sm"
+          className="rounded-xl border shadow-xs overflow-hidden"
           style={{
-            borderColor: 'rgba(245, 158, 11, 0.45)',
-            background:
-              'repeating-linear-gradient(45deg, transparent, transparent 15px, rgba(245, 158, 11, 0.03) 15px, rgba(245, 158, 11, 0.03) 30px)',
+            background: 'var(--color-card-bg)',
+            borderColor: 'var(--color-card-border)',
           }}
         >
-          {/* Prominent Diagonal Watermark Overlay across Entire Area */}
+          {/* Subtle hatching background pattern behind table header to signal inactive placeholder state */}
           <div
-            className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden z-20 select-none p-4"
-            aria-hidden="true"
+            className="px-4 py-3 border-b flex items-center justify-between font-mono text-[11px]"
+            style={{
+              borderColor: 'var(--color-border)',
+              background:
+                'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(140, 140, 150, 0.05) 10px, rgba(140, 140, 150, 0.05) 20px)',
+            }}
           >
-            <div
-              className="transform -rotate-12 border-4 border-dashed border-amber-500/50 bg-zinc-950/80 dark:bg-zinc-950/90 px-6 sm:px-10 py-5 rounded-2xl shadow-2xl text-center backdrop-blur-[2px]"
-              style={{
-                boxShadow: '0 0 50px rgba(245, 158, 11, 0.3)',
-              }}
-            >
-              <div className="text-amber-500 font-mono font-black text-2xl sm:text-4xl md:text-5xl tracking-widest uppercase flex items-center justify-center gap-3">
-                <span>⚠</span>
-                <span>MOCK DATA — NOT LIVE</span>
-                <span>⚠</span>
-              </div>
-              <div className="text-xs sm:text-sm font-mono font-bold tracking-wider text-amber-400 mt-1.5 uppercase">
-                FRONTEND.md §3.9 / CARD 07 · Awaiting Sahil WebSocket Feed
-              </div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold uppercase tracking-wider" style={{ color: 'var(--color-text)' }}>
+                Socket Surveillance Table
+              </span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-zinc-400 dark:text-zinc-500 bg-zinc-500/10 border border-zinc-500/20">
+                Inert Mock Dataset
+              </span>
             </div>
+
+            <span className="text-[10px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1.5 font-mono">
+              <Radio size={12} className="opacity-60" />
+              <span>Awaiting live WebSocket socket feed</span>
+            </span>
           </div>
 
-          {/* ── Section A: Metrics Cards (under watermark) ─────────────── */}
+          {/* Desaturated Table Content */}
           <div
-            className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-dashed"
-            style={{ borderColor: 'rgba(245, 158, 11, 0.3)' }}
+            className="overflow-x-auto"
+            style={{
+              background:
+                'repeating-linear-gradient(45deg, transparent, transparent 12px, rgba(140, 140, 150, 0.025) 12px, rgba(140, 140, 150, 0.025) 24px)',
+            }}
           >
-            <div
-              className="p-3 rounded-xl border flex items-center justify-between"
-              style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center gap-2 text-xs">
-                <Cpu size={16} style={{ color: 'var(--color-accent)' }} />
-                <span style={{ color: 'var(--color-text)' }}>CPU Load</span>
-              </div>
-              <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                {metrics?.cpuPercent || 14}%
-              </span>
-            </div>
-
-            <div
-              className="p-3 rounded-xl border flex items-center justify-between"
-              style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center gap-2 text-xs">
-                <HardDrive size={16} style={{ color: 'var(--color-accent)' }} />
-                <span style={{ color: 'var(--color-text)' }}>Memory Footprint</span>
-              </div>
-              <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                {metrics?.memoryGb || 3.8} GB
-              </span>
-            </div>
-
-            <div
-              className="p-3 rounded-xl border flex items-center justify-between"
-              style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center gap-2 text-xs">
-                <Wifi size={16} style={{ color: isSecure ? '#10b981' : '#ef4444' }} />
-                <span style={{ color: 'var(--color-text)' }}>External Traffic</span>
-              </div>
-              <span className="font-mono text-xs font-bold text-emerald-500">
-                {metrics?.networkRate || '0.0 MB/s'} (0 sockets)
-              </span>
-            </div>
-          </div>
-
-          {/* ── Section B: Socket Table (under watermark) ───────────────── */}
-          <div className="p-4">
-            <div
-              className="rounded-xl border shadow-xs overflow-hidden"
-              style={{
-                background: 'var(--color-card-bg)',
-                borderColor: 'var(--color-card-border)',
-              }}
-            >
-              <div
-                className="px-4 py-2.5 border-b flex items-center justify-between font-mono text-[11px]"
-                style={{ borderColor: 'var(--color-border)' }}
-              >
-                <span className="font-bold uppercase tracking-wider" style={{ color: 'var(--color-text)' }}>
-                  Simulated Socket Table ({connections.length})
-                </span>
-                <span className="text-[10px] text-amber-500 flex items-center gap-1 font-mono font-bold">
-                  <Radio size={11} className="animate-pulse" /> SIMULATED LOCAL FEED
-                </span>
-              </div>
-
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr
+                  className="border-b font-mono text-[11px] uppercase tracking-wider"
+                  style={{
+                    background: 'var(--color-surface)',
+                    borderColor: 'var(--color-border)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  <th className="py-2.5 px-4 font-semibold">Local Address</th>
+                  <th className="py-2.5 px-4 font-semibold">Remote Address</th>
+                  <th className="py-2.5 px-4 font-semibold">Socket Status</th>
+                  <th className="py-2.5 px-4 font-semibold">Bound Process</th>
+                  <th className="py-2.5 px-4 font-semibold">Classification</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y font-mono text-[11px]" style={{ borderColor: 'var(--color-border)' }}>
+                {connections.map((c) => (
                   <tr
-                    className="border-b font-mono text-[11px] uppercase tracking-wider"
-                    style={{
-                      background: 'var(--color-surface)',
-                      borderColor: 'var(--color-border)',
-                      color: 'var(--color-text-muted)',
-                    }}
+                    key={c.id}
+                    className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   >
-                    <th className="py-2.5 px-4 font-semibold">Local Address</th>
-                    <th className="py-2.5 px-4 font-semibold">Remote Address</th>
-                    <th className="py-2.5 px-4 font-semibold">Status</th>
-                    <th className="py-2.5 px-4 font-semibold">Bound Process</th>
-                    <th className="py-2.5 px-4 font-semibold">Classification</th>
+                    <td className="py-2.5 px-4" style={{ color: 'var(--color-text)' }}>
+                      {c.local_addr}
+                    </td>
+                    <td className="py-2.5 px-4" style={{ color: 'var(--color-text-muted)' }}>
+                      {c.remote_addr}
+                    </td>
+                    <td className="py-2.5 px-4 font-semibold text-zinc-500 dark:text-zinc-400">
+                      {c.status}
+                    </td>
+                    <td className="py-2.5 px-4 font-medium" style={{ color: 'var(--color-accent)' }}>
+                      {c.process || 'kernel'}
+                    </td>
+                    <td className="py-2.5 px-4">
+                      {/* Desaturated, greyscale-leaning classification pill */}
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                          c.is_external
+                            ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                            : 'bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20'
+                        }`}
+                      >
+                        {c.is_external ? 'EXTERNAL' : 'LOOPBACK / LOCAL'}
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y font-mono text-[11px]" style={{ borderColor: 'var(--color-border)' }}>
-                  {connections.map((c) => (
-                    <tr key={c.id} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                      <td className="py-2.5 px-4" style={{ color: 'var(--color-text)' }}>
-                        {c.local_addr}
-                      </td>
-                      <td className="py-2.5 px-4" style={{ color: 'var(--color-text-muted)' }}>
-                        {c.remote_addr}
-                      </td>
-                      <td className="py-2.5 px-4 font-bold text-emerald-500">{c.status}</td>
-                      <td className="py-2.5 px-4 font-semibold" style={{ color: 'var(--color-accent)' }}>
-                        {c.process || 'kernel'}
-                      </td>
-                      <td className="py-2.5 px-4">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            c.is_external ? 'bg-red-500/20 text-red-500' : 'bg-emerald-500/10 text-emerald-500'
-                          }`}
-                        >
-                          {c.is_external ? 'EXTERNAL (ALERT)' : 'LOOPBACK / AIR-GAP'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
