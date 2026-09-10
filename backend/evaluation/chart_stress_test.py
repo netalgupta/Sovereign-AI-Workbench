@@ -248,7 +248,8 @@ def _write_live_markdown(md_path: str, results: list, total: int, corpus_dir: st
     Path(md_path).write_text(buf.getvalue(), encoding="utf-8")
 
 
-def run(corpus_dir: str, out_path: str, md_path: str | None = None) -> dict:
+def run(corpus_dir: str, out_path: str, md_path: str | None = None,
+        resume: bool = True) -> dict:
     corpus = Path(corpus_dir)
     ground_truth = json.loads((corpus / "ground_truth.json").read_text(encoding="utf-8"))
 
@@ -261,6 +262,21 @@ def run(corpus_dir: str, out_path: str, md_path: str | None = None) -> dict:
         if g["has_printed_labels"]
     }
 
+    # Resume: a chart already scored in a previous run is not re-asked.
+    # Each call costs 45-75 seconds of local vision inference, so losing a
+    # completed sweep to one wedged image (which has happened) should not
+    # mean paying for all twelve again. Same pattern as
+    # extract_corpus.py's extraction checkpoint, for the same reason.
+    done_by_name: dict[str, dict] = {}
+    if resume and Path(out_path).exists():
+        try:
+            previous = json.loads(Path(out_path).read_text(encoding="utf-8"))
+            for r in previous.get("results", []):
+                if not r.get("error"):
+                    done_by_name[r["filename"]] = r
+        except (json.JSONDecodeError, OSError):
+            pass  # unreadable checkpoint is not a reason to refuse to run
+
     results = []
     started_at = time.time()
     if md_path:
@@ -268,6 +284,27 @@ def run(corpus_dir: str, out_path: str, md_path: str | None = None) -> dict:
     for truth in ground_truth:
         stem = truth["filename"].replace("_labeled.png", "").replace("_unlabeled.png", "")
         truth = {**truth, "all_values": values_by_stem.get(stem, [])}
+
+        cached = done_by_name.get(truth["filename"])
+        if cached and cached.get("description"):
+            # RE-SCORE the cached description rather than reusing the
+            # cached score. Only the model call is expensive; scoring is
+            # free, and a cached SCORE goes stale the moment the scorer
+            # changes. That is not hypothetical: a bug in _value_appears
+            # meant whole-number values like 4.0 were never matched, and
+            # resuming a sweep silently carried the wrong numbers forward
+            # into a report that looked freshly computed. Re-scoring makes
+            # the checkpoint hold only the irreplaceable part.
+            rescored = score_one(cached["description"], truth)
+            rescored["is_estimate"] = cached.get("is_estimate", True)
+            rescored["error"] = None
+            rescored["seconds"] = cached.get("seconds", 0.0)
+            rescored["resumed"] = True
+            results.append(rescored)
+            print(f"  {truth['filename']:<32} (resumed, re-scored)", flush=True)
+            if md_path:
+                _write_live_markdown(md_path, results, len(ground_truth), corpus_dir, started_at)
+            continue
 
         started = time.time()
         try:

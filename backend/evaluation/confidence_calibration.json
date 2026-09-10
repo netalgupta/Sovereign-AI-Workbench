@@ -1,0 +1,151 @@
+{
+  "rows": [
+    {
+      "group": "in_scope",
+      "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+      "best_cosine": 0.6795,
+      "mean_top5_cosine": 0.6131,
+      "best_bm25": 9.1947
+    },
+    {
+      "group": "in_scope",
+      "question": "What caused the off-spec batch H110F-0847?",
+      "best_cosine": 0.6359,
+      "mean_top5_cosine": 0.5735,
+      "best_bm25": 4.4088
+    },
+    {
+      "group": "in_scope",
+      "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+      "best_cosine": 0.7947,
+      "mean_top5_cosine": 0.6458,
+      "best_bm25": 8.8483
+    },
+    {
+      "group": "in_scope",
+      "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+      "best_cosine": 0.6885,
+      "mean_top5_cosine": 0.5553,
+      "best_bm25": 14.6515
+    },
+    {
+      "group": "in_scope",
+      "question": "What is the 8-hour TWA benzene exposure limit?",
+      "best_cosine": 0.7288,
+      "mean_top5_cosine": 0.6088,
+      "best_bm25": 9.4932
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the WABT trigger temperature for hydrocracker HCU-9?",
+      "best_cosine": 0.6646,
+      "mean_top5_cosine": 0.588,
+      "best_bm25": 7.2616
+    },
+    {
+      "group": "adjacent",
+      "question": "What caused the off-spec batch Z999X-0001?",
+      "best_cosine": 0.5787,
+      "mean_top5_cosine": 0.5455,
+      "best_bm25": 4.4088
+    },
+    {
+      "group": "adjacent",
+      "question": "Why was Tank TK-Q-88 at Mangalore taken out of service?",
+      "best_cosine": 0.641,
+      "mean_top5_cosine": 0.5657,
+      "best_bm25": 7.2644
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the catalyst changeout procedure for the Coker unit?",
+      "best_cosine": 0.7124,
+      "mean_top5_cosine": 0.6536,
+      "best_bm25": 7.2191
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the recommended torque for a Boeing 737 landing gear bolt?",
+      "best_cosine": 0.5346,
+      "mean_top5_cosine": 0.5166,
+      "best_bm25": 3.3308
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the maximum core temperature for a pressurised water reactor?",
+      "best_cosine": 0.5795,
+      "mean_top5_cosine": 0.5651,
+      "best_bm25": 3.3308
+    },
+    {
+      "group": "off_domain",
+      "question": "How many megawatts does the Bhakra Nangal dam generate?",
+      "best_cosine": 0.5107,
+      "mean_top5_cosine": 0.4818,
+      "best_bm25": 2.0861
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the best way to poach an egg?",
+      "best_cosine": 0.3731,
+      "mean_top5_cosine": 0.3679,
+      "best_bm25": 3.2043
+    },
+    {
+      "group": "unrelated",
+      "question": "How far is Proxima Centauri from Earth?",
+      "best_cosine": 0.4665,
+      "mean_top5_cosine": 0.4055,
+      "best_bm25": 2.1833
+    },
+    {
+      "group": "unrelated",
+      "question": "Who won the 2018 FIFA World Cup?",
+      "best_cosine": 0.3753,
+      "mean_top5_cosine": 0.3628,
+      "best_bm25": 1.2107
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the plot of Pride and Prejudice?",
+      "best_cosine": 0.3435,
+      "mean_top5_cosine": 0.3277,
+      "best_bm25": 3.8757
+    }
+  ],
+  "signals": {
+    "best_cosine": {
+      "in_scope_min": 0.6359,
+      "in_scope_max": 0.7947,
+      "adjacent_min": 0.5787,
+      "adjacent_max": 0.7124,
+      "out_min": 0.3435,
+      "out_max": 0.5795,
+      "separates": true,
+      "gap": 0.0564,
+      "suggested_threshold": 0.6077
+    },
+    "mean_top5_cosine": {
+      "in_scope_min": 0.5553,
+      "in_scope_max": 0.6458,
+      "adjacent_min": 0.5455,
+      "adjacent_max": 0.6536,
+      "out_min": 0.3277,
+      "out_max": 0.5651,
+      "separates": false,
+      "gap": -0.0098,
+      "suggested_threshold": 0.5602
+    },
+    "best_bm25": {
+      "in_scope_min": 4.4088,
+      "in_scope_max": 14.6515,
+      "adjacent_min": 4.4088,
+      "adjacent_max": 7.2644,
+      "out_min": 1.2107,
+      "out_max": 3.8757,
+      "separates": true,
+      "gap": 0.5331,
+      "suggested_threshold": 4.1423
+    }
+  }
+}

@@ -103,6 +103,7 @@ def describe_chart_image(
     image_path: str,
     model_id: str = "vision-model",
     num_gpu_layers: int | None = None,
+    timeout_seconds: int = 180,
 ) -> ChartVisualDescription:
     """Ask the vision model to describe a chart image.
 
@@ -135,7 +136,13 @@ def describe_chart_image(
             "stream": False,
             "options": {"num_gpu": num_gpu_layers},
         },
-        timeout=600,  # partial-offload cold start is slower than a warm call
+        # Bounded, and short enough that a wedged request is caught in
+        # minutes rather than blocking a sweep indefinitely. Measured:
+        # a normal chart takes 45-75s on this hardware, so 180s is ~2.5x
+        # headroom. Real incident this guards against: one corpus image
+        # made Ollama hang past a 600s timeout entirely, stalling a
+        # 12-chart sweep for 15 minutes on its 4th item.
+        timeout=timeout_seconds,
     )
     response.raise_for_status()
 
