@@ -1,24 +1,20 @@
 import { useState } from 'react'
-import { SourcesRail } from '../components/workbench/SourcesRail'
+import { Sidebar } from '../components/workbench/Sidebar'
 import { ChatPane } from '../components/workbench/ChatPane'
-import { PlanRail } from '../components/workbench/PlanRail'
 import { ApprovalModal } from '../components/workbench/ApprovalModal'
 
 /**
- * WorkbenchPage — the "/" route.
- * Three-pane workbench layout with interactive Approval Modal.
+ * WorkbenchPage — Clean two-pane layout:
+ * Left: Unified Collapsible Sidebar (Header, Sources/Chats accordion, User footer)
+ * Center: Full-height Chat Pane (Inline live-thinking trace + persistent bottom System Monitor)
  */
 export function WorkbenchPage() {
   const [modalOpen, setModalOpen] = useState(false)
 
   return (
-    <div
-      className="flex h-full overflow-hidden relative"
-      style={{ minWidth: 1200 }}
-    >
-      <SourcesRail />
+    <div className="flex h-full w-full overflow-hidden relative">
+      <Sidebar />
       <ChatPane />
-      <PlanRail />
 
       {/* ── Human Approval Gate Modal (Ready for Day 6 trigger) ─────── */}
       <ApprovalModal
