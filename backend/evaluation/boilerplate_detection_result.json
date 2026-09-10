@@ -8,13 +8,13 @@
     "03_Quality_and_Process_Data\\Novolen_Batch_QA_Report_Aug2026.pdf": 2,
     "03_Quality_and_Process_Data\\PSA_Hydrogen_Purity_Trend_Log.xlsx": 3,
     "03_Quality_and_Process_Data\\Sulphur_Spec_Compliance_LabSheet.xlsx": 1,
-    "04_SAP_Mock_Exports\\SAP_Mock_Materials_Master_Export.xlsx": 3,
+    "04_SAP_Mock_Exports\\SAP_Mock_Materials_Master_Export.xlsx": 2,
     "05_Correspondence\\Correspondence_Depot_HQ_Thread_Kasargod.docx": 1,
     "06_Diagrams_and_Scans\\Hydrocracker_PID_Schematic.png": 1,
     "06_Diagrams_and_Scans\\Pipeline_Segment_Map_Mangalore_Hassan.png": 1,
     "06_Diagrams_and_Scans\\Scanned_Inspection_Checklist_CCR1.png": 1
   },
-  "total_chunks": 22,
+  "total_chunks": 21,
   "errors": {},
   "boilerplate_sentences": [
     "it does not represent an actual mrpl internal document.",
