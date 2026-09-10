@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ReactFlow,
@@ -65,7 +65,7 @@ export function PlanGraphView({ plan = [], onNodeClick }) {
   const navigate = useNavigate()
 
   // Build raw React Flow nodes & edges from the PlanStep array
-  const { initialNodes, initialEdges } = useMemo(() => {
+  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(() => {
     const rawNodes = plan.map((step) => ({
       id: step.id || step.step_id,
       type: 'planStep',
@@ -115,8 +115,13 @@ export function PlanGraphView({ plan = [], onNodeClick }) {
     return getLayoutedElements(rawNodes, rawEdges, 'TB')
   }, [plan])
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes)
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges)
+  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges)
+
+  useEffect(() => {
+    setNodes(layoutedNodes)
+    setEdges(layoutedEdges)
+  }, [layoutedNodes, layoutedEdges, setNodes, setEdges])
 
   const handleNodeClick = useCallback(
     (event, node) => {
