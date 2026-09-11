@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Activity, AlertTriangle, CheckCircle2, Database, FolderSearch,
+  Activity, AlertTriangle, CheckCircle2, FolderSearch,
   Image as ImageIcon, Layers, Network, Scatter3D, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../lib/pipelineApi'

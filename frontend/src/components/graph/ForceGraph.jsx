@@ -127,7 +127,7 @@ export function ForceGraph({
     window.addEventListener('resize', resize)
 
     const visible = (n) => !labelFilter || n.labels.includes(labelFilter)
-    const radius = (n, st) =>
+    const radius = (n) =>
       5 + Math.min(n.degree, 8) * 1.4 + (n.id === selectedId ? 2 : 0)
 
     const step = () => {
