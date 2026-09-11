@@ -65,26 +65,74 @@ def test_empty_corpus_is_explicitly_not_found():
     assert result.reason == "No documents in the corpus matched this query."
 
 
-def test_wildly_unrelated_query_can_trigger_low_confidence_refusal():
-    """Not a hard guarantee for every possible off-topic query (embedding
-    similarity is continuous, not binary), but a query about something
-    completely foreign to a narrow 3-document corpus should score low
-    enough, relative to how well those documents match EACH OTHER's
-    vocabulary, to demonstrate the threshold path is actually reachable
-    — not just a branch that only ever returns True in practice."""
-    from backend.retrieval.grounded_retrieval import CONFIDENCE_THRESHOLD, retrieve_with_grounding_check
+def test_wildly_unrelated_query_is_refused():
+    """This test used to accept EITHER outcome — it asserted only that
+    the function ran, with a docstring reasoning that "either outcome is
+    legitimate depending on how the embedding model happens to score
+    this". A test that passes whether or not the feature works tests
+    nothing, and this is the exact test that let a completely dead
+    refusal gate through unnoticed: the old implementation computed
+    (top - min) / (max - min) where top IS max, so it was always exactly
+    1.0 and the refusal branch was unreachable. Measured across 16
+    questions spanning in-corpus to "the plot of Pride and Prejudice",
+    it refused 0 of 16.
+
+    So this now asserts the actual behaviour. If the embedding model is
+    swapped and this fails, that is the test doing its job — recalibrate
+    with backend/evaluation/calibrate_confidence.py rather than
+    weakening the assertion back to "either is fine"."""
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
     store = _build_store()
     result = retrieve_with_grounding_check(
-        store, "what is the recipe for chocolate chip cookies", top_k=3
+        store, "what is the plot of Pride and Prejudice", top_k=3
     )
 
-    # Either outcome is legitimate depending on how the embedding model
-    # happens to score this — what matters is the function runs the real
-    # comparison against CONFIDENCE_THRESHOLD, not that it always refuses.
-    if not result.found:
-        assert result.reason == "not found in the provided corpus"
-    assert isinstance(CONFIDENCE_THRESHOLD, float)
+    assert result.found is False
+    assert result.chunks == []
+    assert result.reason == "not found in the provided corpus"
+
+
+def test_in_corpus_query_is_not_refused():
+    """The inverse guard, and the one that stops an over-tight threshold
+    from shipping. A gate that refuses everything satisfies the test
+    above perfectly while being just as broken as one that refuses
+    nothing — both were observed during this fix."""
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+    store = _build_store()
+    result = retrieve_with_grounding_check(store, "hydrocracker catalyst WABT", top_k=3)
+
+    assert result.found is True
+    assert result.chunks
+
+
+def test_confidence_is_measured_on_similarity_not_on_fused_rank():
+    """Pins the actual mechanism, not just its output.
+
+    Reciprocal Rank Fusion scores on RANK and discards similarity
+    magnitude — some chunk is always rank 1, so its fused score is
+    identical whether the corpus answers the question or has nothing to
+    do with it. No function of fused ranks can distinguish those, which
+    is why the gate reads dense similarity directly. If someone later
+    "simplifies" this back to using the fused score, the refusal above
+    silently dies again; this test fails loudly instead, because a
+    corpus where every fused score is identical must still refuse an
+    unrelated query."""
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+    from backend.retrieval.hybrid_search import rrf_fuse
+
+    store = _build_store()
+    query = "what is the plot of Pride and Prejudice"
+
+    fused = rrf_fuse(store, query, 3)
+    # Every candidate is rank-1-ish in fusion terms; the fused scores
+    # carry no signal about relevance at all.
+    assert fused, "expected candidates to exist"
+    assert max(fused.values()) > 0
+
+    # ...and yet the query is still correctly refused.
+    assert retrieve_with_grounding_check(store, query, top_k=3).found is False
 
 
 def test_single_document_corpus_has_no_denominator_to_normalize_against():

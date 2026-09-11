@@ -178,3 +178,105 @@ Zero change on every individual question for fused retrieval. Only BM25-alone im
 2. Build the user an interactive way to browse chunks / images / embeddings / chunking behavior (semantic vs recursive) themselves — explicitly requested, not started.
 3. Decide on merging `origin/advay/frontend`.
 4. Optional: GPU torch in a dedicated venv (embeddings/OCR are CPU-only today; Ollama already uses the GPU fine).
+
+## UPDATE 4 (same session) — all 8 outstanding items worked; two CRITICAL bugs found
+
+Branch `aryan/rag-and-graphrag`. Everything below is measured, not asserted; each has a harness under `backend/evaluation/` that reproduces it.
+
+### CRITICAL 1 — NFR-4's refusal gate was unreachable code (FIXED, `ae7214c`)
+RAG_SPEC §3's confidence gate computed `(top - min) / (max - min)` where `top` IS `max` — always exactly `1.0`, so `1.0 < 0.35` never fired. **Measured: refused 0 of 16 questions**, including "What is the plot of Pride and Prejudice?" against a refinery corpus. Q9 passed only because the generation model declined on its own.
+
+Fixing the arithmetic does not rescue it: **RRF scores on RANK and discards magnitude** — something is always rank 1 — so no function of fused ranks can express "nothing here is relevant". The gate now reads raw dense cosine, threshold **0.60** chosen from measured separation (in-corpus 0.636–0.795 vs out 0.344–0.580; `calibrate_confidence.py`). After: refused 8/16 — in_scope **0/5**, off_domain **3/3**, unrelated **4/4**.
+- Limitation, documented at the constant: gap is narrow (0.056), calibrated on ONE 21-chunk corpus — **re-measure against the real MRPL corpus before the venue**. "Adjacent" questions (right domain, absent entity, e.g. HCU-9) straddle it, because embeddings encode topic not entity identity.
+- The old test accepted **either outcome** ("either is legitimate") — which is why a dead gate survived. Replaced with assertions in both directions plus one pinning that confidence comes from similarity, not fused rank.
+
+### CRITICAL 2 — the vision model invents numbers and calls them printed (MEASURED)
+12 generated charts as matched pairs (identical data, one WITH printed labels, one WITHOUT) — `generate_chart_corpus.py` + `chart_stress_test.py`, live report at `backend/evaluation/CHART_STRESS_REPORT.md` (embeds each chart image next to the model's full description).
+
+| measure | result |
+|---|---|
+| chart type / title | 100% / 100% |
+| category labels | 46% |
+| printed-value recall (labeled) | 88% |
+| **fabricated values (unlabeled)** | **10 across 2 of 6 charts** |
+
+`purity_unlabeled.png` (no printed numbers at all) produced twelve figures described as *"the numeric values printed as text on the chart"* — it read Y-axis ticks and presented them as data. This is an estimate misrepresented as a transcription; `is_estimate=True` is the only thing between it and a fabricated measurement in an MRPL report.
+
+### Graph relationship validity (FIXED, `a14eee8`)
+**8 of 11 extracted relationships violated GRAPH_SPEC §4's own domain/range table** and passed validation, which checked the type STRING and endpoint NAMES but never endpoint TYPES. Direct cause of the signature query returning no related incidents. Violations are now dropped, never auto-corrected. Also changed §5's verbatim prompt: it offered five relationship types, but REFERENCES/APPLIES_TO/AUTHORED_BY all have `Document` as domain and `Document` is never extracted from chunk text — three of five were **structurally impossible**, which is what invited the misuse. **A/B still to run**: `extraction_prompt_ab.py` (needs Ollama free).
+
+### Metrics no longer saturated (`3ef3d61`)
+precision@5 and recall@5 both sit at 100% of ceiling and can detect neither improvement nor regression. **MRR 0.812 / MAP 0.779**, 6 of 8 ranked first — two questions rank their correct document 4th, invisible to the old metrics.
+
+### Neo4j persistence PROVEN (`#3`)
+Container restarted deliberately: 101 nodes / 115 relationships survived. The volume fix works. Graph had been lost again earlier (pre-volume container) and was rebuilt from the committed cache in seconds, zero LLM calls.
+
+### Frontend — console shipped into the app (`9e16796`)
+`GraphExplorerPage` (full-page force-directed graph: drag, cursor-anchored zoom, label filter, search-and-centre, node inspector showing every property and every edge WITH ITS TYPE) and `KnowledgeBasePage` (chunks + all images with OCR text, chart readings tagged ESTIMATE, ground truth, invented values named). Fills `/graph` and `/sources`, both already reserved as stubs in FRONTEND.md §2. TOOLS.md rows 63/64 added.
+- **NOT routed and NOT run**: `App.jsx` belongs to `advay/frontend`; the two-line change is written up in `frontend/src/pages/README_INTEGRATION.md`. No `package.json` on this branch, so nothing has rendered in a browser — treat first run after merge as a first run.
+- Data: static snapshots in `frontend/public/pipeline/` from `export_frontend_assets.py`. `images.json` (~3.3MB base64) is gitignored and regenerated.
+- Standalone artifact version: https://claude.ai/code/artifact/bc69e707-02f4-49d0-adf8-d8813af305d1
+
+### `advay/frontend` merge — SAFE, verified read-only
+`git merge-tree` simulation: **zero conflicts**. My `qwen2.5vl:7b` fix survives (their stale `qwen2-vl:7b` does not come back), CARD 13 row survives, all 42 frontend files arrive. Their docs/ copies are stale-but-untouched, so 3-way merge keeps mine. Merging remains the user's call.
+
+### GPU offload claim in `989933b` was WRONG — corrected
+That commit claimed "1.7x faster via partial GPU offload". It is false, and the way it was false is the lesson: the benchmark ran `ollama stop` before every arm, so **every measurement was a cold load**, and the spread it credited to GPU offload was load-time variance.
+
+Re-measured with cold AND warm timings per arm, and `ollama ps` actually inspected instead of inferred:
+
+| num_gpu | cold | warm | ollama ps |
+|---|---|---|---|
+| (unset) | 86.7s | 6.9s | **100% CPU** |
+| 12 | 59.3s | 11.9s | **100% CPU** |
+| 99 | 57.6s | 8.9s | **100% CPU** |
+
+`num_gpu=99` means "every layer on GPU" and still reports 100% CPU, with nvidia-smi at ~200MiB. **The option does nothing on this box** — the model is 13GB against an 8GB card and Ollama places it entirely on CPU regardless.
+
+The real effect, hidden by making every run cold: **model residency, 86.7s → 6.9s (~12x)**. Anything issuing many vision calls should keep the model loaded rather than let it unload. The `num_gpu` parameter is kept (costs nothing, may help on venue hardware) but is no longer presented as a measured speedup. The DEPENDENCIES.md correction in that commit (13GB measured vs "~5GB" documented) is independently verified and stands.
+
+### Harnesses added this session
+`refusal_at_scale.py`, `calibrate_confidence.py`, `generate_chart_corpus.py`, `chart_stress_test.py` (live markdown + resume that RE-SCORES rather than trusting cached scores), `precision_ceiling_analysis.py`, `retrieval_metrics.py`, `export_inspection_data.py`, `export_image_data.py`, `export_frontend_assets.py`, `extraction_prompt_ab.py`.
+
+### Recurring bug class worth remembering
+Three separate stale/self-deceiving-measurement bugs this session: a committed JSON artifact outliving the code that made it (ceiling numbers, corrected in `b2202ce`); a resume path caching a SCORE rather than the expensive model output (chart sweep — fixed to re-score); and a scorer whose `%g` formatting made whole-number values like `4.0` unmatchable, which understated fabrication 5x and deflated recall. **Anything derived from a stored artifact needs its provenance checked before it is trusted.**
+
+## UPDATE 5 — Aryan's scope COMPLETE; ready to merge to main
+
+Branch `aryan/rag-and-graphrag`, 47 commits ahead of `main`. **289 passed, 12 skipped.** The 12 skips are Neo4j being down on this box (Docker Desktop stopped) and one unpulled router model — not regressions, and the API degrades correctly under both.
+
+### Everything in Aryan.md's "Scope of Ownership" is now built and tested
+
+| Aryan.md item | Status |
+|---|---|
+| Model registry + router (§C 20-22) | ✅ registry, router, **planner**, **dispatch**, **sub-agent contracts** |
+| Hybrid RAG + GraphRAG (§B 12-14, 17) | ✅ incl. the refusal gate, which was dead code |
+| Vision model integration | ✅ + measured: it invents numbers (see UPDATE 4) |
+| Math tools as callable agent tools (§D) | ✅ **tool registry — they are now actually callable** |
+| Day 7: "confirm no LLM does arithmetic unverified" | ✅ **NFR-5 asserted structurally, not behaviourally** |
+| Day 8: self-verification agent | ✅ fails closed, 3 outcomes incl. UNCONFIRMED |
+
+### What landed after UPDATE 4
+
+- **Tool registry** (`backend/tools/registry.py`, row 65) — 15 tools, schemas DERIVED from type hints + docstrings. `requires_approval` / `is_estimate` / `computes_numbers` enforced **in the dispatcher**, so the gate cannot be forgotten by whoever adds the next tool.
+- **Human approval gate** (`backend/audit/`, rows 67-68) — hard constraint #4 had no implementation. Approval is per-call (argument-hashed), single-use, expires, and shows the **effect** not the call. No auto-approve flag exists, deliberately. Append-only audit log with no update path, asserted by test.
+- **Planner + dispatch + verification** (`backend/orchestrator/`, rows 69-71) — AGENTS_SPEC §3/§4/§5/§6. Prompts verbatim. §6's contracts are closed tool sets, not prose.
+- **New tools**: NumPy trend/projection (28), Matplotlib plotting (31), `draft_docx` (38, the first gated tool), MRPL catalyst/hydrogen/PSA (51-53).
+- **FastAPI backend** (`backend/main.py`) — 20 routes. Loopback-bound; `/docs` disabled because the default Swagger page fetches JS from a CDN.
+- **Instrumentation view** + `GraphExplorerPage` + `KnowledgeBasePage`.
+- **Source tracking** (`SOURCES_SPEC.md`) — watched folders, newest-first queue, images retrievable with both OCR and description, page previews from the user's own file.
+
+### Bugs found by my own tests, worth remembering
+
+- `list[float]` generated `{"type":"number"}` — the model would be told to send `5` where the tool takes `[5]`, then fail on input its own schema requested.
+- `analyse_trend` called a noisy series "increasing" while its own `fit_quality` field said "no reliable linear trend" — two contradictory claims in one return value.
+- `/api/graph` served 0 nodes as "live", conflating *reachable* with *populated*.
+- A planner test asserted the **worse** behaviour (raise on a tangled plan); the cycle-breaker repairs it, which is better. That surfaced a real invariant: after repairs the graph is a finite DAG, so the "nothing can start" guard is unreachable by construction — kept as a documented backstop.
+
+### What this unblocks for everyone else
+
+- **Aditya** — `code_agent` is the one sub-agent with an empty tool set and it RAISES pending CARD 04. `backend/sandbox/` is free; wire it to `run_code_step` in `dispatch.py`. SAP connector: any write must register with `requires_approval=True` and go through `ApprovalGate` — the dispatcher enforces it, there is nowhere for a write to hide.
+- **Advay** — `frontend/src/pages/README_INTEGRATION.md` has the exact 3-line routing diff. `ApprovalModal.jsx` now has a real backend: `POST /api/approvals/request|approve|refuse|execute`. Merge is verified conflict-free by `git merge-tree`.
+- **Netal** — `/api/graph` returns all nodes with every property + typed edges. `GraphExplorerPage.jsx` is a working reference implementation to take over or replace.
+- **Sahil** — OCR/vision are registered tools with schemas; `/api/tools` lists them. The chart-reading fabrication measurement (`CHART_STRESS_REPORT.md`) is the evidence for how the trace UI must label estimates.
+- **Kanishka** — `draft_docx` is the gated-output reference: citations structural, `UNSOURCED` marked in the file, estimate warnings printed in the document. XLSX generation (row 39) should follow the same shape.

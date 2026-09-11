@@ -35,6 +35,42 @@ VALID_RELATIONSHIP_TYPES = [
     "REFERENCES", "APPLIES_TO", "LOCATED_ON", "AUTHORED_BY", "REPORTS_INCIDENT_AT",
 ]
 
+# GRAPH_SPEC.md §4's relationship table, as executable domain/range
+# constraints: {type: (allowed FROM types, allowed TO types)}.
+#
+# WHY THIS EXISTS. The validation below already checked that a
+# relationship's TYPE string is legal, that both endpoint NAMES refer to
+# entities that survived validation, and that it isn't self-referential
+# — but never that the endpoints are the right KINDS of thing for that
+# relationship. Measured against the real 21-chunk extraction cache,
+# 8 of 11 extracted relationships violated the spec's own table and
+# passed straight through: Equipment "LOCATED_ON" an Incident (three
+# separate times), Incident "REPORTS_INCIDENT_AT" another Incident,
+# PipelineSegment "APPLIES_TO" an Incident. LOCATED_ON in particular was
+# being used by the model as a generic "is associated with".
+#
+# This is also the direct cause of the signature query returning no
+# related incidents: GRAPH_SPEC.md §6's query looks for
+# (inc:Incident)-[:REPORTS_INCIDENT_AT]->(seg), while the Hassan
+# incident had been extracted as Incident-[LOCATED_ON]->Equipment —
+# wrong type AND wrong domain, so it matched nothing.
+#
+# Violations are DROPPED, never auto-corrected. Rewriting a wrong
+# LOCATED_ON into a plausible REPORTS_INCIDENT_AT would be inferring a
+# relationship the text may not support, which is exactly what §5's
+# extraction prompt forbids. Dropping loses information; guessing
+# invents it, and an invented edge is indistinguishable downstream from
+# a real one.
+RELATIONSHIP_DOMAIN_RANGE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "REFERENCES": (frozenset({"Document"}), frozenset({"Equipment", "PipelineSegment"})),
+    "APPLIES_TO": (frozenset({"Document"}), frozenset({"Equipment", "PipelineSegment"})),
+    "LOCATED_ON": (frozenset({"Equipment"}), frozenset({"PipelineSegment"})),
+    "AUTHORED_BY": (frozenset({"Document"}), frozenset({"Person"})),
+    "REPORTS_INCIDENT_AT": (
+        frozenset({"Incident"}), frozenset({"Equipment", "PipelineSegment"})
+    ),
+}
+
 # Verbatim per GRAPH_SPEC.md §5 — do not paraphrase. Built as a fixed
 # prefix + chunk_text concatenation, NOT str.format(): the prompt's own
 # JSON-schema description contains literal { } characters (e.g.
@@ -45,12 +81,42 @@ _EXTRACTION_PROMPT_PREFIX = (
     'object with two keys: "entities" (list of {"type": one of '
     '["Equipment","PipelineSegment","Person","Incident"], "name": string, '
     '"attributes": object}) and "relationships" (list of {"from": string, "to": '
-    'string, "type": one of '
-    '["REFERENCES","APPLIES_TO","LOCATED_ON","AUTHORED_BY","REPORTS_INCIDENT_AT"]}). '
+    'string, "type": one of ["LOCATED_ON","REPORTS_INCIDENT_AT"]}).\n\n'
+    'A relationship is only valid between specific entity types. These are the '
+    'ONLY two valid combinations:\n'
+    '  - "LOCATED_ON": from an Equipment to a PipelineSegment (physical association)\n'
+    '  - "REPORTS_INCIDENT_AT": from an Incident to an Equipment or a PipelineSegment\n\n'
+    'If a connection you notice does not fit one of those two combinations exactly, '
+    'omit it. Do not substitute a different relationship type to express it, and do '
+    'not reverse the direction to make it fit. An omitted relationship is correct; '
+    'a wrongly-typed one is not.\n\n'
     'Only extract what is explicitly stated in the text. Do not infer relationships '
     'that are not directly supported by the text.\n\n'
     'TEXT:\n'
 )
+# WHY THIS DEPARTS FROM GRAPH_SPEC.md §5's VERBATIM PROMPT (deliberate,
+# measured, and the spec should be updated to match — see the A/B in
+# backend/evaluation/extraction_prompt_ab.py):
+#
+# §5's prompt offers the model all five extractable relationship types,
+# but three of them — REFERENCES, APPLIES_TO, AUTHORED_BY — have
+# `Document` as their domain per §4's table, and `Document` is
+# deliberately NOT in VALID_ENTITY_TYPES (§3: Document nodes are created
+# by the ingestion pipeline, never extracted from chunk text). So those
+# three types are STRUCTURALLY IMPOSSIBLE to extract validly: there is
+# no code path by which a chunk-level extraction can produce a legal
+# one. Offering them anyway is not neutral — it actively invites misuse.
+# Measured on the real 21-chunk corpus with the original prompt, 8 of 11
+# relationships violated §4's domain/range table, and the single most
+# common failure was the model reaching for an impossible type
+# (APPLIES_TO from an Equipment, LOCATED_ON into an Incident) to express
+# an association that had no legal representation available to it.
+#
+# Naming only the two achievable combinations, and saying explicitly
+# that omission beats a wrong type, addresses the cause rather than
+# filtering the symptom downstream. The domain/range validation in
+# RELATIONSHIP_DOMAIN_RANGE stays regardless — defense in depth, since a
+# model can still emit a wrong pairing however the prompt is worded.
 
 
 def _build_extraction_prompt(chunk_text: str) -> str:
@@ -152,6 +218,7 @@ def extract_entities_and_relationships(
         valid_entities.append(ExtractedEntity(**entry))
 
     valid_names = {e.name for e in valid_entities}
+    entity_types = {e.name: e.type for e in valid_entities}
     valid_relationships = []
     for entry in raw_relationships:
         if entry.get("type") not in VALID_RELATIONSHIP_TYPES:
@@ -170,6 +237,16 @@ def extract_entities_and_relationships(
         # the type were individually valid, so without this check it
         # would have silently passed straight through.
         if entry.get("from") == entry.get("to"):
+            continue
+        # Endpoint TYPES must match GRAPH_SPEC.md §4's domain/range for
+        # this relationship type — see RELATIONSHIP_DOMAIN_RANGE above
+        # for the real violations this catches and why they are dropped
+        # rather than corrected.
+        allowed_from, allowed_to = RELATIONSHIP_DOMAIN_RANGE[entry["type"]]
+        if (
+            entity_types.get(entry["from"]) not in allowed_from
+            or entity_types.get(entry["to"]) not in allowed_to
+        ):
             continue
         valid_relationships.append(ExtractedRelationship(**entry))
 

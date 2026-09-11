@@ -1,0 +1,230 @@
+[
+  {
+    "filename": "downtime_labeled.png",
+    "chart_type": "bar",
+    "title": "Downtime by Equipment (hrs) - Q3 2026",
+    "has_printed_labels": true,
+    "printed_values": {
+      "R-201": 18.5,
+      "R-101": 6.0,
+      "K-201": 9.5,
+      "CCR-1": 4.0,
+      "CCR-2": 12.0,
+      "PSA-3": 7.0
+    },
+    "categories": [
+      "R-201",
+      "R-101",
+      "K-201",
+      "CCR-1",
+      "CCR-2",
+      "PSA-3"
+    ]
+  },
+  {
+    "filename": "downtime_unlabeled.png",
+    "chart_type": "bar",
+    "title": "Downtime by Equipment (hrs) - Q3 2026",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "R-201",
+      "R-101",
+      "K-201",
+      "CCR-1",
+      "CCR-2",
+      "PSA-3"
+    ]
+  },
+  {
+    "filename": "purity_labeled.png",
+    "chart_type": "line",
+    "title": "PSA-3 Hydrogen Purity Trend",
+    "has_printed_labels": true,
+    "printed_values": {
+      "Week 1": 99.6,
+      "Week 2": 99.4,
+      "Week 3": 99.1,
+      "Week 4": 99.7,
+      "Week 5": 99.9,
+      "Week 6": 99.2
+    },
+    "categories": [
+      "Week 1",
+      "Week 2",
+      "Week 3",
+      "Week 4",
+      "Week 5",
+      "Week 6"
+    ]
+  },
+  {
+    "filename": "purity_unlabeled.png",
+    "chart_type": "line",
+    "title": "PSA-3 Hydrogen Purity Trend",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "Week 1",
+      "Week 2",
+      "Week 3",
+      "Week 4",
+      "Week 5",
+      "Week 6"
+    ]
+  },
+  {
+    "filename": "psa_causes_labeled.png",
+    "chart_type": "pie",
+    "title": "PSA Downtime Causes - Q3 2026",
+    "has_printed_labels": true,
+    "printed_values": {
+      "Adsorbent Bed Degradation": 14.0,
+      "Valve Cycling Fault": 5.5,
+      "Instrument Air Loss": 2.0,
+      "Scheduled Maintenance": 6.5
+    },
+    "categories": [
+      "Adsorbent Bed Degradation",
+      "Valve Cycling Fault",
+      "Instrument Air Loss",
+      "Scheduled Maintenance"
+    ]
+  },
+  {
+    "filename": "psa_causes_unlabeled.png",
+    "chart_type": "pie",
+    "title": "PSA Downtime Causes - Q3 2026",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "Adsorbent Bed Degradation",
+      "Valve Cycling Fault",
+      "Instrument Air Loss",
+      "Scheduled Maintenance"
+    ]
+  },
+  {
+    "filename": "sulphur_labeled.png",
+    "chart_type": "line",
+    "title": "Kero Merox Sulphur vs Spec Limit",
+    "has_printed_labels": true,
+    "printed_values": {
+      "08-01": 6.2,
+      "08-05": 7.8,
+      "08-08": 4.1,
+      "08-12": 9.4,
+      "08-15": 8.9,
+      "08-19": 11.2,
+      "08-22": 2.7,
+      "08-26": 5.5
+    },
+    "categories": [
+      "08-01",
+      "08-05",
+      "08-08",
+      "08-12",
+      "08-15",
+      "08-19",
+      "08-22",
+      "08-26"
+    ]
+  },
+  {
+    "filename": "sulphur_unlabeled.png",
+    "chart_type": "line",
+    "title": "Kero Merox Sulphur vs Spec Limit",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "08-01",
+      "08-05",
+      "08-08",
+      "08-12",
+      "08-15",
+      "08-19",
+      "08-22",
+      "08-26"
+    ]
+  },
+  {
+    "filename": "vendor_labeled.png",
+    "chart_type": "bar",
+    "title": "Inventory Value by Vendor (Rs. Crore)",
+    "has_printed_labels": true,
+    "printed_values": {
+      "VEND-1042": 15.06,
+      "VEND-1077": 7.6,
+      "VEND-2033": 3.59,
+      "VEND-2091": 0.74,
+      "VEND-3010": 0.73,
+      "VEND-5001": 2.97
+    },
+    "categories": [
+      "VEND-1042",
+      "VEND-1077",
+      "VEND-2033",
+      "VEND-2091",
+      "VEND-3010",
+      "VEND-5001"
+    ]
+  },
+  {
+    "filename": "vendor_unlabeled.png",
+    "chart_type": "bar",
+    "title": "Inventory Value by Vendor (Rs. Crore)",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "VEND-1042",
+      "VEND-1077",
+      "VEND-2033",
+      "VEND-2091",
+      "VEND-3010",
+      "VEND-5001"
+    ]
+  },
+  {
+    "filename": "sulphur_grouped_labeled.png",
+    "chart_type": "grouped_bar",
+    "title": "Sulphur Actual vs Spec Limit",
+    "has_printed_labels": true,
+    "printed_values": {
+      "08-01": 6.2,
+      "08-05": 7.8,
+      "08-08": 4.1,
+      "08-12": 9.4,
+      "08-15": 8.9,
+      "08-19": 11.2,
+      "08-22": 2.7,
+      "08-26": 5.5
+    },
+    "categories": [
+      "08-01",
+      "08-05",
+      "08-08",
+      "08-12",
+      "08-15",
+      "08-19",
+      "08-22",
+      "08-26"
+    ]
+  },
+  {
+    "filename": "sulphur_grouped_unlabeled.png",
+    "chart_type": "grouped_bar",
+    "title": "Sulphur Actual vs Spec Limit",
+    "has_printed_labels": false,
+    "printed_values": {},
+    "categories": [
+      "08-01",
+      "08-05",
+      "08-08",
+      "08-12",
+      "08-15",
+      "08-19",
+      "08-22",
+      "08-26"
+    ]
+  }
+]
