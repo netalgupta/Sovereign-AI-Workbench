@@ -392,6 +392,145 @@ def call_tool_endpoint(body: ToolCallRequest) -> dict:
     return {"result": result}
 
 
+# -------------------------------------------------------------- approvals
+
+def _gate():
+    from backend.audit.approval_gate import ApprovalGate
+
+    return ApprovalGate()
+
+
+class ApprovalRequestBody(BaseModel):
+    tool_name: str
+    arguments: dict
+    effect: str = ""
+
+
+@router.post("/approvals/request")
+def request_approval(body: ApprovalRequestBody) -> dict:
+    """Ask a human to approve one specific gated call.
+
+    The `effect` is what the person actually reads. When the tool can
+    describe its own effect (draft_docx does), that description is used
+    rather than the caller's — a tool knows things the caller does not,
+    such as whether the target file already exists and will be
+    overwritten, or which sections have no sources.
+    """
+    from backend.tools import catalog  # noqa: F401
+    from backend.tools.registry import get_tool
+
+    spec = get_tool(body.tool_name)
+    if spec is None:
+        raise HTTPException(404, detail=f"No tool named {body.tool_name!r}")
+    if not spec.requires_approval:
+        raise HTTPException(
+            400,
+            detail=(
+                f"{body.tool_name} is not gated — call it directly via /api/tools/call. "
+                "Routing an ungated tool through the approval queue trains people to "
+                "click yes on things that did not need it."
+            ),
+        )
+
+    effect = body.effect
+    if body.tool_name == "draft_docx":
+        from backend.tools.documents.draft_docx import describe_effect
+
+        try:
+            effect = describe_effect(
+                body.arguments.get("title", ""),
+                body.arguments.get("sections", []),
+                body.arguments.get("output_path", ""),
+            )
+        except Exception:  # noqa: BLE001 — a bad payload is the human's to judge
+            pass
+
+    request = _gate().request(body.tool_name, body.arguments, effect or "(no description given)")
+    return request.model_dump(exclude={"token"})
+
+
+@router.get("/approvals")
+def list_approvals() -> dict:
+    """Everything awaiting a human decision. Tokens are never included."""
+    return {"pending": [r.model_dump(exclude={"token"}) for r in _gate().pending()]}
+
+
+class DecisionBody(BaseModel):
+    request_id: str
+    decided_by: str
+    reason: str = ""
+
+
+@router.post("/approvals/approve")
+def approve(body: DecisionBody) -> dict:
+    """Grant approval and return the single-use token.
+
+    `decided_by` is recorded in the audit log and must identify a PERSON.
+    It is the answer to "who approved this", which is the question the
+    whole gate exists to be able to answer months later.
+    """
+    from backend.audit.approval_gate import ApprovalDenied
+
+    try:
+        request = _gate().approve(body.request_id, approved_by=body.decided_by)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except ApprovalDenied as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    return request.model_dump()
+
+
+@router.post("/approvals/refuse")
+def refuse(body: DecisionBody) -> dict:
+    from backend.audit.approval_gate import ApprovalDenied
+
+    try:
+        request = _gate().refuse(body.request_id, refused_by=body.decided_by, reason=body.reason)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except ApprovalDenied as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    return request.model_dump(exclude={"token"})
+
+
+class ExecuteBody(BaseModel):
+    request_id: str
+    token: str
+
+
+@router.post("/approvals/execute")
+def execute_approved(body: ExecuteBody) -> dict:
+    """Consume an approval and run the tool it authorised.
+
+    The only path from an approval to an effect. Execution and its audit
+    entry are bound together in the gate, so there is no way to run a
+    gated tool and forget to record it.
+    """
+    from backend.audit.approval_gate import ApprovalDenied
+
+    try:
+        result = _gate().execute_approved(body.request_id, body.token)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except ApprovalDenied as exc:
+        raise HTTPException(403, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+    return {"result": result.model_dump() if hasattr(result, "model_dump") else result}
+
+
+@router.get("/audit")
+def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None = None) -> dict:
+    """The audit log. Read-only by construction — there is no write route,
+    and the log itself has no update path."""
+    from backend.audit.audit_log import AuditLog
+
+    log = AuditLog()
+    entries = log.for_request(request_id) if request_id else log.entries(limit=limit)
+    return {"entries": [e.model_dump() for e in entries]}
+
+
 # ---------------------------------------------------------------- search
 
 class SearchRequest(BaseModel):
