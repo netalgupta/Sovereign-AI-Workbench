@@ -42,3 +42,8 @@ document_registry/
 # install did and who approved it. Never shared between machines — an
 # audit log is evidence about one deployment, not project source.
 audit/
+
+# Built standalone console: ~3.4MB of base64 images derived entirely from
+# files already tracked in the corpus directories. Regenerate with
+#   python frontend/standalone/build_console.py
+frontend/standalone/workbench_console.html
