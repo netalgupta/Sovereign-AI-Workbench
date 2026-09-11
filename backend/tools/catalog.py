@@ -87,50 +87,60 @@ def register_all() -> None:
 
     # ---- vision ----------------------------------------------------------
 
-    from backend.tools.vision.ocr_printed import extract_printed_text
-    from backend.tools.vision.chart_understanding import describe_chart_image
+    try:
+        from backend.tools.vision.ocr_printed import extract_printed_text
 
-    tool(
-        name="extract_printed_text",
-        description=(
-            "Read printed text from an image or scan using local OCR. Use for "
-            "scanned documents, equipment nameplates, and printed labels. Not for "
-            "handwriting — accuracy on handwritten text is poor and unmarked."
-        ),
-        category="vision",
-        priority="🔴",
-        tools_md_row=1,
-    )(extract_printed_text)
+        tool(
+            name="extract_printed_text",
+            description=(
+                "Read printed text from an image or scan using local OCR. Use for "
+                "scanned documents, equipment nameplates, and printed labels. Not for "
+                "handwriting — accuracy on handwritten text is poor and unmarked."
+            ),
+            category="vision",
+            priority="🔴",
+            tools_md_row=1,
+        )(extract_printed_text)
+    except ImportError:
+        pass
 
-    tool(
-        name="describe_chart_image",
-        description=(
-            "Describe what a chart IMAGE shows using a vision model. The output is "
-            "an ESTIMATE, never a measurement: on charts with no printed numbers "
-            "this model has been measured stating specific figures that were not "
-            "there. Never present its numbers as data. If the chart came from a "
-            "spreadsheet, use the exact cached values instead."
-        ),
-        category="vision",
-        priority="🟡",
-        is_estimate=True,
-        tools_md_row=62,
-    )(describe_chart_image)
+    try:
+        from backend.tools.vision.chart_understanding import describe_chart_image
+
+        tool(
+            name="describe_chart_image",
+            description=(
+                "Describe what a chart IMAGE shows using a vision model. The output is "
+                "an ESTIMATE, never a measurement: on charts with no printed numbers "
+                "this model has been measured stating specific figures that were not "
+                "there. Never present its numbers as data. If the chart came from a "
+                "spreadsheet, use the exact cached values instead."
+            ),
+            category="vision",
+            priority="🟡",
+            is_estimate=True,
+            tools_md_row=62,
+        )(describe_chart_image)
+    except ImportError:
+        pass
 
     # ---- audio -----------------------------------------------------------
 
-    from backend.tools.audio.voice_transcription import transcribe_voice_note
+    try:
+        from backend.tools.audio.voice_transcription import transcribe_voice_note
 
-    tool(
-        name="transcribe_voice_note",
-        description=(
-            "Transcribe a spoken audio file to text using local speech-to-text. "
-            "Use for voice notes and recorded handover briefings."
-        ),
-        category="audio",
-        priority="🟡",
-        tools_md_row=61,
-    )(transcribe_voice_note)
+        tool(
+            name="transcribe_voice_note",
+            description=(
+                "Transcribe a spoken audio file to text using local speech-to-text. "
+                "Use for voice notes and recorded handover briefings."
+            ),
+            category="audio",
+            priority="🟡",
+            tools_md_row=61,
+        )(transcribe_voice_note)
+    except ImportError:
+        pass
 
     # ---- retrieval -------------------------------------------------------
 
