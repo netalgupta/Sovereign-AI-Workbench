@@ -1,0 +1,130 @@
+{
+  "k": 5,
+  "questions_scored": 8,
+  "MRR": 0.8125,
+  "MAP": 0.7791666666666667,
+  "recall_at_k": 1.0,
+  "questions_ranked_first": 6,
+  "per_question": [
+    {
+      "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+      "expected_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 0.8333333333333333,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "Aromatic_Complex_Benzene_Safety_Circular.docx",
+        "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+      ]
+    },
+    {
+      "question": "What caused the off-spec batch H110F-0847?",
+      "expected_source": "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "rank_of_first_relevant": 4,
+      "reciprocal_rank": 0.25,
+      "average_precision": 0.325,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "Novolen_Batch_QA_Report_Aug2026.pdf"
+      ]
+    },
+    {
+      "question": "What is the 8-hour TWA benzene exposure limit at the Aromatic Complex?",
+      "expected_source": "Aromatic_Complex_Benzene_Safety_Circular.docx",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 1.0,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "Aromatic_Complex_Benzene_Safety_Circular.docx",
+        "Inspection_Report_CCR1_Regeneration_Cycle.pdf",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "SAP_Mock_Materials_Master_Export.xlsx",
+        "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+      ]
+    },
+    {
+      "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+      "expected_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 1.0,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "Pipeline_Incident_Report_Hassan_Segment.pdf",
+        "Aromatic_Complex_Benzene_Safety_Circular.docx",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "Inspection_Report_CCR1_Regeneration_Cycle.pdf"
+      ]
+    },
+    {
+      "question": "What was the root cause of the Hassan pumping station incident on 2026-07-22?",
+      "expected_source": "Pipeline_Incident_Report_Hassan_Segment.pdf",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 0.75,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "Pipeline_Incident_Report_Hassan_Segment.pdf",
+        "Pipeline_Segment_Map_Mangalore_Hassan.png",
+        "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "Pipeline_Incident_Report_Hassan_Segment.pdf",
+        "Aromatic_Complex_Benzene_Safety_Circular.docx"
+      ]
+    },
+    {
+      "question": "Did any PSA unit fall below its purity target in the last reporting period?",
+      "expected_source": "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 1.0,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+        "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+        "PSA_Hydrogen_Purity_Trend_Log.xlsx",
+        "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "Pipeline_Incident_Report_Hassan_Segment.pdf"
+      ]
+    },
+    {
+      "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+      "expected_source": "Sulphur_Spec_Compliance_LabSheet.xlsx",
+      "rank_of_first_relevant": 1,
+      "reciprocal_rank": 1.0,
+      "average_precision": 1.0,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "Sulphur_Spec_Compliance_LabSheet.xlsx",
+        "Maintenance_Log_Q3_2026.xlsx",
+        "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx"
+      ]
+    },
+    {
+      "question": "Which vendor supplies both the hydrocracker catalyst and the Ziegler-Natta catalyst component?",
+      "expected_source": "SAP_Mock_Materials_Master_Export.xlsx",
+      "rank_of_first_relevant": 4,
+      "reciprocal_rank": 0.25,
+      "average_precision": 0.325,
+      "recall_at_k": 1.0,
+      "retrieved_sources": [
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+        "Novolen_Batch_QA_Report_Aug2026.pdf",
+        "SAP_Mock_Materials_Master_Export.xlsx",
+        "SAP_Mock_Materials_Master_Export.xlsx"
+      ]
+    }
+  ]
+}

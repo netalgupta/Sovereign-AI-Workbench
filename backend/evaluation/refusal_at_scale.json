@@ -1,0 +1,204 @@
+{
+  "threshold": 0.6,
+  "total": 16,
+  "total_refused": 16,
+  "by_group": {
+    "in_scope": {
+      "n": 5,
+      "refused": 5
+    },
+    "adjacent": {
+      "n": 4,
+      "refused": 4
+    },
+    "off_domain": {
+      "n": 3,
+      "refused": 3
+    },
+    "unrelated": {
+      "n": 4,
+      "refused": 4
+    }
+  },
+  "distinct_normalized_values": [
+    1.0
+  ],
+  "rows": [
+    {
+      "group": "in_scope",
+      "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "in_scope",
+      "question": "What caused the off-spec batch H110F-0847?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "in_scope",
+      "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "in_scope",
+      "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "in_scope",
+      "question": "What is the 8-hour TWA benzene exposure limit?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the WABT trigger temperature for hydrocracker HCU-9?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "adjacent",
+      "question": "What caused the off-spec batch Z999X-0001?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "adjacent",
+      "question": "Why was Tank TK-Q-88 at Mangalore taken out of service?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the catalyst changeout procedure for the Coker unit?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the recommended torque for a Boeing 737 landing gear bolt?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the maximum core temperature for a pressurised water reactor?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "off_domain",
+      "question": "How many megawatts does the Bhakra Nangal dam generate?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the best way to poach an egg?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "unrelated",
+      "question": "How far is Proxima Centauri from Earth?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "unrelated",
+      "question": "Who won the 2018 FIFA World Cup?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the plot of Pride and Prejudice?",
+      "refused": true,
+      "reason": "No documents in the corpus matched this query.",
+      "top_source": null,
+      "raw_top_score": 0.0,
+      "raw_min_score": 0.0,
+      "normalized_top": 1.0,
+      "candidate_pool": 1
+    }
+  ]
+}

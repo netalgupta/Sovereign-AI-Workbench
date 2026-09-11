@@ -1,0 +1,219 @@
+{
+  "original": {
+    "chunks": 6,
+    "relationships_total": 37,
+    "relationships_valid": 0,
+    "relationships_invalid": 37,
+    "violation_rate": 1.0,
+    "parse_failures": 0,
+    "all_violations": [
+      "(Person)-[REPORTS_INCIDENT_AT]->(Equipment)",
+      "(Person)-[APPLIES_TO]->(None)",
+      "unknown type 'REQUESTS_TEMPORARY_REALLOCATION_TO'",
+      "unknown type 'REQUESTS_TEMPORARY_REALLOCATION_TO'",
+      "unknown type 'APPROVES_TEMPORARY_REALLOCATION_FOR'",
+      "(Incident)-[REFERENCES]->(Equipment)",
+      "(None)-[APPLIES_TO]->(None)",
+      "(None)-[APPLIES_TO]->(Equipment)",
+      "(None)-[APPLIES_TO]->(None)",
+      "(None)-[APPLIES_TO]->(Equipment)",
+      "(None)-[APPLIES_TO]->(PipelineSegment)",
+      "(Equipment)-[APPLIES_TO]->(None)",
+      "(PipelineSegment)-[LOCATED_ON]->(None)",
+      "(Incident)-[REFERENCES]->(None)",
+      "(Equipment)-[APPLIES_TO]->(None)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(None)-[LOCATED_ON]->(Equipment)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)",
+      "(Equipment)-[LOCATED_ON]->(None)"
+    ]
+  },
+  "revised": {
+    "chunks": 6,
+    "relationships_total": 12,
+    "relationships_valid": 6,
+    "relationships_invalid": 6,
+    "violation_rate": 0.5,
+    "parse_failures": 0,
+    "all_violations": [
+      "unknown type None",
+      "(Person)-[REPORTS_INCIDENT_AT]->(Equipment)",
+      "unknown type ''",
+      "unknown type ''",
+      "unknown type ''",
+      "(Equipment)-[LOCATED_ON]->(None)"
+    ]
+  },
+  "per_chunk": {
+    "original": [
+      {
+        "parse_failed": false,
+        "entities": 4,
+        "valid": 0,
+        "invalid": 5,
+        "violations": [
+          "(Person)-[REPORTS_INCIDENT_AT]->(Equipment)",
+          "(Person)-[APPLIES_TO]->(None)",
+          "unknown type 'REQUESTS_TEMPORARY_REALLOCATION_TO'",
+          "unknown type 'REQUESTS_TEMPORARY_REALLOCATION_TO'",
+          "unknown type 'APPROVES_TEMPORARY_REALLOCATION_FOR'"
+        ],
+        "seconds": 75.3
+      },
+      {
+        "parse_failed": false,
+        "entities": 3,
+        "valid": 0,
+        "invalid": 2,
+        "violations": [
+          "(Incident)-[REFERENCES]->(Equipment)",
+          "(None)-[APPLIES_TO]->(None)"
+        ],
+        "seconds": 51.8
+      },
+      {
+        "parse_failed": false,
+        "entities": 4,
+        "valid": 0,
+        "invalid": 4,
+        "violations": [
+          "(None)-[APPLIES_TO]->(Equipment)",
+          "(None)-[APPLIES_TO]->(None)",
+          "(None)-[APPLIES_TO]->(Equipment)",
+          "(None)-[APPLIES_TO]->(PipelineSegment)"
+        ],
+        "seconds": 51.6
+      },
+      {
+        "parse_failed": false,
+        "entities": 4,
+        "valid": 0,
+        "invalid": 4,
+        "violations": [
+          "(Equipment)-[APPLIES_TO]->(None)",
+          "(PipelineSegment)-[LOCATED_ON]->(None)",
+          "(Incident)-[REFERENCES]->(None)",
+          "(Equipment)-[APPLIES_TO]->(None)"
+        ],
+        "seconds": 48.1
+      },
+      {
+        "parse_failed": false,
+        "entities": 7,
+        "valid": 0,
+        "invalid": 10,
+        "violations": [
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)",
+          "(None)-[LOCATED_ON]->(Equipment)"
+        ],
+        "seconds": 72.0
+      },
+      {
+        "parse_failed": false,
+        "entities": 12,
+        "valid": 0,
+        "invalid": 12,
+        "violations": [
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)",
+          "(Equipment)-[LOCATED_ON]->(None)"
+        ],
+        "seconds": 183.4
+      }
+    ],
+    "revised": [
+      {
+        "parse_failed": false,
+        "entities": 3,
+        "valid": 0,
+        "invalid": 2,
+        "violations": [
+          "unknown type None",
+          "(Person)-[REPORTS_INCIDENT_AT]->(Equipment)"
+        ],
+        "seconds": 28.6
+      },
+      {
+        "parse_failed": false,
+        "entities": 1,
+        "valid": 0,
+        "invalid": 0,
+        "violations": [],
+        "seconds": 11.7
+      },
+      {
+        "parse_failed": false,
+        "entities": 3,
+        "valid": 0,
+        "invalid": 3,
+        "violations": [
+          "unknown type ''",
+          "unknown type ''",
+          "unknown type ''"
+        ],
+        "seconds": 53.7
+      },
+      {
+        "parse_failed": false,
+        "entities": 6,
+        "valid": 2,
+        "invalid": 0,
+        "violations": [],
+        "seconds": 42.3
+      },
+      {
+        "parse_failed": false,
+        "entities": 17,
+        "valid": 4,
+        "invalid": 1,
+        "violations": [
+          "(Equipment)-[LOCATED_ON]->(None)"
+        ],
+        "seconds": 95.5
+      },
+      {
+        "parse_failed": false,
+        "entities": 12,
+        "valid": 0,
+        "invalid": 0,
+        "violations": [],
+        "seconds": 150.3
+      }
+    ]
+  }
+}

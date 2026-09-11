@@ -24,6 +24,7 @@ such, never returned with the same confidence as (a).
 """
 
 import base64
+import os
 from pathlib import Path
 
 import requests
@@ -32,6 +33,44 @@ from pydantic import BaseModel
 from backend.models.registry import resolve_model_name
 
 _OLLAMA_HOST = "http://localhost:11434"
+
+# How many transformer layers to ASK Ollama to place on the GPU.
+#
+# CORRECTION TO AN EARLIER CLAIM IN THIS FILE (commit 989933b). This
+# comment previously reported "any offload beats none (~1.7x)" from a
+# benchmark of 109s / 63.1s / 71.8s / 63.7s at num_gpu unset / 12 / 20 /
+# 28. That conclusion was WRONG, and the way it was wrong is worth
+# keeping written down: the benchmark ran `ollama stop` before every
+# arm, so every single measurement included a cold model load, and the
+# spread it attributed to GPU offload was load-time variance.
+#
+# Re-measured properly — same image, cold AND warm timing per arm, and
+# `ollama ps` actually inspected rather than inferred:
+#
+#   num_gpu   cold     warm    ollama ps PROCESSOR
+#   (unset)   86.7s    6.9s    100% CPU
+#   12        59.3s   11.9s    100% CPU
+#   99        57.6s    8.9s    100% CPU
+#
+# num_gpu=99 means "put every layer on the GPU" and STILL reports 100%
+# CPU, with nvidia-smi showing ~200MiB used. On this box the option has
+# no effect whatsoever: qwen2.5vl:7b measures 13GB resident against an
+# 8GB card (see docs/DEPENDENCIES.md), and Ollama places it entirely on
+# CPU regardless of what is requested. There is no partial-offload win
+# to be had here — the earlier 1.7x was an artifact of measurement.
+#
+# The real effect, which the first benchmark hid by making every run
+# cold, is model RESIDENCY: 86.7s cold versus 6.9s warm is ~12x, an
+# order of magnitude larger than anything num_gpu did. Anything issuing
+# many vision calls should keep the model loaded (Ollama's keep_alive)
+# rather than let it unload between batches.
+#
+# The parameter is KEPT rather than deleted, for two honest reasons: it
+# costs nothing, and venue hardware with enough VRAM to actually fit
+# this model would benefit from it. But it is no longer presented as a
+# measured speedup on this hardware, because it is not one. Re-measure
+# on the venue machine — including `ollama ps`, not just a stopwatch.
+_DEFAULT_NUM_GPU_LAYERS = int(os.environ.get("OLLAMA_NUM_GPU_LAYERS", "12"))
 
 _CHART_DESCRIPTION_PROMPT = (
     "You are looking at an image that may contain a chart (bar chart, pie chart, "
@@ -60,8 +99,22 @@ def _encode_image(image_path: str) -> str:
     return base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
 
 
-def describe_chart_image(image_path: str, model_id: str = "vision-model") -> ChartVisualDescription:
+def describe_chart_image(
+    image_path: str,
+    model_id: str = "vision-model",
+    num_gpu_layers: int | None = None,
+    timeout_seconds: int = 180,
+) -> ChartVisualDescription:
     """Ask the vision model to describe a chart image.
+
+    Args:
+        image_path: the chart image to describe.
+        model_id: registry id (never a raw model name — CLAUDE.md hard
+            constraint #2), resolved through models.yaml.
+        num_gpu_layers: how many transformer layers to place on the GPU.
+            Defaults to _DEFAULT_NUM_GPU_LAYERS — see its comment for why
+            this is a tunable parameter rather than left to Ollama's own
+            all-or-nothing fit check. Pass 0 to force pure CPU.
 
     Raises:
         FileNotFoundError: if `image_path` doesn't exist — checked
@@ -69,6 +122,9 @@ def describe_chart_image(image_path: str, model_id: str = "vision-model") -> Cha
     """
     if not Path(image_path).exists():
         raise FileNotFoundError(f"Image not found at {image_path}")
+
+    if num_gpu_layers is None:
+        num_gpu_layers = _DEFAULT_NUM_GPU_LAYERS
 
     model_name = resolve_model_name(model_id)
     response = requests.post(
@@ -78,8 +134,15 @@ def describe_chart_image(image_path: str, model_id: str = "vision-model") -> Cha
             "prompt": _CHART_DESCRIPTION_PROMPT,
             "images": [_encode_image(image_path)],
             "stream": False,
+            "options": {"num_gpu": num_gpu_layers},
         },
-        timeout=180,
+        # Bounded, and short enough that a wedged request is caught in
+        # minutes rather than blocking a sweep indefinitely. Measured:
+        # a normal chart takes 45-75s on this hardware, so 180s is ~2.5x
+        # headroom. Real incident this guards against: one corpus image
+        # made Ollama hang past a 600s timeout entirely, stalling a
+        # 12-chart sweep for 15 minutes on its 4th item.
+        timeout=timeout_seconds,
     )
     response.raise_for_status()
 

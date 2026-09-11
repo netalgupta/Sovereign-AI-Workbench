@@ -36,6 +36,14 @@ class ChunkMetadata(BaseModel):
     page_number: int | None
     chunk_index: int
     ingestion_date: str
+    # Images embedded in the page this chunk came from, by content-hash
+    # id (backend/ingestion/image_store.py). This is what lets an answer
+    # built on this chunk hand back the actual picture rather than only
+    # describing it. Every chunk from a page inherits that page's images:
+    # a chunk is a slice of text, but the image belongs to the page, and
+    # attributing it to only whichever slice happens to contain the
+    # description block would make it unreachable from the others.
+    image_ids: list[str] = []
 
 
 class IngestedChunk(BaseModel):
@@ -136,6 +144,7 @@ def pages_to_chunks(
                         page_number=page.page_number,
                         chunk_index=chunk_index,
                         ingestion_date=ingestion_date,
+                        image_ids=list(getattr(page, "image_ids", []) or []),
                     ),
                 )
             )
