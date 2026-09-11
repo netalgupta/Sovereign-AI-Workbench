@@ -240,3 +240,43 @@ The real effect, hidden by making every run cold: **model residency, 86.7s → 6
 
 ### Recurring bug class worth remembering
 Three separate stale/self-deceiving-measurement bugs this session: a committed JSON artifact outliving the code that made it (ceiling numbers, corrected in `b2202ce`); a resume path caching a SCORE rather than the expensive model output (chart sweep — fixed to re-score); and a scorer whose `%g` formatting made whole-number values like `4.0` unmatchable, which understated fabrication 5x and deflated recall. **Anything derived from a stored artifact needs its provenance checked before it is trusted.**
+
+## UPDATE 5 — Aryan's scope COMPLETE; ready to merge to main
+
+Branch `aryan/rag-and-graphrag`, 47 commits ahead of `main`. **289 passed, 12 skipped.** The 12 skips are Neo4j being down on this box (Docker Desktop stopped) and one unpulled router model — not regressions, and the API degrades correctly under both.
+
+### Everything in Aryan.md's "Scope of Ownership" is now built and tested
+
+| Aryan.md item | Status |
+|---|---|
+| Model registry + router (§C 20-22) | ✅ registry, router, **planner**, **dispatch**, **sub-agent contracts** |
+| Hybrid RAG + GraphRAG (§B 12-14, 17) | ✅ incl. the refusal gate, which was dead code |
+| Vision model integration | ✅ + measured: it invents numbers (see UPDATE 4) |
+| Math tools as callable agent tools (§D) | ✅ **tool registry — they are now actually callable** |
+| Day 7: "confirm no LLM does arithmetic unverified" | ✅ **NFR-5 asserted structurally, not behaviourally** |
+| Day 8: self-verification agent | ✅ fails closed, 3 outcomes incl. UNCONFIRMED |
+
+### What landed after UPDATE 4
+
+- **Tool registry** (`backend/tools/registry.py`, row 65) — 15 tools, schemas DERIVED from type hints + docstrings. `requires_approval` / `is_estimate` / `computes_numbers` enforced **in the dispatcher**, so the gate cannot be forgotten by whoever adds the next tool.
+- **Human approval gate** (`backend/audit/`, rows 67-68) — hard constraint #4 had no implementation. Approval is per-call (argument-hashed), single-use, expires, and shows the **effect** not the call. No auto-approve flag exists, deliberately. Append-only audit log with no update path, asserted by test.
+- **Planner + dispatch + verification** (`backend/orchestrator/`, rows 69-71) — AGENTS_SPEC §3/§4/§5/§6. Prompts verbatim. §6's contracts are closed tool sets, not prose.
+- **New tools**: NumPy trend/projection (28), Matplotlib plotting (31), `draft_docx` (38, the first gated tool), MRPL catalyst/hydrogen/PSA (51-53).
+- **FastAPI backend** (`backend/main.py`) — 20 routes. Loopback-bound; `/docs` disabled because the default Swagger page fetches JS from a CDN.
+- **Instrumentation view** + `GraphExplorerPage` + `KnowledgeBasePage`.
+- **Source tracking** (`SOURCES_SPEC.md`) — watched folders, newest-first queue, images retrievable with both OCR and description, page previews from the user's own file.
+
+### Bugs found by my own tests, worth remembering
+
+- `list[float]` generated `{"type":"number"}` — the model would be told to send `5` where the tool takes `[5]`, then fail on input its own schema requested.
+- `analyse_trend` called a noisy series "increasing" while its own `fit_quality` field said "no reliable linear trend" — two contradictory claims in one return value.
+- `/api/graph` served 0 nodes as "live", conflating *reachable* with *populated*.
+- A planner test asserted the **worse** behaviour (raise on a tangled plan); the cycle-breaker repairs it, which is better. That surfaced a real invariant: after repairs the graph is a finite DAG, so the "nothing can start" guard is unreachable by construction — kept as a documented backstop.
+
+### What this unblocks for everyone else
+
+- **Aditya** — `code_agent` is the one sub-agent with an empty tool set and it RAISES pending CARD 04. `backend/sandbox/` is free; wire it to `run_code_step` in `dispatch.py`. SAP connector: any write must register with `requires_approval=True` and go through `ApprovalGate` — the dispatcher enforces it, there is nowhere for a write to hide.
+- **Advay** — `frontend/src/pages/README_INTEGRATION.md` has the exact 3-line routing diff. `ApprovalModal.jsx` now has a real backend: `POST /api/approvals/request|approve|refuse|execute`. Merge is verified conflict-free by `git merge-tree`.
+- **Netal** — `/api/graph` returns all nodes with every property + typed edges. `GraphExplorerPage.jsx` is a working reference implementation to take over or replace.
+- **Sahil** — OCR/vision are registered tools with schemas; `/api/tools` lists them. The chart-reading fabrication measurement (`CHART_STRESS_REPORT.md`) is the evidence for how the trace UI must label estimates.
+- **Kanishka** — `draft_docx` is the gated-output reference: citations structural, `UNSOURCED` marked in the file, estimate warnings printed in the document. XLSX generation (row 39) should follow the same shape.
