@@ -41,4 +41,5 @@ document_registry/
 # Audit trail and approval queue: machine-local records of what this
 # install did and who approved it. Never shared between machines — an
 # audit log is evidence about one deployment, not project source.
-audit/
+/audit/
+backend/audit/*.jsonl

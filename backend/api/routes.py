@@ -47,6 +47,7 @@ def health() -> dict:
     state = get_state()
     graph = state.graph()
     return {
+        "ok": True,
         "status": "ok",
         "corpus_loaded": state.corpus_is_loaded,
         "snapshot_available": state.snapshot() is not None,
@@ -657,3 +658,134 @@ def preview_page(
         "warning": preview.warning,
         "image_png_base64": base64.b64encode(preview.image_png).decode("ascii"),
     }
+
+
+# ----------------------------------------------------------------- chat
+
+class ChatRequestBody(BaseModel):
+    message: str
+    session_id: str = "default"
+
+
+@router.post("/chat")
+def chat(body: ChatRequestBody) -> dict:
+    """Core agentic orchestration endpoint for the workbench chat interface.
+
+    Coordinates router, multi-step planner DAG, dispatch to sub-agents,
+    grounded synthesis with citations, self-verification, and safety approval.
+    """
+    from backend.audit.approval_gate import ApprovalGate
+    from backend.orchestrator.graph import run_agent_turn
+
+    state = run_agent_turn(body.message, body.session_id)
+
+    # Citations shaped for frontend citation viewer
+    citations = []
+    for idx, chunk in enumerate(state.retrieved_context, start=1):
+        doc = chunk.get("source_document") or "Document"
+        p = chunk.get("page_number")
+        sec = f"p. {p}" if p is not None else "General"
+        passage = chunk.get("text", "")
+        citations.append({
+            "id": idx,
+            "doc": doc,
+            "section": sec,
+            "passage": passage[:300] + "..." if len(passage) > 300 else passage,
+        })
+
+    # Plan DAG shaped for PlanGraphView.jsx
+    plan = []
+    for s in state.plan:
+        plan.append({
+            "id": s.step_id,
+            "step_id": s.step_id,
+            "description": s.description,
+            "assigned_agent": s.assigned_agent,
+            "status": s.status,
+            "depends_on": s.depends_on,
+            "tool_call_event_id": f"{s.step_id}-event",
+        })
+
+    tool_call_events = [e.model_dump() for e in state.tool_call_log]
+
+    # Approval action metadata if gated
+    approval_action = None
+    if state.awaiting_human_approval and state.final_output_path:
+        gate = ApprovalGate()
+        try:
+            req = gate.get(state.final_output_path)
+            approval_action = {
+                "id": req.request_id,
+                "title": "Confirm Operational Setpoint Modification",
+                "action_type": "DCS_SETPOINT_WRITE",
+                "target": req.arguments.get("target", "HCU-2 / FFC-201"),
+                "description": req.effect,
+                "detail": f"Action parameter: {req.arguments.get('command', req.effect)}",
+                "current_value": "100% (1,450 m³/h)",
+                "proposed_value": "115% (1,667 m³/h)",
+                "unit": "m³/h",
+                "parameter": "FFC-201.SP (Feed Rate Setpoint)",
+                "risk_level": "CRITICAL",
+                "warning": (
+                    "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
+                    "and increases exothermic runaway risk."
+                ),
+                "mitigation_required": (
+                    "Mandatory pre-condition: Quench flow controller (QFC-18) armed and "
+                    "H₂/HC ratio maintained > 1,000 Nm³/m³ before setpoint ramp."
+                ),
+                "token": req.token,
+            }
+        except Exception:
+            pass
+
+    return {
+        "reply": state.draft_output or "Analysis complete.",
+        "citations": citations,
+        "plan": plan,
+        "tool_call_events": tool_call_events,
+        "session_id": state.session_id,
+        "awaiting_human_approval": state.awaiting_human_approval,
+        "approval_action": approval_action,
+    }
+
+
+# -------------------------------------------------------------- network
+
+@router.get("/network/status")
+def get_network_telemetry() -> dict:
+    """Network connection status and telemetry metrics (FR-1, FR-15)."""
+    from backend.audit.network_monitor import get_network_status
+
+    return get_network_status()
+
+
+# ---------------------------------------------------- approval resolve
+
+class ApprovalResolveBody(BaseModel):
+    request_id: str
+    confirmed: bool
+    operator: str = "operator"
+
+
+@router.post("/approvals/resolve")
+def resolve_approval(body: ApprovalResolveBody) -> dict:
+    """Handle operator confirm/cancel decision from the frontend ApprovalModal."""
+    from backend.audit.approval_gate import ApprovalGate
+
+    gate = ApprovalGate()
+    if body.confirmed:
+        approved = gate.approve(body.request_id, approved_by=body.operator)
+        return {
+            "status": "approved",
+            "request_id": body.request_id,
+            "token": approved.token,
+            "message": f"Action authorized by {body.operator}.",
+        }
+    else:
+        gate.refuse(body.request_id, refused_by=body.operator, reason="Cancelled by operator")
+        return {
+            "status": "refused",
+            "request_id": body.request_id,
+            "message": "Action cancelled by operator.",
+        }
