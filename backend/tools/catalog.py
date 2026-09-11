@@ -136,6 +136,23 @@ def register_all() -> None:
 
     from backend.retrieval.image_retrieval import select_images_for_request
 
+    from backend.retrieval.contradiction import find_contradictions
+
+    tool(
+        name="find_contradictions",
+        description=(
+            "Check a set of retrieved chunks for documents that state DIFFERENT "
+            "values for the same limit or quantity. Use before relying on a limit "
+            "that appears in more than one document. Returns high severity when the "
+            "disagreement is about a limit, because someone will operate to "
+            "whichever one they read. Comparison is deterministic and unit-aware; "
+            "readings, dated values and different equipment are not contradictions."
+        ),
+        category="retrieval",
+        priority="🟡",
+        tools_md_row=15,
+    )(find_contradictions)
+
     tool(
         name="select_images_for_request",
         description=(

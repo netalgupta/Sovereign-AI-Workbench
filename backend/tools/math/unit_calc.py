@@ -59,6 +59,33 @@ def evaluate_unit_expression(
         ValueError: with "Could not evaluate unit expression ..." for any
             other parse failure (e.g. an undefined unit name).
     """
+    # Accept the inline "X to Y" / "X in Y" conversion form as well as
+    # the target_unit argument. Found by functional testing: this tool's
+    # own registered description tells the model "converting safely
+    # between them (bar to kPa, kg/h to t/day)", and a model reading that
+    # writes exactly `evaluate_unit_expression("1 bar to kPa")` — which
+    # the parser rejected, because conversion was only ever available
+    # through a separate argument. The description was leading the model
+    # into a call that could not succeed.
+    #
+    # Meeting the caller where it is, rather than only fixing the
+    # description: "1 bar to kPa" is how a person writes it too, and a
+    # unit tool that rejects the most natural spelling of a conversion is
+    # failing at its one job. An explicit target_unit still wins if both
+    # are given, since that is the caller being unambiguous.
+    for separator in (" to ", " in "):
+        if target_unit is None and separator in expression:
+            head, _, tail = expression.rpartition(separator)
+            # Only treat the tail as a unit if it actually parses as one;
+            # "5 kg in the vessel" must not become a conversion attempt.
+            candidate = tail.strip()
+            try:
+                _ureg.parse_units(candidate)
+            except Exception:  # noqa: BLE001 — not a unit; leave the expression alone
+                continue
+            expression, target_unit = head.strip(), candidate
+            break
+
     try:
         quantity = _ureg.parse_expression(expression)
     except pint.errors.DimensionalityError as exc:
