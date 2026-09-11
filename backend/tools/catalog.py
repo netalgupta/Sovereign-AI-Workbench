@@ -24,7 +24,7 @@ from backend.tools.registry import tool
 
 # Importing these modules is what registers the tools defined with the
 # decorator inline (numeric_stats, plotting).
-from backend.tools import numeric_stats, plotting  # noqa: F401
+from backend.tools import mrpl_process, numeric_stats, plotting  # noqa: F401
 from backend.tools.documents import draft_docx  # noqa: F401
 
 
