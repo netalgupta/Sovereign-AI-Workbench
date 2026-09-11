@@ -392,6 +392,42 @@ def call_tool_endpoint(body: ToolCallRequest) -> dict:
     return {"result": result}
 
 
+# --------------------------------------------------------- contradictions
+
+@router.get("/contradictions")
+def contradictions(live: bool = Query(False)) -> dict:
+    """Documents in the corpus that disagree about the same limit.
+
+    Runs over the whole corpus rather than a query's results,
+    deliberately: a contradiction only matters if you might act on either
+    side of it, and a user who queries one document never sees that
+    another disagrees. This is the sweep that surfaces it unprompted.
+    """
+    from backend.retrieval.contradiction import find_contradictions
+
+    state = get_state()
+    if live or state.corpus_is_loaded:
+        _store, chunks = state.ensure_corpus()
+    else:
+        snapshot = state.snapshot()
+        if not snapshot:
+            raise HTTPException(503, detail="No corpus snapshot; run the ingestion export first.")
+
+        class _C:
+            def __init__(self, text, source):
+                self.text = text
+                self.source_document = source
+
+        chunks = [_C(c["text"], c["source_document"]) for c in snapshot["chunks"]]
+
+    found = find_contradictions(chunks)
+    return {
+        "checked_chunks": len(chunks),
+        "contradictions": [c.model_dump() for c in found],
+        "high_severity": sum(1 for c in found if c.severity == "high"),
+    }
+
+
 # ------------------------------------------------------------------- plan
 
 class PlanRequestBody(BaseModel):
