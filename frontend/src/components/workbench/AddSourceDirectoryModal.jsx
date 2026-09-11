@@ -39,8 +39,18 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
 
   // Core file batch upload handler
   const uploadFiles = async (fileList) => {
-    const filesArray = Array.from(fileList || [])
-    if (filesArray.length === 0) return
+    const rawArray = Array.from(fileList || [])
+    const filesArray = rawArray.filter((file) => {
+      const p = (file.webkitRelativePath || file.name).replace(/\\/g, '/')
+      const parts = p.split('/')
+      const ignored = ['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode', 'dist', 'build']
+      return !parts.some((part) => ignored.includes(part) || part.startsWith('.'))
+    })
+
+    if (filesArray.length === 0) {
+      showToast('No valid document files found in selected folder', 'info')
+      return
+    }
 
     setIsSubmitting(true)
     setUploadStatus(`Preparing ${filesArray.length} file(s)...`)
@@ -50,14 +60,22 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i]
         setUploadStatus(`Reading ${i + 1}/${filesArray.length}: ${file.name}...`)
-        const base64 = await readFileAsBase64(file)
-        const relPath = file.webkitRelativePath || file.name
-        filesToUpload.push({
-          name: file.name,
-          relPath,
-          contentBase64: base64,
-          sizeBytes: file.size,
-        })
+        try {
+          const base64 = await readFileAsBase64(file)
+          const relPath = file.webkitRelativePath || file.name
+          filesToUpload.push({
+            name: file.name,
+            relPath,
+            contentBase64: base64,
+            sizeBytes: file.size,
+          })
+        } catch (readErr) {
+          console.warn(`Could not read file ${file.name}:`, readErr)
+        }
+      }
+
+      if (filesToUpload.length === 0) {
+        throw new Error('No files could be read from selected directory')
       }
 
       setUploadStatus(`Ingesting, chunking & generating embeddings for ${filesToUpload.length} file(s)...`)
@@ -69,7 +87,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       })
       const data = await res.json()
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to upload source file(s)')
+        throw new Error(data.error || data.detail || 'Failed to upload source file(s)')
       }
 
       const chunkNotice = data.total_chunks != null ? ` (${data.total_chunks} chunks embedded & indexed in FAISS)` : ''
@@ -77,6 +95,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         data.message || `Successfully ingested ${data.count || filesToUpload.length} source document(s)${chunkNotice}`,
         'success'
       )
+      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
       if (onDirectoriesUpdated) onDirectoriesUpdated(data)
       onClose()
     } catch (err) {
@@ -111,6 +130,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
 
       showToast(data.message || `Source registered: ${pathToAdd}`, 'success')
       setCustomPath('')
+      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
       if (onDirectoriesUpdated) onDirectoriesUpdated(data)
       onClose()
     } catch (err) {
@@ -121,8 +141,119 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
   }
 
+  // Native OS or Browser folder selection handler
+  const handleBrowseFolder = async () => {
+    // 1. Try native backend folder picker (opens Windows Folder Selection dialog directly on host)
+    try {
+      setIsSubmitting(true)
+      setUploadStatus('Opening native Windows folder picker...')
+      const res = await fetch('/api/sources/dialog/folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.cancelled) {
+          setIsSubmitting(false)
+          setUploadStatus('')
+          return
+        }
+        if (data.success) {
+          showToast(data.message || `Folder "${data.name}" added to sources`, 'success')
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+          onClose()
+          return
+        }
+      }
+    } catch (err) {
+      console.warn('Native folder dialog failed, falling back to browser picker', err)
+    } finally {
+      setIsSubmitting(false)
+      setUploadStatus('')
+    }
 
-  // Handle native folder browse
+    // 2. Fallback: window.showDirectoryPicker (modern Chromium File System Access API)
+    if (typeof window.showDirectoryPicker === 'function') {
+      try {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'read' })
+        if (dirHandle) {
+          setIsSubmitting(true)
+          setUploadStatus(`Reading contents of folder "${dirHandle.name}"...`)
+          const files = []
+          async function scanHandle(handle, pathPrefix = '') {
+            for await (const entry of handle.values()) {
+              const rel = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
+              if (entry.kind === 'file') {
+                const f = await entry.getFile()
+                Object.defineProperty(f, 'webkitRelativePath', {
+                  value: `${dirHandle.name}/${rel}`,
+                  writable: true,
+                })
+                files.push(f)
+              } else if (entry.kind === 'directory') {
+                if (!['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode'].includes(entry.name)) {
+                  await scanHandle(entry, rel)
+                }
+              }
+            }
+          }
+          await scanHandle(dirHandle)
+          if (files.length > 0) {
+            await uploadFiles(files)
+            return
+          }
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return
+        console.warn('showDirectoryPicker error:', err)
+      } finally {
+        setIsSubmitting(false)
+        setUploadStatus('')
+      }
+    }
+
+    // 3. Fallback: hidden <input type="file" webkitdirectory>
+    folderInputRef.current?.click()
+  }
+
+  // Native OS or Browser files selection handler
+  const handleBrowseFiles = async () => {
+    // 1. Try native backend file picker (opens Windows Open File dialog on host)
+    try {
+      setIsSubmitting(true)
+      setUploadStatus('Opening native file picker...')
+      const res = await fetch('/api/sources/dialog/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.cancelled) {
+          setIsSubmitting(false)
+          setUploadStatus('')
+          return
+        }
+        if (data.success) {
+          showToast(data.message || `Successfully added ${data.count} document(s)`, 'success')
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+          onClose()
+          return
+        }
+      }
+    } catch (err) {
+      console.warn('Native files dialog failed, falling back to browser picker', err)
+    } finally {
+      setIsSubmitting(false)
+      setUploadStatus('')
+    }
+
+    // 2. Fallback: hidden <input type="file" multiple>
+    fileInputRef.current?.click()
+  }
+
+  // Handle native folder browse fallback input
   const handleFolderPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -130,7 +261,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     e.target.value = ''
   }
 
-  // Handle native files browse
+  // Handle native files browse fallback input
   const handleFilesPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -211,6 +342,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       })
       if (res.ok) {
         showToast('Source removed from retrieval scope', 'info')
+        window.dispatchEvent(new CustomEvent('corpus-updated'))
         if (onDirectoriesUpdated) onDirectoriesUpdated()
       }
     } catch {
@@ -294,7 +426,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             <button
               type="button"
               disabled={isSubmitting}
-              onClick={() => folderInputRef.current?.click()}
+              onClick={handleBrowseFolder}
               className="flex items-center gap-2.5 p-3 rounded-lg border text-left transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] group disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 background: 'var(--color-bg)',
@@ -324,7 +456,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             <button
               type="button"
               disabled={isSubmitting}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleBrowseFiles}
               className="flex items-center gap-2.5 p-3 rounded-lg border text-left transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] group disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 background: 'var(--color-bg)',

@@ -359,6 +359,7 @@ export function Sidebar() {
       })
       if (res.ok) {
         showToast(`Source "${name}" removed from knowledge base`, 'info')
+        window.dispatchEvent(new CustomEvent('corpus-updated'))
         fetchCorpus()
       } else {
         const err = await res.json().catch(() => ({}))

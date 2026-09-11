@@ -420,7 +420,143 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
         "count": len(saved_files),
         "total_chunks": total_chunks,
         "details": all_details,
+        "saved": [{"path": str(sf), "name": sf.name} for sf in saved_files],
+        "added": {"path": str(saved_files[0]), "name": saved_files[0].name} if saved_files else None,
         "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.post("/sources/dialog/folder")
+def browse_and_add_folder() -> dict:
+    """Open native OS directory dialog to choose a folder on disk, ingest and register it."""
+    import hashlib
+    import json
+    from backend.api.native_picker import pick_folder_gui
+
+    picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
+    if not picked_path:
+        return {"cancelled": True, "message": "Folder selection cancelled"}
+
+    target = Path(picked_path).resolve()
+    if not target.exists():
+        raise HTTPException(404, detail="Selected directory does not exist")
+
+    state = get_state()
+    try:
+        source = state.watcher.add_source(str(target), recursive=True)
+    except Exception:
+        source = None
+
+    try:
+        total_chunks, details = state.ingest_path(target)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Failed to chunk and embed source folder: {exc}") from exc
+
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    norm_path = str(target.resolve())
+    norm_lower = norm_path.lower()
+    hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+
+    found = False
+    for d in dirs:
+        if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+            d["enabled"] = True
+            found = True
+            break
+    if not found:
+        dirs.append({
+            "id": dir_id,
+            "name": target.name or "Custom_Corpus",
+            "path": norm_path,
+            "isPreset": False,
+            "enabled": True,
+        })
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "path": norm_path,
+        "name": target.name,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "directories": dirs,
+        "added": {"path": norm_path, "name": target.name, "id": dir_id},
+        "source": source.model_dump() if source else {"path": norm_path},
+        "message": f"Folder '{target.name}' registered: {total_chunks} chunks indexed in FAISS.",
+    }
+
+
+@router.post("/sources/dialog/files")
+def browse_and_add_files() -> dict:
+    """Open native OS file dialog to choose documents on disk, ingest and register them."""
+    import hashlib
+    import json
+    from backend.api.native_picker import pick_files_gui
+
+    picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
+    if not picked_paths:
+        return {"cancelled": True, "message": "File selection cancelled"}
+
+    state = get_state()
+    total_chunks = 0
+    all_details = []
+    saved_items = []
+
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    for p_str in picked_paths:
+        target = Path(p_str).resolve()
+        try:
+            cnt, details = state.ingest_path(target)
+            total_chunks += cnt
+            all_details.extend(details)
+            saved_items.append({"path": str(target), "name": target.name})
+
+            # Ensure parent folder is tracked in configured_sources so it appears in corpus
+            parent_norm = str(target.parent.resolve())
+            parent_lower = parent_norm.lower()
+            if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
+                dirs.append({
+                    "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
+                    "name": target.parent.name,
+                    "path": parent_norm,
+                    "isPreset": False,
+                    "enabled": True,
+                })
+        except Exception as exc:
+            all_details.append({"filename": target.name, "path": str(target), "error": str(exc), "chunks": 0})
+
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "count": len(picked_paths),
+        "total_chunks": total_chunks,
+        "documents": all_details,
+        "saved": saved_items,
+        "added": saved_items[0] if saved_items else None,
+        "directories": dirs,
+        "message": f"Successfully ingested {len(picked_paths)} document(s): {total_chunks} chunks indexed into FAISS.",
     }
 
 
@@ -629,6 +765,17 @@ def add_source(body: AddSourceRequest) -> dict:
             "isPreset": False,
             "enabled": True,
         })
+    elif not found and target.is_file():
+        parent_norm = str(target.parent.resolve())
+        parent_lower = parent_norm.lower()
+        if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
+            dirs.append({
+                "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
+                "name": target.parent.name,
+                "path": parent_norm,
+                "isPreset": False,
+                "enabled": True,
+            })
     try:
         config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
     except Exception:
@@ -639,6 +786,7 @@ def add_source(body: AddSourceRequest) -> dict:
         "total_chunks": total_chunks,
         "documents": details,
         "directories": dirs,
+        "added": {"path": norm_path, "name": target.name, "id": dir_id},
         "source": source.model_dump() if source else {"path": str(target)},
         "message": f"Source '{target.name}' registered: {total_chunks} chunks created, embedded (1024-d), and indexed in FAISS.",
     }
