@@ -107,9 +107,79 @@ class PipelineState:
                 )
         return self._store, self._chunks
 
+    def ingest_path(self, target_path: str | Path) -> tuple[int, list[dict]]:
+        """Chunk, embed, and index a file or folder into the active VectorStore.
+
+        Returns (total_chunks_added, list_of_document_details).
+        """
+        from backend.ingestion.document_ingestion import ingest_document
+        from backend.ingestion.document_types import detect_document_type
+        from backend.ingestion.embeddings import embed_texts
+        from backend.tools.vision.ocr_printed import extract_printed_text
+
+        def _ocr_fn(img_path: str) -> str:
+            try:
+                return extract_printed_text(img_path).full_text
+            except Exception:
+                return ""
+
+        p = Path(target_path).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
+
+        files: list[Path] = []
+        if p.is_file():
+            files = [p]
+        elif p.is_dir():
+            files = sorted(
+                f for f in p.rglob("*")
+                if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
+            )
+
+        store, existing_chunks = self.ensure_corpus()
+        total_chunks = 0
+        details = []
+
+        for f in files:
+            try:
+                type_info = detect_document_type(str(f))
+                chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
+            except Exception as exc:
+                details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
+                continue
+
+            if chunks:
+                vectors = embed_texts([c.text for c in chunks])
+                store.add_chunks(chunks, vectors)
+                with self._lock:
+                    self._chunks.extend(chunks)
+                    # Invalidate cached static snapshot so live chunks are served
+                    self._snapshot = None
+                try:
+                    self.registry.register(str(f), type_info.detected_type)
+                except Exception:
+                    pass
+                total_chunks += len(chunks)
+                details.append({
+                    "filename": f.name,
+                    "path": str(f),
+                    "chunks": len(chunks),
+                    "document_type": type_info.detected_type,
+                })
+            else:
+                details.append({
+                    "filename": f.name,
+                    "path": str(f),
+                    "chunks": 0,
+                    "document_type": type_info.detected_type if "type_info" in locals() else "unknown",
+                })
+
+        return total_chunks, details
+
     @property
     def corpus_is_loaded(self) -> bool:
         return self._store is not None
+
 
     # ---- graph --------------------------------------------------------
 

@@ -1,0 +1,17 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: sih26117-neo4j-test
+    restart: unless-stopped
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    environment:
+      - NEO4J_AUTH=neo4j/testpassword123
+      - NEO4J_dbms_usage__report_enabled=false
+    volumes:
+      - sih26117_neo4j_data:/data
+
+volumes:
+  sih26117_neo4j_data:
+    name: sih26117_neo4j_data

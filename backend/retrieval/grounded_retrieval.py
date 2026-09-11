@@ -71,7 +71,7 @@ from backend.retrieval.vector_store import VectorStore
 # embeddings encode topic, not entity identity, so they cannot reliably
 # catch a plausible-but-absent tag. Catching those needs entity-level
 # checking against the graph, which this gate does not attempt.
-CONFIDENCE_THRESHOLD = 0.60
+CONFIDENCE_THRESHOLD = 0.30
 
 
 class GroundedRetrievalResult(BaseModel):

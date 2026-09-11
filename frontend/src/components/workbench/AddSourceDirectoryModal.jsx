@@ -60,7 +60,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         })
       }
 
-      setUploadStatus(`Ingesting ${filesToUpload.length} file(s) into local corpus...`)
+      setUploadStatus(`Ingesting, chunking & generating embeddings for ${filesToUpload.length} file(s)...`)
 
       const res = await fetch('/api/sources/upload', {
         method: 'POST',
@@ -72,8 +72,9 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         throw new Error(data.error || 'Failed to upload source file(s)')
       }
 
+      const chunkNotice = data.total_chunks != null ? ` (${data.total_chunks} chunks embedded & indexed in FAISS)` : ''
       showToast(
-        data.message || `Added ${data.count || filesToUpload.length} source document(s) to knowledge scope`,
+        data.message || `Successfully ingested ${data.count || filesToUpload.length} source document(s)${chunkNotice}`,
         'success'
       )
       if (onDirectoriesUpdated) onDirectoriesUpdated()
@@ -96,7 +97,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
 
     setIsSubmitting(true)
-    setUploadStatus('Registering path on disk...')
+    setUploadStatus('Resolving path, chunking document(s) & generating embeddings...')
     try {
       const res = await fetch('/api/sources', {
         method: 'POST',
@@ -118,6 +119,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       setUploadStatus('')
     }
   }
+
 
   // Handle native folder browse
   const handleFolderPicked = async (e) => {

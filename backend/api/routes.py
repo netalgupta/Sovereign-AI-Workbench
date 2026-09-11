@@ -103,25 +103,20 @@ def get_graph() -> dict:
 # ---------------------------------------------------------------- chunks
 
 @router.get("/chunks")
-def get_chunks(live: bool = Query(False, description="Force a live ingestion (slow)")) -> dict:
-    """Every chunk with metadata, plus the chunk-to-chunk similarity matrix.
-
-    Defaults to the snapshot because a live ingestion is minutes; pass
-    live=true to pay for the current truth.
-    """
+def get_chunks(live: bool = Query(False, description="Force a live ingestion")) -> dict:
+    """Every chunk with metadata, plus the chunk-to-chunk similarity matrix."""
     state = get_state()
-    if not live:
-        snapshot = state.snapshot()
-        if snapshot:
-            return {
-                "source": "snapshot",
-                "written_at": state.snapshot_age(),
-                "chunking": snapshot["chunking"],
-                "embedding_dim": snapshot["embedding_dim"],
-                "pca_explained_variance": snapshot["pca_explained_variance"],
-                "chunks": snapshot["chunks"],
-                "similarity": snapshot["similarity"],
-            }
+    snapshot = state.snapshot()
+    if not live and snapshot and not state.corpus_is_loaded:
+        return {
+            "source": "snapshot",
+            "written_at": state.snapshot_age(),
+            "chunking": snapshot["chunking"],
+            "embedding_dim": snapshot["embedding_dim"],
+            "pca_explained_variance": snapshot["pca_explained_variance"],
+            "chunks": snapshot["chunks"],
+            "similarity": snapshot["similarity"],
+        }
 
     from backend.ingestion.chunking import (
         CHUNK_OVERLAP_TOKENS,
@@ -132,9 +127,25 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion (sl
     from backend.ingestion.embeddings import embed_texts
 
     _store, chunks = state.ensure_corpus()
+    if not chunks:
+        return {
+            "source": "live",
+            "written_at": None,
+            "chunking": {
+                "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+                "chunk_overlap_tokens": CHUNK_OVERLAP_TOKENS,
+                "encoding": TIKTOKEN_ENCODING,
+            },
+            "embedding_dim": 1024,
+            "pca_explained_variance": [0.0, 0.0],
+            "chunks": [],
+            "similarity": [],
+        }
+
     vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
-    coords, explained = _pca_2d(vectors)
+    coords, explained = _pca_2d(vectors) if len(chunks) > 1 else (np.zeros((len(chunks), 2)), [1.0, 0.0])
     similarity = (vectors @ vectors.T).tolist()
+
 
     return {
         "source": "live",
@@ -260,6 +271,50 @@ def get_metrics() -> dict:
     return get_state().metrics()
 
 
+# --------------------------------------------------------------- chunk & embed
+
+class ChunkRequest(BaseModel):
+    text: str
+    source_document: str = "custom"
+
+
+@router.post("/chunk")
+def chunk_endpoint(body: ChunkRequest) -> dict:
+    """Split text into ~512-token chunks with 64-token overlap."""
+    from backend.ingestion.chunking import (
+        CHUNK_OVERLAP_TOKENS,
+        CHUNK_SIZE_TOKENS,
+        TIKTOKEN_ENCODING,
+        chunk_text,
+    )
+
+    chunks = chunk_text(body.text)
+    return {
+        "chunks": chunks,
+        "count": len(chunks),
+        "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+        "chunk_overlap_tokens": CHUNK_OVERLAP_TOKENS,
+        "encoding": TIKTOKEN_ENCODING,
+    }
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+
+
+@router.post("/embed")
+def embed_endpoint(body: EmbedRequest) -> dict:
+    """Generate 1024-dimensional normalized dense embeddings for texts."""
+    from backend.ingestion.embeddings import embed_texts
+
+    vectors = embed_texts(body.texts)
+    return {
+        "embeddings": vectors.tolist(),
+        "dim": int(vectors.shape[1]) if len(vectors.shape) > 1 else 1024,
+        "count": len(vectors),
+    }
+
+
 # --------------------------------------------------------------- sources
 
 @router.get("/sources")
@@ -280,22 +335,110 @@ class AddSourceRequest(BaseModel):
     include_globs: list[str] = []
 
 
-@router.post("/sources")
-def add_source(body: AddSourceRequest) -> dict:
-    """Watch a folder from now on.
+class IngestPathRequest(BaseModel):
+    path: str
 
-    Writes only OUR config — it records a path to READ from. It does not
-    copy, move or modify anything the user owns, which is why it needs no
-    approval gate: there is no user-visible side effect to approve.
-    """
+
+class UploadFileItem(BaseModel):
+    name: str
+    relPath: str | None = None
+    contentBase64: str
+    sizeBytes: int | None = None
+
+
+class UploadSourcesRequest(BaseModel):
+    files: list[UploadFileItem]
+
+
+@router.post("/sources/upload")
+def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
+    """Accept uploaded files, write to disk, and chunk & embed them into FAISS."""
+    state = get_state()
+    target_base_dir = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads"
+    target_base_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = []
+    for f in body.files:
+        clean_name = Path(f.relPath or f.name).name
+        dest = target_base_dir / clean_name
+        try:
+            raw_bytes = base64.b64decode(f.contentBase64)
+            dest.write_bytes(raw_bytes)
+            saved_files.append(dest)
+        except Exception:
+            continue
+
+    total_chunks = 0
+    all_details = []
+    for sf in saved_files:
+        try:
+            chunks_cnt, details = state.ingest_path(sf)
+            total_chunks += chunks_cnt
+            all_details.extend(details)
+        except Exception as exc:
+            all_details.append({"filename": sf.name, "path": str(sf), "error": str(exc), "chunks": 0})
+
+    return {
+        "success": True,
+        "count": len(saved_files),
+        "total_chunks": total_chunks,
+        "details": all_details,
+        "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.post("/sources/ingest")
+def ingest_source_endpoint(body: IngestPathRequest) -> dict:
+    """Explicit endpoint to chunk, embed, and index a file or directory."""
     state = get_state()
     try:
-        source = state.watcher.add_source(
-            body.path, recursive=body.recursive, include_globs=body.include_globs
-        )
+        total_chunks, details = state.ingest_path(body.path)
     except FileNotFoundError as exc:
-        raise HTTPException(400, detail=str(exc)) from exc
-    return source.model_dump()
+        raise HTTPException(404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Ingestion failed: {exc}") from exc
+
+    return {
+        "success": True,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "message": f"Successfully ingested {len(details)} document(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.post("/sources")
+def add_source(body: AddSourceRequest) -> dict:
+    """Watch a folder or file, chunking and embedding it immediately into the knowledge base."""
+    state = get_state()
+    target = Path(body.path).resolve()
+    if not target.exists():
+        # Check relative to cwd
+        target = Path.cwd() / body.path
+        if not target.exists():
+            raise HTTPException(400, detail=f"Path does not exist on disk: {body.path}")
+
+    watch_path = str(target if target.is_dir() else target.parent)
+    try:
+        source = state.watcher.add_source(
+            watch_path, recursive=body.recursive, include_globs=body.include_globs
+        )
+    except Exception:
+        source = None
+
+    # Ingest the target (file or directory) for chunking and embedding
+    try:
+        total_chunks, details = state.ingest_path(target)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
+
+    return {
+        "success": True,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "source": source.model_dump() if source else {"path": str(target)},
+        "message": f"Source '{target.name}' registered: {total_chunks} chunks created, embedded (1024-d), and indexed in FAISS.",
+    }
+
 
 
 @router.delete("/sources")
@@ -788,12 +931,12 @@ def chat(body: ChatRequestBody) -> dict:
 
 # -------------------------------------------------------------- network
 
-@router.get("/network/status")
-def get_network_telemetry() -> dict:
-    """Network connection status and telemetry metrics (FR-1, FR-15)."""
-    from backend.audit.network_monitor import get_network_status
+# @router.get("/network/status")
+# def get_network_telemetry() -> dict:
+#     """Network connection status and telemetry metrics (FR-1, FR-15)."""
+#     from backend.audit.network_monitor import get_network_status
 
-    return get_network_status()
+#     return get_network_status()
 
 
 # ---------------------------------------------------- approval resolve

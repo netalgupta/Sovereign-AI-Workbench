@@ -1265,7 +1265,7 @@ export function SourcesPage() {
       <AddSourceDirectoryModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
-        onDirectoriesUpdated={fetchCorpus}
+        onDirectoriesUpdated={refreshAll}
         currentDirectories={corpusData.directories || []}
       />
     </div>
