@@ -274,6 +274,29 @@ export function SourcesRail() {
     fetchCorpus()
   }, [])
 
+  const handleDeleteSource = async (source) => {
+    if (!source) return
+    const name = source.name || 'item'
+    if (!window.confirm(`Are you sure you want to delete "${name}" from sources and FAISS index?`)) {
+      return
+    }
+    try {
+      const targetParam = source.fullPath || source.relPath || source.path || source.id || source.name
+      const res = await fetch(`/api/sources?path=${encodeURIComponent(targetParam)}`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        showToast(`Source "${name}" removed from knowledge base`, 'info')
+        fetchCorpus()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        showToast(err.error || `Failed to delete "${name}"`, 'error')
+      }
+    } catch {
+      showToast(`Failed to delete "${name}"`, 'error')
+    }
+  }
+
   const toggleSource = (id) => {
     setSources((prev) =>
       prev.map((s) => {
@@ -397,6 +420,7 @@ export function SourcesRail() {
             tree={tree}
             filterCategory={activeTab}
             onToggleSource={toggleSource}
+            onDeleteSource={handleDeleteSource}
             compact={false}
           />
         </div>

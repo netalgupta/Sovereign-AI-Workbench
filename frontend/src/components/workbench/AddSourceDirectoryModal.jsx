@@ -90,7 +90,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   // Handle manual path submission
   const handleAddPath = async (e) => {
     e?.preventDefault()
-    const pathToAdd = customPath.trim()
+    const pathToAdd = customPath.trim().replace(/^["']|["']$/g, '')
     if (!pathToAdd) {
       showToast('Please enter a valid directory or file path', 'error')
       return
@@ -106,14 +106,15 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       })
       const data = await res.json()
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to add source')
+        throw new Error(data.error || data.detail || 'Failed to add source')
       }
 
       showToast(data.message || `Source registered: ${pathToAdd}`, 'success')
       setCustomPath('')
       if (onDirectoriesUpdated) onDirectoriesUpdated()
+      onClose()
     } catch (err) {
-      showToast(err.message, 'error')
+      showToast(err.message || 'Failed to register source', 'error')
     } finally {
       setIsSubmitting(false)
       setUploadStatus('')

@@ -176,8 +176,62 @@ class PipelineState:
 
         return total_chunks, details
 
+    def delete_source(self, target_path: str) -> dict:
+        """Remove a file or folder from the active corpus, VectorStore, and registry."""
+        p = Path(target_path)
+        doc_name = p.name
+        norm_path = str(p.resolve()).lower()
+
+        # 1. Stop watching if it's a watched directory
+        self.watcher.remove_source(target_path)
+
+        # 2. Remove matching chunks from in-memory chunks list
+        removed_count = 0
+        with self._lock:
+            if self._chunks:
+                original_len = len(self._chunks)
+                self._chunks = [
+                    c for c in self._chunks
+                    if c.metadata.source_document != doc_name
+                    and c.metadata.source_document != target_path
+                    and not norm_path in str(Path(c.metadata.source_document).resolve()).lower()
+                ]
+                removed_count = original_len - len(self._chunks)
+            self._snapshot = None
+
+        # 3. Remove from VectorStore SQLite metadata table
+        if self._store and getattr(self._store, "_conn", None):
+            try:
+                self._store._conn.execute(
+                    "DELETE FROM chunks WHERE source_document = ? OR source_document LIKE ?",
+                    (doc_name, f"%{doc_name}%")
+                )
+                self._store._conn.commit()
+            except Exception:
+                pass
+
+        # 4. If file is in 07_User_Uploads or explicitly specified, delete from disk
+        file_deleted = False
+        try:
+            if p.exists() and p.is_file():
+                if "07_user_uploads" in str(p.resolve()).lower() or p.name in target_path:
+                    p.unlink()
+                    file_deleted = True
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "removed": target_path,
+            "filename": doc_name,
+            "chunks_removed": removed_count,
+            "file_deleted": file_deleted,
+            "message": f"Source '{doc_name}' removed from active knowledge base ({removed_count} chunks deleted).",
+        }
+
     @property
     def corpus_is_loaded(self) -> bool:
+
         return self._store is not None
 
 

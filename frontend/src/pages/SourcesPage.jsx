@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Search,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react'
 import { api } from '../lib/pipelineApi'
 import { ForceGraph } from '../components/graph/ForceGraph'
@@ -86,6 +87,33 @@ export function SourcesPage() {
       showToast('Rescan completed', 'info')
     } finally {
       setIsRefreshing(false)
+    }
+  }
+
+  const handleDeleteSource = async (source) => {
+    if (!source) return
+    const name = source.name || 'item'
+    if (!window.confirm(`Are you sure you want to delete "${name}" from sources and FAISS index?`)) {
+      return
+    }
+
+    try {
+      const targetParam = source.fullPath || source.relPath || source.path || source.id || source.name
+      const res = await fetch(`/api/sources?path=${encodeURIComponent(targetParam)}`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        showToast(`Source "${name}" removed from knowledge base`, 'info')
+        if (selectedFile?.id === source.id || selectedFile?.fullPath === source.fullPath) {
+          setSelectedFile(null)
+        }
+        await refreshAll()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        showToast(err.error || `Failed to delete "${name}"`, 'error')
+      }
+    } catch {
+      showToast(`Failed to delete "${name}"`, 'error')
     }
   }
 
@@ -459,6 +487,7 @@ export function SourcesPage() {
                   selectedId={selectedFile?.id}
                   onSelectSource={(source) => setSelectedFile(source)}
                   onToggleSource={handleToggleSource}
+                  onDeleteSource={handleDeleteSource}
                   compact={false}
                 />
               </div>
@@ -524,19 +553,35 @@ export function SourcesPage() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSource(selectedFile.id)}
-                      className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-fast flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                      style={{
-                        background: selectedFile.enabled !== false ? 'var(--color-accent-soft, var(--color-overlay))' : 'transparent',
-                        borderColor: selectedFile.enabled !== false ? 'var(--color-accent)' : 'var(--color-border)',
-                        color: selectedFile.enabled !== false ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                      }}
-                    >
-                      {selectedFile.enabled !== false ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-                      <span>{selectedFile.enabled !== false ? 'In Scope' : 'Excluded from Scope'}</span>
-                    </button>
+                    <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSource(selectedFile.id)}
+                        className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-fast flex items-center gap-1.5 cursor-pointer"
+                        style={{
+                          background: selectedFile.enabled !== false ? 'var(--color-accent-soft, var(--color-overlay))' : 'transparent',
+                          borderColor: selectedFile.enabled !== false ? 'var(--color-accent)' : 'var(--color-border)',
+                          color: selectedFile.enabled !== false ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                        }}
+                      >
+                        {selectedFile.enabled !== false ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                        <span>{selectedFile.enabled !== false ? 'In Scope' : 'Excluded from Scope'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSource(selectedFile)}
+                        className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-fast flex items-center gap-1.5 cursor-pointer hover:bg-red-500/10 hover:border-red-500/40 text-red-500"
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.08)',
+                          borderColor: 'rgba(239, 68, 68, 0.25)',
+                        }}
+                        title={`Remove "${selectedFile.name}" from knowledge base`}
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete Source</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Metadata Attributes Grid */}

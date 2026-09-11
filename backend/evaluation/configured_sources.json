@@ -1,0 +1,24 @@
+[
+  {
+    "id": "user_uploads_corpus",
+    "name": "User Ingested Sources",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\MRPL_RAG_Test_Corpus\\07_User_Uploads",
+    "isPreset": true,
+    "isUserUploads": true,
+    "enabled": true
+  },
+  {
+    "id": "mrpl_rag_corpus",
+    "name": "MRPL_RAG_Test_Corpus",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\MRPL_RAG_Test_Corpus",
+    "isPreset": true,
+    "enabled": true
+  },
+  {
+    "id": "mrpl_chart_corpus",
+    "name": "MRPL_Chart_Stress_Corpus",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\MRPL_Chart_Stress_Corpus",
+    "isPreset": true,
+    "enabled": true
+  }
+]

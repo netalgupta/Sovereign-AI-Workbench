@@ -14,7 +14,7 @@
 
 import { create } from 'zustand'
 import { now } from '../lib/formatTime'
-import { MOCK_PLAN_STEPS } from '../lib/api'
+import { MOCK_PLAN_STEPS, resolveApproval as apiResolveApproval } from '../lib/api'
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -71,6 +71,10 @@ export const useChatStore = create((set, get) => ({
   resolveApproval: (confirmed) => {
     const action = get().pendingApprovalAction
     const actionDesc = action?.description || 'HCU feed rate modification'
+
+    if (action?.id) {
+      apiResolveApproval(action.id, confirmed, 'operator').catch(() => {})
+    }
 
     set({
       awaitingHumanApproval: false,

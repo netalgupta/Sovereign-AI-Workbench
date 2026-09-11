@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   ChevronRight,
   ChevronDown,
@@ -10,7 +10,9 @@ import {
   Plug,
   FileCode,
   HardDrive,
+  Trash2,
 } from 'lucide-react'
+
 
 function getFileIcon(type, category, ext) {
   if (type === 'API' || ext === 'API') return <Plug size={12} strokeWidth={1.8} />
@@ -135,21 +137,38 @@ export function SourceFileTree({
   selectedId = null,
   onSelectSource,
   onToggleSource,
+  onDeleteSource,
   compact = false,
 }) {
-  // Store expanded folder IDs
-  const [expandedFolders, setExpandedFolders] = useState(() => {
-    const initial = new Set()
-    tree.forEach((root) => {
-      initial.add(root.id)
-      if (root.children) {
-        root.children.forEach((c) => {
-          if (c.type === 'directory') initial.add(c.id)
-        })
+  // Helper to gather all directory IDs recursively
+  const getAllDirectoryIds = (nodes) => {
+    const ids = new Set()
+    function walk(list) {
+      if (!Array.isArray(list)) return
+      for (const n of list) {
+        if (n.type === 'directory') {
+          ids.add(n.id)
+          if (n.children) walk(n.children)
+        }
       }
-    })
-    return initial
-  })
+    }
+    walk(nodes)
+    return ids
+  }
+
+  // Store expanded folder IDs — expanded by default so files are never hidden
+  const [expandedFolders, setExpandedFolders] = useState(() => getAllDirectoryIds(tree))
+
+  // Auto-expand all folders whenever tree updates (e.g. newly added folder or file)
+  useEffect(() => {
+    if (tree && tree.length > 0) {
+      setExpandedFolders((prev) => {
+        const all = getAllDirectoryIds(tree)
+        // Merge with existing so user manual closes can be respected or all open
+        return new Set([...prev, ...all])
+      })
+    }
+  }, [tree])
 
   const toggleFolder = (folderId) => {
     setExpandedFolders((prev) => {
@@ -162,6 +181,9 @@ export function SourceFileTree({
       return next
     })
   }
+
+  const expandAll = () => setExpandedFolders(getAllDirectoryIds(tree))
+  const collapseAll = () => setExpandedFolders(new Set())
 
   // Recursive tree renderer
   const renderNode = (node, depth = 0) => {
@@ -198,6 +220,8 @@ export function SourceFileTree({
       if ((filterCategory !== 'all' || searchQuery.trim()) && children.length === 0) {
         return null
       }
+
+      const isCustomOrUploaded = !node.isPreset || node.name === '07_User_Uploads' || node.id === 'user_uploads_corpus'
 
       return (
         <div key={node.id} className="flex flex-col select-none">
@@ -259,10 +283,20 @@ export function SourceFileTree({
               >
                 {node.fileCount}
               </span>
-              {node.sizeDisplay && node.sizeDisplay !== 'Live Data' && (
-                <span className="text-[10px] font-sans hidden sm:inline" style={{ color: 'var(--color-text-faint)' }}>
-                  {node.sizeDisplay}
-                </span>
+
+              {/* Optional Delete Folder Button */}
+              {onDeleteSource && isCustomOrUploaded && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteSource(node)
+                  }}
+                  className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10 transition-fast cursor-pointer opacity-0 group-hover:opacity-100"
+                  title={`Remove folder "${node.name}" from sources`}
+                >
+                  <Trash2 size={12} />
+                </button>
               )}
             </div>
           </div>
@@ -341,39 +375,80 @@ export function SourceFileTree({
           </div>
         </div>
 
-        {/* Toggle Switch */}
-        {onToggleSource && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isEnabled}
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleSource(node.id)
-            }}
-            className="rounded-full transition-base relative flex-shrink-0 cursor-pointer"
-            style={{
-              width: 24,
-              height: 13,
-              background: isEnabled ? 'var(--color-accent)' : 'var(--color-border-strong)',
-            }}
-            title={isEnabled ? 'Included in retrieval scope' : 'Excluded from retrieval scope'}
-          >
-            <span
-              className="absolute top-[1.5px] w-2 h-2 rounded-full bg-white transition-fast shadow-xs"
-              style={{
-                left: isEnabled ? 13 : 2,
+        {/* Action Buttons: Delete & Scope Toggle */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {onDeleteSource && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDeleteSource(node)
               }}
-            />
-          </button>
-        )}
+              className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10 transition-fast cursor-pointer opacity-0 group-hover:opacity-100"
+              title={`Delete "${node.name}" from knowledge base`}
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+
+          {/* Toggle Switch */}
+          {onToggleSource && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isEnabled}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleSource(node.id)
+              }}
+              className="rounded-full transition-base relative flex-shrink-0 cursor-pointer"
+              style={{
+                width: 24,
+                height: 13,
+                background: isEnabled ? 'var(--color-accent)' : 'var(--color-border-strong)',
+              }}
+              title={isEnabled ? 'Included in retrieval scope' : 'Excluded from retrieval scope'}
+            >
+              <span
+                className="absolute top-[1.5px] w-2 h-2 rounded-full bg-white transition-fast shadow-xs"
+                style={{
+                  left: isEnabled ? 13 : 2,
+                }}
+              />
+            </button>
+          )}
+        </div>
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-0.5 py-1">
+      {/* Quick Expand / Collapse All bar if multiple roots */}
+      {tree.length > 0 && !compact && (
+        <div className="flex items-center justify-between px-2 py-1 mb-1 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+          <span className="font-semibold uppercase tracking-wider text-[9px]">Corpus Structure</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={expandAll}
+              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline"
+            >
+              Expand all
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline"
+            >
+              Collapse all
+            </button>
+          </div>
+        </div>
+      )}
       {tree.map((rootNode) => renderNode(rootNode, 0))}
     </div>
   )
 }
+

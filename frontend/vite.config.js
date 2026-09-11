@@ -182,9 +182,24 @@ function systemAndModelsPlugin() {
           }
         }
 
-        // Active watched directories list
-        if (!global.__configuredSourceDirs) {
-          global.__configuredSourceDirs = [
+        // Active watched directories list with on-disk persistence
+        const configFilePath = path.resolve(cwd, 'backend', 'evaluation', 'configured_sources.json')
+        function loadConfiguredDirs() {
+          if (fs.existsSync(configFilePath)) {
+            try {
+              const saved = JSON.parse(fs.readFileSync(configFilePath, 'utf-8'))
+              if (Array.isArray(saved) && saved.length > 0) return saved
+            } catch {}
+          }
+          return [
+            {
+              id: 'user_uploads_corpus',
+              name: 'User Ingested Sources',
+              path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads'),
+              isPreset: true,
+              isUserUploads: true,
+              enabled: true,
+            },
             {
               id: 'mrpl_rag_corpus',
               name: 'MRPL_RAG_Test_Corpus',
@@ -200,6 +215,18 @@ function systemAndModelsPlugin() {
               enabled: true,
             },
           ]
+        }
+        function saveConfiguredDirs(dirs) {
+          try {
+            const dir = path.dirname(configFilePath)
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+            fs.writeFileSync(configFilePath, JSON.stringify(dirs, null, 2), 'utf-8')
+          } catch {}
+        }
+
+        if (!global.__configuredSourceDirs || !global.__configuredSourceDirs.some((d) => d.id === 'user_uploads_corpus')) {
+          global.__configuredSourceDirs = loadConfiguredDirs()
+          saveConfiguredDirs(global.__configuredSourceDirs)
         }
 
         if (url?.startsWith('/MRPL_Chart_Stress_Corpus/') || url?.startsWith('/MRPL_RAG_Test_Corpus/')) {
@@ -225,7 +252,7 @@ function systemAndModelsPlugin() {
         if (url === '/api/sources' && req.method === 'DELETE') {
           let body = ''
           req.on('data', (c) => { body += c })
-          req.on('end', () => {
+          req.on('end', async () => {
             try {
               const urlObj = new URL(req.url, 'http://localhost')
               let targetPath = urlObj.searchParams.get('path')
@@ -243,6 +270,49 @@ function systemAndModelsPlugin() {
                     path.normalize(d.path).toLowerCase() !== normTarget &&
                     d.name.toLowerCase() !== normTarget
                 )
+                saveConfiguredDirs(global.__configuredSourceDirs)
+
+                // Delete file or folder from disk if it exists
+                const baseName = path.basename(targetPath)
+                const possiblePaths = [
+                  targetPath,
+                  path.resolve(cwd, targetPath),
+                  path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads', baseName),
+                  path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads', targetPath),
+                ]
+                for (const p of possiblePaths) {
+                  if (fs.existsSync(p)) {
+                    try {
+                      const stat = fs.statSync(p)
+                      if (stat.isFile()) {
+                        fs.unlinkSync(p)
+                      } else if (stat.isDirectory()) {
+                        // Prevent deleting the main preset root directories
+                        const normalizedP = path.normalize(p).toLowerCase()
+                        const ragRoot = path.normalize(path.resolve(cwd, 'MRPL_RAG_Test_Corpus')).toLowerCase()
+                        const chartRoot = path.normalize(path.resolve(cwd, 'MRPL_Chart_Stress_Corpus')).toLowerCase()
+                        const uploadsRoot = path.normalize(path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads')).toLowerCase()
+                        if (normalizedP === uploadsRoot) {
+                          // Clear contents of 07_User_Uploads without removing folder
+                          for (const file of fs.readdirSync(p)) {
+                            fs.rmSync(path.join(p, file), { recursive: true, force: true })
+                          }
+                        } else if (normalizedP !== ragRoot && normalizedP !== chartRoot) {
+                          fs.rmSync(p, { recursive: true, force: true })
+                        }
+                      }
+                    } catch {}
+                  }
+                }
+
+                // Forward deletion to FastAPI backend so vector store chunks are removed
+                try {
+                  await fetch(`http://127.0.0.1:8000/api/sources?path=${encodeURIComponent(targetPath)}`, {
+                    method: 'DELETE',
+                  })
+                } catch (err) {
+                  console.warn('[Backend delete error]', err.message)
+                }
               }
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ success: true, remaining: global.__configuredSourceDirs }))
@@ -348,7 +418,7 @@ function systemAndModelsPlugin() {
           req.on('end', async () => {
             try {
               const payload = JSON.parse(body || '{}')
-              let dirPath = payload.path?.trim()
+              let dirPath = payload.path?.trim().replace(/^["']|["']$/g, '')
               if (!dirPath) {
                 res.statusCode = 400
                 res.end(JSON.stringify({ error: 'Missing path parameter' }))
@@ -356,9 +426,13 @@ function systemAndModelsPlugin() {
               }
               const resolved = path.isAbsolute(dirPath) ? dirPath : path.resolve(cwd, dirPath)
               if (!fs.existsSync(resolved)) {
-                res.statusCode = 404
-                res.end(JSON.stringify({ error: `Path does not exist on disk: ${resolved}` }))
-                return
+                try {
+                  fs.mkdirSync(resolved, { recursive: true })
+                } catch {
+                  res.statusCode = 404
+                  res.end(JSON.stringify({ error: `Path does not exist on disk: ${resolved}` }))
+                  return
+                }
               }
               const stat = fs.statSync(resolved)
               let totalChunks = 0
@@ -388,6 +462,8 @@ function systemAndModelsPlugin() {
                 } catch (err) {
                   console.warn('[Ingest error]', err.message)
                 }
+
+                saveConfiguredDirs(global.__configuredSourceDirs)
 
                 res.setHeader('Content-Type', 'application/json')
                 res.end(
@@ -421,6 +497,7 @@ function systemAndModelsPlugin() {
                   enabled: true,
                 })
               }
+              saveConfiguredDirs(global.__configuredSourceDirs)
 
               // Trigger chunking and embedding of directory contents in FastAPI backend
               try {
@@ -489,6 +566,9 @@ function systemAndModelsPlugin() {
                   const entryRelPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name
 
                   if (entry.isDirectory()) {
+                    if (dirConfig.id === 'mrpl_rag_corpus' && entry.name === '07_User_Uploads') {
+                      continue
+                    }
                     const subDirNode = {
                       id: `${dirConfig.id}_${entryRelPath.replace(/[\\/]/g, '_')}`,
                       name: entry.name,

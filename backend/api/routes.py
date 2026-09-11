@@ -443,8 +443,10 @@ def add_source(body: AddSourceRequest) -> dict:
 
 @router.delete("/sources")
 def remove_source(path: str = Query(...)) -> dict:
-    """Stop watching a folder. Removes nothing from disk."""
-    return {"removed": get_state().watcher.remove_source(path)}
+    """Remove a source file or directory from active knowledge base and vector store."""
+    state = get_state()
+    return state.delete_source(path)
+
 
 
 @router.post("/sources/scan")
@@ -931,12 +933,12 @@ def chat(body: ChatRequestBody) -> dict:
 
 # -------------------------------------------------------------- network
 
-# @router.get("/network/status")
-# def get_network_telemetry() -> dict:
-#     """Network connection status and telemetry metrics (FR-1, FR-15)."""
-#     from backend.audit.network_monitor import get_network_status
+@router.get("/network/status")
+def get_network_telemetry() -> dict:
+    """Network connection status and telemetry metrics (FR-1, FR-15)."""
+    from backend.audit.network_monitor import get_network_status
 
-#     return get_network_status()
+    return get_network_status()
 
 
 # ---------------------------------------------------- approval resolve

@@ -22,7 +22,33 @@ export default function Placeholder({
   onViewFullMonitor,
 }) {
   const navigate = useNavigate()
-  const isSecure = externalCount === 0 && status !== 'external_detected'
+  const [liveData, setLiveData] = React.useState(null)
+
+  React.useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/network/status')
+        if (res.ok && active) {
+          const data = await res.json()
+          setLiveData(data)
+        }
+      } catch {}
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [])
+
+  const effStatus = liveData ? (liveData.is_air_gapped ? 'secure' : (liveData.externalCount > 0 ? 'external_detected' : 'secure')) : status
+  const effExternalCount = liveData ? (liveData.externalCount ?? liveData.connections?.filter(c => c.is_external)?.length ?? 0) : externalCount
+  const effConnections = liveData?.connections || connections
+  const effMetrics = liveData?.metrics || metrics
+
+  const isSecure = effExternalCount === 0 && effStatus !== 'external_detected'
 
   const handleOpenFull = () => {
     if (onViewFullMonitor) {
@@ -65,18 +91,18 @@ export default function Placeholder({
           {/* External connections count */}
           <div className="flex items-center gap-1 text-[11px]">
             <span style={{ color: isSecure ? 'var(--color-text-muted)' : '#ef4444' }}>
-              ● {externalCount} external connections
+              ● {effExternalCount} external connections
             </span>
           </div>
 
           <span className="hidden sm:inline text-[10px] text-zinc-400 dark:text-zinc-600">|</span>
 
-          {/* Integration Handoff Pill — Quiet, muted text without loud box */}
+          {/* Integration Handoff Pill */}
           <span
             className="hidden sm:inline text-[10px] font-mono"
-            style={{ color: 'var(--color-text-muted)' }}
+            style={{ color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}
           >
-            WebSocket feed pending — owned by Sahil
+            {liveData ? 'Live Backend Zero-Egress Stream' : 'Live Hardware Polling'}
           </span>
         </div>
 
@@ -84,10 +110,10 @@ export default function Placeholder({
         <button
           type="button"
           onClick={handleOpenFull}
-          className="flex items-center gap-1 text-[11px] font-sans font-medium hover:underline transition-colors"
+          className="flex items-center gap-1 text-[11px] font-sans font-medium hover:underline transition-colors cursor-pointer"
           style={{ color: 'var(--color-accent)' }}
         >
-          <span>Live Sockets ({connections.length})</span>
+          <span>Live Sockets ({effConnections.length})</span>
           <ArrowUpRight size={12} />
         </button>
       </aside>
@@ -170,12 +196,12 @@ export default function Placeholder({
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>CPU Utilization</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {metrics?.cpuPercent || 14}%
+                  {effMetrics?.cpuPercent || 14}%
                 </span>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }}>
-              simulated
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+              {liveData ? 'live' : 'simulated'}
             </span>
           </div>
 
@@ -190,12 +216,12 @@ export default function Placeholder({
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>Memory Footprint</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {metrics?.memoryGb || 3.8} GB
+                  {effMetrics?.memoryGb || 3.8} GB
                 </span>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }}>
-              simulated
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+              {liveData ? 'live' : 'simulated'}
             </span>
           </div>
 
@@ -210,7 +236,7 @@ export default function Placeholder({
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>External Sockets</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {metrics?.networkRate || '0.0 MB/s'} (0 ext)
+                  {effMetrics?.networkRate || '0.0 MB/s'} ({effExternalCount} ext)
                 </span>
               </div>
             </div>
@@ -278,7 +304,7 @@ export default function Placeholder({
                 </tr>
               </thead>
               <tbody className="divide-y font-mono text-[11px]" style={{ borderColor: 'var(--color-border)' }}>
-                {connections.map((c) => (
+                {effConnections.map((c) => (
                   <tr
                     key={c.id}
                     className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors"

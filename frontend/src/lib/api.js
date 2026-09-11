@@ -214,11 +214,77 @@ export function isActionApprovalRequest(msg) {
 }
 
 export async function checkBackendHealth() {
-  // Always "online" — this IS the backend for now, by design, not a fallback.
-  return { ok: true }
+  try {
+    const res = await fetch('/api/health')
+    if (res.ok) {
+      const data = await res.json()
+      return { ok: true, live: true, ...data }
+    }
+  } catch {}
+  return { ok: true, live: false }
+}
+
+/**
+ * Send operator decision (Confirm or Cancel) to the safety approval gate.
+ */
+export async function resolveApproval(requestId, confirmed = true, operator = 'operator') {
+  try {
+    const res = await fetch('/api/approvals/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, confirmed, operator }),
+    })
+    if (res.ok) return await res.json()
+  } catch (err) {
+    console.warn('[API] /api/approvals/resolve error:', err)
+  }
+  return { status: confirmed ? 'approved' : 'refused' }
+}
+
+/**
+ * Fetch live hardware zero-egress telemetry from backend.
+ */
+export async function getNetworkStatus() {
+  try {
+    const res = await fetch('/api/network/status')
+    if (res.ok) return await res.json()
+  } catch {}
+  return null
 }
 
 export async function sendMessage(message, sessionId) {
+  // 1. Attempt live agent turn via backend orchestrator (/api/chat)
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 60000) // 60s max for deep multi-agent turns
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: sessionId || 'default' }),
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+
+    if (res.ok) {
+      const data = await res.json()
+      if (data && (data.reply || data.plan?.length > 0 || data.citations?.length > 0)) {
+        return {
+          reply: data.reply || 'Analysis complete.',
+          citations: data.citations || [],
+          plan: data.plan || [],
+          session_id: data.session_id || sessionId,
+          awaiting_human_approval: Boolean(data.awaiting_human_approval),
+          approval_action: data.approval_action || null,
+          tool_call_events: data.tool_call_events || [],
+          live: true,
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[API] Live /api/chat unavailable or timed out, using fallback simulation:', err)
+  }
+
+  // 2. Offline fallback simulation
   await new Promise((r) => setTimeout(r, MOCK_LATENCY_MS))
 
   const isApprovalNeeded = isActionApprovalRequest(message)
@@ -235,6 +301,7 @@ export async function sendMessage(message, sessionId) {
       session_id: sessionId,
       awaiting_human_approval: true,
       approval_action: MOCK_FEED_RATE_APPROVAL_ACTION,
+      live: false,
     }
   }
 
@@ -245,6 +312,7 @@ export async function sendMessage(message, sessionId) {
     session_id: sessionId,
     awaiting_human_approval: false,
     approval_action: null,
+    live: false,
   }
 }
 
