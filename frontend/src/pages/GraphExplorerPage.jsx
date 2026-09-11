@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2, RefreshCw, Search } from 'lucide-react'
-import { ForceGraph, nodeName } from '../components/graph/ForceGraph'
+import { ForceGraph } from '../components/graph/ForceGraph'
+import { nodeName, getNodeColor } from '../components/graph/graphTheme'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Network } from 'lucide-react'
@@ -218,9 +219,14 @@ export function GraphExplorerPage() {
           ) : (
             <>
               <span
-                className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold text-white"
-                style={{ background: `var(--graph-${selected.labels[0].toLowerCase()}, #888)` }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold font-mono"
+                style={{
+                  background: `${getNodeColor(selected)}20`,
+                  color: getNodeColor(selected),
+                  border: `1px solid ${getNodeColor(selected)}55`,
+                }}
               >
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getNodeColor(selected) }} />
                 {selected.labels.join(' · ')}
               </span>
               <h2 className="mt-2 font-semibold break-words" style={{ color: 'var(--color-text)' }}>

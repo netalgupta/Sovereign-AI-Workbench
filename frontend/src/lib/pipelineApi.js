@@ -36,6 +36,17 @@ async function withFallback(apiPath, snapshotPath, shape = (d) => d) {
     const data = await tryApi(apiPath)
     return { ...shape(data), source: data.source ?? 'api', live: true }
   } catch {
+    // If backend on API_BASE is down, try same-origin relative API path (e.g. Vite dev middleware)
+    if (API_BASE && API_BASE !== '') {
+      try {
+        const response = await fetch(apiPath)
+        if (response.ok) {
+          const data = await response.json()
+          return { ...shape(data), source: data.source ?? 'api', live: true }
+        }
+      } catch {}
+    }
+
     if (!snapshotPath) return { ...shape({}), source: 'unavailable', live: false }
     try {
       const response = await fetch(snapshotPath)

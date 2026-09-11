@@ -8,14 +8,16 @@ import {
   Database,
   MessageSquare,
   HardDrive,
-  Link as LinkIcon,
-  Plug,
   Settings,
   X,
   Network,
+  Maximize2,
+  ArrowUpRight,
 } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
+import { SourceFileTree } from './SourceFileTree'
+import { AddSourceDirectoryModal } from './AddSourceDirectoryModal'
 
 const INITIAL_SOURCES = [
   {
@@ -296,6 +298,10 @@ export function Sidebar() {
   // Sources tab internal filter state
   const [sourcesCategory, setSourcesCategory] = useState('all')
   const [sources, setSources] = useState(INITIAL_SOURCES)
+  const [tree, setTree] = useState([])
+  const [directories, setDirectories] = useState([])
+  const [totalSizeDisplay, setTotalSizeDisplay] = useState('2.83 MB')
+  const [isAddDirModalOpen, setIsAddDirModalOpen] = useState(false)
 
   // Chats tab session state
   const [chats, setChats] = useState(MOCK_CHATS)
@@ -320,15 +326,28 @@ export function Sidebar() {
   }, [isSearchOpen])
 
   // Fetch live MRPL Corpus directly from server on mount
-  useEffect(() => {
+  const fetchCorpus = () => {
     fetch('/api/corpus')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.sources && Array.isArray(data.sources)) {
           setSources(data.sources)
         }
+        if (data?.tree && Array.isArray(data.tree)) {
+          setTree(data.tree)
+        }
+        if (data?.directories && Array.isArray(data.directories)) {
+          setDirectories(data.directories)
+        }
+        if (data?.totalSizeDisplay) {
+          setTotalSizeDisplay(data.totalSizeDisplay)
+        }
       })
       .catch(() => {})
+  }
+
+  useEffect(() => {
+    fetchCorpus()
   }, [])
 
   // Expose test automation helpers
@@ -380,18 +399,11 @@ export function Sidebar() {
   const activeCount = sources.filter((s) => s.enabled).length
   const totalCount = sources.length
 
-  const filteredSources = sources.filter((s) => {
-    if (sourcesCategory === 'all') return true
-    if (sourcesCategory === 'documents') return s.category === 'documents'
-    if (sourcesCategory === 'data') return s.category === 'data'
-    if (sourcesCategory === 'apis') return s.category === 'apis'
-    return true
-  })
-
   const counts = {
     all: sources.length,
     documents: sources.filter((s) => s.category === 'documents').length,
     data: sources.filter((s) => s.category === 'data').length,
+    charts: sources.filter((s) => s.category === 'charts').length,
     apis: sources.filter((s) => s.category === 'apis').length,
   }
 
@@ -533,203 +545,145 @@ export function Sidebar() {
         </div>
 
         {/* ── 3. Mutually Exclusive Accordion Body (Smooth Height Transition) ── */}
-        <div className="flex-1 overflow-hidden flex flex-col relative">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
           {/* TAB 1: Sources Tab Content */}
           <div
-            className={`collapsible-grid flex-1 ${activeTab === 'sources' ? 'is-expanded' : ''}`}
-            style={{ display: activeTab === 'sources' ? 'flex' : 'none', flexDirection: 'column' }}
+            className="flex-1 min-h-0 flex flex-col overflow-hidden"
+            style={{ display: activeTab === 'sources' ? 'flex' : 'none' }}
           >
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              {/* Category Filter Pills & Add Button */}
-              <div className="px-4 pt-3 pb-2 flex-shrink-0 flex items-center justify-between gap-2">
-                <div
-                  className="flex items-center p-0.5 rounded-md text-[11px] font-medium flex-1 min-w-0"
-                  style={{ background: 'var(--color-overlay)' }}
-                >
-                  {[
-                    { id: 'all', label: `All (${counts.all})` },
-                    { id: 'documents', label: `Docs (${counts.documents})` },
-                    { id: 'data', label: `Data (${counts.data})` },
-                    { id: 'apis', label: `APIs (${counts.apis})` },
-                  ].map((tab) => {
-                    const isSelected = sourcesCategory === tab.id
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setSourcesCategory(tab.id)}
-                        className="flex-1 py-0.5 rounded text-[10px] transition-fast text-center cursor-pointer truncate"
-                        style={{
-                          background: isSelected ? 'var(--color-surface)' : 'transparent',
-                          color: isSelected ? 'var(--color-text)' : 'var(--color-text-muted)',
-                          fontWeight: isSelected ? 600 : 500,
-                        }}
-                      >
-                        {tab.label}
-                      </button>
-                    )
-                  })}
+            {/* Category Filter Pills & Add / Expand Buttons */}
+            <div className="px-3 pt-3 pb-2 flex-shrink-0 flex items-center justify-between gap-1.5">
+              <div
+                className="flex items-center p-0.5 rounded-md text-[10px] font-medium flex-1 min-w-0"
+                style={{ background: 'var(--color-overlay)' }}
+              >
+                {[
+                  { id: 'all', label: `All (${counts.all})` },
+                  { id: 'documents', label: `Docs (${counts.documents})` },
+                  { id: 'data', label: `Data (${counts.data})` },
+                  { id: 'charts', label: `Charts (${counts.charts})` },
+                  { id: 'apis', label: `APIs (${counts.apis})` },
+                ].map((tab) => {
+                  const isSelected = sourcesCategory === tab.id
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSourcesCategory(tab.id)}
+                      className="flex-1 py-0.5 rounded text-[9.5px] transition-fast text-center cursor-pointer truncate"
+                      style={{
+                        background: isSelected ? 'var(--color-surface)' : 'transparent',
+                        color: isSelected ? 'var(--color-text)' : 'var(--color-text-muted)',
+                        fontWeight: isSelected ? 600 : 500,
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Add Source Directory / Files button */}
+              <button
+                type="button"
+                onClick={() => setIsAddDirModalOpen(true)}
+                className="p-1 rounded-md text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 shadow-xs"
+                style={{
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-accent)',
+                }}
+                title="Browse & add source directories or files"
+              >
+                <Plus size={13} strokeWidth={2.4} />
+              </button>
+
+              {/* Expand to Full Sources Hub button */}
+              <Link
+                to="/sources"
+                className="p-1 rounded-md text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 shadow-xs"
+                style={{
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-text-muted)',
+                }}
+                title="Open Sources & Pipeline Internals Hub (/sources)"
+              >
+                <Maximize2 size={13} strokeWidth={2} />
+              </Link>
+            </div>
+
+            {/* Hierarchical Tree with Smooth Custom Scrollbar */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1 flex flex-col gap-0.5 custom-scrollbar">
+              <SourceFileTree
+                tree={tree}
+                filterCategory={sourcesCategory}
+                onToggleSource={toggleSource}
+                compact={false}
+              />
+            </div>
+
+            {/* Knowledge Base Summary Card */}
+            <div className="px-3.5 py-2 flex-shrink-0">
+              <div
+                className="p-2.5 rounded-lg flex flex-col gap-1.5 transition-fast"
+                style={{
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  boxShadow: 'var(--shadow-xs)',
+                }}
+              >
+                <div className="flex items-center justify-between text-xs">
+                  <div
+                    className="flex items-center gap-1.5 font-semibold"
+                    style={{ color: 'var(--color-text)' }}
+                  >
+                    <HardDrive size={13} strokeWidth={2} style={{ color: 'var(--color-accent)' }} />
+                    <span className="text-[11px]">Knowledge Base</span>
+                  </div>
+                  <span
+                    className="text-[10px] font-mono font-medium"
+                    style={{ color: 'var(--color-text-muted)' }}
+                  >
+                    {activeCount} / {totalCount} active
+                  </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    showToast('Document ingestion pipeline ready — drag & drop supported', 'info')
-                  }
-                  className="p-1 rounded-md text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 shadow-xs"
+                {/* Storage Meter */}
+                <div className="flex flex-col gap-1">
+                  <div
+                    className="flex items-center justify-between text-[9px]"
+                    style={{ color: 'var(--color-text-muted)' }}
+                  >
+                    <span className="truncate">MRPL Dual-Corpus Storage</span>
+                    <span className="font-mono font-medium flex-shrink-0">{totalSizeDisplay}</span>
+                  </div>
+                  <div
+                    className="w-full h-1.5 rounded-xs overflow-hidden"
+                    style={{ background: 'var(--color-overlay)' }}
+                  >
+                    <div
+                      className="h-full rounded-xs transition-base"
+                      style={{
+                        width: '100%',
+                        background: 'var(--color-accent)',
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Link to full Sources Hub */}
+                <Link
+                  to="/sources"
+                  className="flex items-center justify-between mt-1 pt-1.5 border-t text-[10px] font-semibold hover:underline cursor-pointer"
                   style={{
-                    background: 'var(--color-surface)',
-                    border: '1px solid var(--color-border)',
+                    borderColor: 'var(--color-border)',
                     color: 'var(--color-accent)',
                   }}
-                  title="Add document or API connection"
                 >
-                  <Plus size={13} strokeWidth={2.4} />
-                </button>
-              </div>
-
-              {/* Sources List */}
-              <div className="flex-1 overflow-y-auto px-3.5 py-1 flex flex-col gap-1.5">
-                {filteredSources.map((source) => (
-                  <div
-                    key={source.id}
-                    className="flex items-center justify-between p-2 rounded-md transition-fast hover:bg-[var(--color-surface-hover)] group"
-                    style={{
-                      background: 'transparent',
-                      opacity: source.enabled ? 1 : 0.65,
-                    }}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                      <div
-                        className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 select-none transition-fast"
-                        style={{
-                          background: source.bg,
-                          border: `1px solid ${source.border}`,
-                          color: source.color,
-                        }}
-                      >
-                        {source.iconType === 'database' ? (
-                          <Database size={13} strokeWidth={2} />
-                        ) : source.iconType === 'api' ? (
-                          <Plug size={13} strokeWidth={2} />
-                        ) : source.iconType === 'link' ? (
-                          <LinkIcon size={13} strokeWidth={2} />
-                        ) : (
-                          <span className="text-[9px] font-bold tracking-tighter uppercase font-mono">
-                            {source.iconText}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-col min-w-0">
-                        <span
-                          className="text-xs font-semibold truncate leading-tight"
-                          style={{ color: 'var(--color-text)' }}
-                          title={source.name}
-                        >
-                          {source.name}
-                        </span>
-                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] leading-tight flex-wrap">
-                          {source.isLive ? (
-                            <span
-                              className="flex items-center gap-1 font-medium"
-                              style={{ color: 'var(--color-success)' }}
-                            >
-                              <span
-                                className="w-1.5 h-1.5 rounded-full animate-pulse"
-                                style={{ background: 'var(--color-success)' }}
-                              />
-                              Connected
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--color-text-muted)' }}>
-                              {source.type} • {source.size}
-                            </span>
-                          )}
-                          <span style={{ color: 'var(--color-text-faint)' }}>•</span>
-                          <span style={{ color: 'var(--color-text-faint)' }}>
-                            {source.addedAgo}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Toggle Switch */}
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={source.enabled}
-                      onClick={() => toggleSource(source.id)}
-                      className="rounded-full transition-base relative flex-shrink-0 cursor-pointer"
-                      style={{
-                        width: 30,
-                        height: 16,
-                        background: source.enabled
-                          ? 'var(--color-accent)'
-                          : 'var(--color-border-strong)',
-                      }}
-                      title={source.enabled ? 'Included in retrieval' : 'Excluded from retrieval'}
-                    >
-                      <span
-                        className="absolute top-[2px] w-3 h-3 rounded-full bg-white transition-fast shadow-xs"
-                        style={{
-                          left: source.enabled ? 15 : 2,
-                        }}
-                      />
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              {/* Knowledge Base Summary Card */}
-              <div className="px-4 py-2.5 flex-shrink-0">
-                <div
-                  className="p-2.5 rounded-md flex flex-col gap-1.5 transition-fast"
-                  style={{
-                    background: 'var(--color-surface)',
-                    border: '1px solid var(--color-border)',
-                    boxShadow: 'var(--shadow-xs)',
-                  }}
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <div
-                      className="flex items-center gap-1.5 font-semibold"
-                      style={{ color: 'var(--color-text)' }}
-                    >
-                      <HardDrive size={13} strokeWidth={2} style={{ color: 'var(--color-accent)' }} />
-                      <span className="text-[11px]">Knowledge Base</span>
-                    </div>
-                    <span
-                      className="text-[10px] font-mono font-medium"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
-                      {activeCount} / {totalCount} active
-                    </span>
-                  </div>
-
-                  {/* Storage Meter */}
-                  <div className="flex flex-col gap-1">
-                    <div
-                      className="flex items-center justify-between text-[9px]"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
-                      <span>MRPL Engineering Corpus</span>
-                      <span className="font-mono font-medium">2.50 MB (13 files)</span>
-                    </div>
-                    <div
-                      className="w-full h-1.5 rounded-xs overflow-hidden"
-                      style={{ background: 'var(--color-overlay)' }}
-                    >
-                      <div
-                        className="h-full rounded-xs transition-base"
-                        style={{
-                          width: '100%',
-                          background: 'var(--color-accent)',
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
+                  <span>Open Sources Hub</span>
+                  <ArrowUpRight size={12} />
+                </Link>
               </div>
             </div>
           </div>
@@ -879,6 +833,14 @@ export function Sidebar() {
           </Link>
         </div>
       </aside>
+
+      {/* ── Add Source Directory & Native File/Folder Browser Modal ── */}
+      <AddSourceDirectoryModal
+        isOpen={isAddDirModalOpen}
+        onClose={() => setIsAddDirModalOpen(false)}
+        onDirectoriesUpdated={fetchCorpus}
+        currentDirectories={directories}
+      />
 
       {/* ── 5. Command Palette Modal Shell (Triggered by Search Icon / Ctrl+K) ── */}
       {isSearchOpen && (

@@ -3,9 +3,9 @@ import { AppShell } from './components/layout/AppShell'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 import { PlanStubPage } from './pages/PlanStubPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { SourcesPage } from './pages/SourcesPage'
 
 // Plug-and-play teammate integrations (FRONTEND.md §5 / /src/integrations/)
-import { SourcesPanel } from './integrations/sources-panel'
 import { GraphExplorer } from './integrations/graph-explorer'
 import { OutputCards } from './integrations/output-cards'
 import { AuditLog } from './integrations/audit-log'
@@ -31,7 +31,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<WorkbenchPage />} />
         <Route path="/plan/:sessionId" element={<PlanStubPage />} />
-        <Route path="/sources" element={<SourcesPanel />} />
+        <Route path="/sources" element={<SourcesPage />} />
         <Route path="/graph" element={<GraphExplorer />} />
         <Route path="/outputs" element={<OutputCards />} />
         <Route path="/audit" element={<AuditLog />} />

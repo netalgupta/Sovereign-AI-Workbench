@@ -182,96 +182,386 @@ function systemAndModelsPlugin() {
           }
         }
 
+        // Active watched directories list
+        if (!global.__configuredSourceDirs) {
+          global.__configuredSourceDirs = [
+            {
+              id: 'mrpl_rag_corpus',
+              name: 'MRPL_RAG_Test_Corpus',
+              path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus'),
+              isPreset: true,
+              enabled: true,
+            },
+            {
+              id: 'mrpl_chart_corpus',
+              name: 'MRPL_Chart_Stress_Corpus',
+              path: path.resolve(cwd, 'MRPL_Chart_Stress_Corpus'),
+              isPreset: true,
+              enabled: true,
+            },
+          ]
+        }
+
+        if (url?.startsWith('/MRPL_Chart_Stress_Corpus/') || url?.startsWith('/MRPL_RAG_Test_Corpus/')) {
+          try {
+            const rawRel = decodeURIComponent(url).replace(/^\//, '')
+            const filePath = path.resolve(cwd, rawRel)
+            if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+              const ext = path.extname(filePath).toLowerCase()
+              const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream'
+              res.setHeader('Content-Type', mime)
+              fs.createReadStream(filePath).pipe(res)
+              return
+            }
+          } catch {}
+        }
+
+        if (url === '/api/sources/scan' && req.method === 'POST') {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ success: true, scannedAt: new Date().toISOString() }))
+          return
+        }
+
+        if (url === '/api/sources' && req.method === 'DELETE') {
+          let body = ''
+          req.on('data', (c) => { body += c })
+          req.on('end', () => {
+            try {
+              const urlObj = new URL(req.url, 'http://localhost')
+              let targetPath = urlObj.searchParams.get('path')
+              if (!targetPath && body) {
+                try {
+                  const b = JSON.parse(body)
+                  targetPath = b.path || b.id
+                } catch {}
+              }
+              if (targetPath) {
+                const normTarget = path.normalize(targetPath).toLowerCase()
+                global.__configuredSourceDirs = (global.__configuredSourceDirs || []).filter(
+                  (d) =>
+                    d.id !== targetPath &&
+                    path.normalize(d.path).toLowerCase() !== normTarget &&
+                    d.name.toLowerCase() !== normTarget
+                )
+              }
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ success: true, remaining: global.__configuredSourceDirs }))
+              return
+            } catch (err) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: err.message }))
+              return
+            }
+          })
+          return
+        }
+
+        if (url === '/api/sources/upload' && req.method === 'POST') {
+          const chunks = []
+          req.on('data', (c) => { chunks.push(c) })
+          req.on('end', () => {
+            try {
+              const rawBody = Buffer.concat(chunks).toString('utf-8')
+              const payload = JSON.parse(rawBody || '{}')
+              const files = payload.files || []
+              if (!Array.isArray(files) || files.length === 0) {
+                res.statusCode = 400
+                res.end(JSON.stringify({ error: 'No files provided for upload' }))
+                return
+              }
+
+              const targetBaseDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads')
+              if (!fs.existsSync(targetBaseDir)) {
+                fs.mkdirSync(targetBaseDir, { recursive: true })
+              }
+
+              const savedFiles = []
+              for (const f of files) {
+                if (!f.name || !f.contentBase64) continue
+                const cleanRel = (f.relPath || f.name).replace(/^[/\\]+/, '').replace(/\.\.[/\\]/g, '')
+                const destPath = path.resolve(targetBaseDir, cleanRel)
+                const destDir = path.dirname(destPath)
+                if (!fs.existsSync(destDir)) {
+                  fs.mkdirSync(destDir, { recursive: true })
+                }
+                const buffer = Buffer.from(f.contentBase64, 'base64')
+                fs.writeFileSync(destPath, buffer)
+                savedFiles.push({
+                  name: f.name,
+                  relPath: cleanRel,
+                  sizeBytes: buffer.length,
+                  fullPath: destPath,
+                })
+              }
+
+              // Ensure MRPL_RAG_Test_Corpus is enabled
+              const corpusDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus')
+              const existingCorpus = (global.__configuredSourceDirs || []).find((d) => d.path === corpusDir)
+              if (existingCorpus) {
+                existingCorpus.enabled = true
+              }
+
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  success: true,
+                  count: savedFiles.length,
+                  saved: savedFiles,
+                  message: `Successfully uploaded and registered ${savedFiles.length} file(s) into active corpus`,
+                })
+              )
+              return
+            } catch (err) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: err.message }))
+              return
+            }
+          })
+          return
+        }
+
+        if (url === '/api/sources' && req.method === 'POST') {
+          let body = ''
+          req.on('data', (c) => { body += c })
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body || '{}')
+              let dirPath = payload.path?.trim()
+              if (!dirPath) {
+                res.statusCode = 400
+                res.end(JSON.stringify({ error: 'Missing path parameter' }))
+                return
+              }
+              const resolved = path.isAbsolute(dirPath) ? dirPath : path.resolve(cwd, dirPath)
+              if (!fs.existsSync(resolved)) {
+                res.statusCode = 404
+                res.end(JSON.stringify({ error: `Path does not exist on disk: ${resolved}` }))
+                return
+              }
+              const stat = fs.statSync(resolved)
+              if (stat.isFile()) {
+                const targetBaseDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads')
+                if (!fs.existsSync(targetBaseDir)) {
+                  fs.mkdirSync(targetBaseDir, { recursive: true })
+                }
+                const fileName = path.basename(resolved)
+                const destFile = path.resolve(targetBaseDir, fileName)
+                fs.copyFileSync(resolved, destFile)
+                res.setHeader('Content-Type', 'application/json')
+                res.end(
+                  JSON.stringify({
+                    success: true,
+                    added: {
+                      id: `file_${Buffer.from(destFile).toString('hex').slice(0, 10)}`,
+                      name: fileName,
+                      path: destFile,
+                      isFile: true,
+                    },
+                    message: `File "${fileName}" registered and copied to local corpus (07_User_Uploads)`,
+                  })
+                )
+                return
+              }
+
+              const dirName = path.basename(resolved) || 'Custom_Corpus'
+              const id = `dir_${Buffer.from(resolved).toString('hex').slice(0, 10)}`
+              const existingIdx = global.__configuredSourceDirs.findIndex((d) => d.path === resolved)
+              if (existingIdx >= 0) {
+                global.__configuredSourceDirs[existingIdx].enabled = true
+              } else {
+                global.__configuredSourceDirs.push({
+                  id,
+                  name: dirName,
+                  path: resolved,
+                  isPreset: false,
+                  enabled: true,
+                })
+              }
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ success: true, added: { id, name: dirName, path: resolved } }))
+              return
+            } catch (err) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: err.message }))
+              return
+            }
+          })
+          return
+        }
+
         if ((url === '/api/corpus' || url === '/api/sources') && req.method === 'GET') {
           try {
-            const corpusDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus')
-            const items = []
+            const allItems = []
+            const tree = []
 
-            if (fs.existsSync(corpusDir)) {
-              function scanCorpus(dir, rel) {
-                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                  const fullPath = path.join(dir, entry.name)
-                  const relPath = rel ? `${rel}/${entry.name}` : entry.name
+            for (const dirConfig of global.__configuredSourceDirs) {
+              if (!dirConfig.enabled || !fs.existsSync(dirConfig.path)) continue
+
+              const dirNode = {
+                id: dirConfig.id,
+                name: dirConfig.name,
+                fullPath: dirConfig.path,
+                type: 'directory',
+                isRoot: true,
+                isPreset: dirConfig.isPreset,
+                children: [],
+                fileCount: 0,
+                totalSizeBytes: 0,
+              }
+
+              function scanDirectory(currentDir, relativePrefix, parentNode) {
+                let entries = []
+                try {
+                  entries = fs.readdirSync(currentDir, { withFileTypes: true })
+                } catch {
+                  return
+                }
+
+                for (const entry of entries) {
+                  const entryFullPath = path.join(currentDir, entry.name)
+                  const entryRelPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name
+
                   if (entry.isDirectory()) {
-                    scanCorpus(fullPath, relPath)
-                  } else if (entry.isFile() && entry.name !== 'README.md') {
-                    const stats = fs.statSync(fullPath)
-                    const ext = path.extname(entry.name).toLowerCase().replace('.', '')
-                    let type = ext.toUpperCase()
-                    let category = 'documents'
-                    let subcategory = 'sops'
-                    let badge = 'SOP & Safety'
-
-                    if (rel.includes('01_SOPs')) {
-                      category = 'documents'
-                      subcategory = 'sops'
-                      badge = 'SOP & Safety'
-                    } else if (rel.includes('02_Inspection')) {
-                      subcategory = 'inspection'
-                      badge = 'Inspection & Maintenance'
-                      category = ext === 'xlsx' ? 'data' : 'documents'
-                    } else if (rel.includes('03_Quality')) {
-                      subcategory = 'quality'
-                      badge = 'QA & Process Data'
-                      category = ext === 'xlsx' ? 'data' : 'documents'
-                    } else if (rel.includes('04_SAP')) {
-                      category = 'data'
-                      subcategory = 'sap_mock'
-                      badge = 'SAP ERP Export'
-                    } else if (rel.includes('05_Correspondence')) {
-                      category = 'documents'
-                      subcategory = 'correspondence'
-                      badge = 'Depot Operations'
-                    } else if (rel.includes('06_Diagrams')) {
-                      category = 'documents'
-                      subcategory = 'diagrams'
-                      type = entry.name.includes('Checklist') ? 'SCAN' : 'P&ID'
-                      badge = 'Schematics & Scans'
+                    const subDirNode = {
+                      id: `${dirConfig.id}_${entryRelPath.replace(/[\\/]/g, '_')}`,
+                      name: entry.name,
+                      fullPath: entryFullPath,
+                      relPath: entryRelPath,
+                      type: 'directory',
+                      isRoot: false,
+                      children: [],
+                      fileCount: 0,
+                      totalSizeBytes: 0,
+                    }
+                    scanDirectory(entryFullPath, entryRelPath, subDirNode)
+                    parentNode.children.push(subDirNode)
+                    parentNode.fileCount += subDirNode.fileCount
+                    parentNode.totalSizeBytes += subDirNode.totalSizeBytes
+                  } else if (entry.isFile()) {
+                    let stat = null
+                    try {
+                      stat = fs.statSync(entryFullPath)
+                    } catch {
+                      continue
                     }
 
+                    const ext = path.extname(entry.name).toLowerCase().replace('.', '')
+                    let fileType = ext.toUpperCase()
+                    let category = 'documents'
+                    let subcategory = 'general'
+                    let badge = 'Document'
                     let color = '#2563EB'
                     let bg = 'rgba(37, 99, 235, 0.12)'
                     let border = 'rgba(37, 99, 235, 0.28)'
+
+                    if (dirConfig.name === 'MRPL_Chart_Stress_Corpus') {
+                      category = ext === 'json' ? 'data' : 'charts'
+                      subcategory = 'charts'
+                      if (entry.name.includes('_labeled')) {
+                        badge = 'Chart (Printed Labels)'
+                        color = '#D97706'
+                        bg = 'rgba(217, 119, 6, 0.12)'
+                        border = 'rgba(217, 119, 6, 0.28)'
+                      } else if (entry.name.includes('_unlabeled')) {
+                        badge = 'Chart (Unlabeled Stress)'
+                        color = '#A63927'
+                        bg = 'rgba(166, 57, 39, 0.12)'
+                        border = 'rgba(166, 57, 39, 0.28)'
+                      } else if (entry.name.endsWith('.json')) {
+                        badge = 'Ground Truth Specs'
+                        color = '#7C3AED'
+                        bg = 'rgba(124, 58, 237, 0.12)'
+                        border = 'rgba(124, 58, 237, 0.28)'
+                      }
+                    } else if (entryRelPath.includes('01_SOPs')) {
+                      category = 'documents'
+                      subcategory = 'sops'
+                      badge = 'SOP & Safety'
+                    } else if (entryRelPath.includes('02_Inspection')) {
+                      subcategory = 'inspection'
+                      badge = 'Inspection & Maintenance'
+                      category = ext === 'xlsx' ? 'data' : 'documents'
+                    } else if (entryRelPath.includes('03_Quality')) {
+                      subcategory = 'quality'
+                      badge = 'QA & Process Data'
+                      category = ext === 'xlsx' ? 'data' : 'documents'
+                    } else if (entryRelPath.includes('04_SAP')) {
+                      category = 'data'
+                      subcategory = 'sap_mock'
+                      badge = 'SAP ERP Export'
+                    } else if (entryRelPath.includes('05_Correspondence')) {
+                      category = 'documents'
+                      subcategory = 'correspondence'
+                      badge = 'Depot Operations'
+                    } else if (entryRelPath.includes('06_Diagrams')) {
+                      category = 'documents'
+                      subcategory = 'diagrams'
+                      fileType = entry.name.includes('Checklist') ? 'SCAN' : 'P&ID'
+                      badge = 'Schematics & Scans'
+                    } else if (entryRelPath.includes('07_User_Uploads') || entryRelPath.includes('Uploads')) {
+                      category = ['xlsx', 'xls', 'csv', 'json'].includes(ext) ? 'data' : ['png', 'jpg', 'jpeg'].includes(ext) ? 'charts' : 'documents'
+                      subcategory = 'user_uploads'
+                      badge = 'User Ingested Source'
+                      color = '#10B981'
+                      bg = 'rgba(16, 185, 129, 0.12)'
+                      border = 'rgba(16, 185, 129, 0.28)'
+                    }
 
                     if (category === 'data') {
                       color = '#059669'
                       bg = 'rgba(5, 150, 105, 0.12)'
                       border = 'rgba(5, 150, 105, 0.28)'
-                    } else if (type === 'PDF') {
+                    } else if (fileType === 'PDF') {
                       color = '#D93829'
                       bg = 'rgba(217, 56, 41, 0.12)'
                       border = 'rgba(217, 56, 41, 0.28)'
-                    } else if (type === 'SCAN' || type === 'P&ID') {
+                    } else if (fileType === 'SCAN' || fileType === 'P&ID') {
                       color = '#0D9488'
                       bg = 'rgba(13, 148, 136, 0.12)'
                       border = 'rgba(13, 148, 136, 0.28)'
                     }
 
-                    const sizeKB = Number((stats.size / 1024).toFixed(1))
+                    const sizeKB = Number((stat.size / 1024).toFixed(1))
                     const sizeDisplay = sizeKB > 1024 ? `${(sizeKB / 1024).toFixed(2)} MB` : `${sizeKB} KB`
 
-                    items.push({
-                      id: relPath.replace(/[\\/]/g, '_'),
+                    const fileItem = {
+                      id: `${dirConfig.id}_${entryRelPath.replace(/[\\/]/g, '_')}`,
                       name: entry.name,
-                      type,
+                      type: fileType,
+                      extension: ext,
                       size: sizeDisplay,
-                      sizeBytes: stats.size,
+                      sizeBytes: stat.size,
                       addedAgo: 'Ingested on-prem',
                       category,
                       subcategory,
                       badge,
-                      folder: rel || 'root',
-                      relPath,
+                      folder: relativePrefix || dirConfig.name,
+                      relPath: entryRelPath,
+                      fullPath: entryFullPath,
+                      corpus: dirConfig.name,
                       color,
                       bg,
                       border,
-                      iconText: type,
+                      iconText: fileType,
                       enabled: true,
+                    }
+
+                    parentNode.children.push({
+                      ...fileItem,
+                      type: 'file',
                     })
+                    parentNode.fileCount++
+                    parentNode.totalSizeBytes += stat.size
+                    allItems.push(fileItem)
                   }
                 }
               }
-              scanCorpus(corpusDir, '')
+
+              scanDirectory(dirConfig.path, '', dirNode)
+              dirNode.sizeDisplay = dirNode.totalSizeBytes > 1e6
+                ? `${(dirNode.totalSizeBytes / 1e6).toFixed(2)} MB`
+                : `${Math.round(dirNode.totalSizeBytes / 1024)} KB`
+              tree.push(dirNode)
             }
 
             // Attached live connected plant APIs
@@ -281,7 +571,9 @@ function systemAndModelsPlugin() {
                 name: 'SAP_Plant_Sensors_API',
                 label: 'SAP ERP Local Connector (RFC/BAPI Mock)',
                 type: 'API',
-                size: 'Live Data Source',
+                extension: 'api',
+                size: 'Live Stream',
+                sizeBytes: 0,
                 addedAgo: 'Online (Loopback)',
                 category: 'apis',
                 subcategory: 'apis',
@@ -290,6 +582,7 @@ function systemAndModelsPlugin() {
                 bg: 'var(--color-accent-tint)',
                 border: 'var(--color-accent-border)',
                 iconType: 'api',
+                corpus: 'Live Plant Connectors',
                 isLive: true,
                 enabled: true,
               },
@@ -298,7 +591,9 @@ function systemAndModelsPlugin() {
                 name: 'DCS_SCADA_Telemetry_Feed',
                 label: 'DCS / SCADA Telemetry Stream (OPC-UA)',
                 type: 'API',
-                size: 'Live Data Source',
+                extension: 'api',
+                size: 'Live Stream',
+                sizeBytes: 0,
                 addedAgo: 'Online (Loopback)',
                 category: 'apis',
                 subcategory: 'apis',
@@ -307,17 +602,38 @@ function systemAndModelsPlugin() {
                 bg: 'var(--color-accent-tint)',
                 border: 'var(--color-accent-border)',
                 iconType: 'api',
+                corpus: 'Live Plant Connectors',
                 isLive: true,
                 enabled: true,
               },
             ]
 
+            // Virtual tree node for APIs
+            tree.push({
+              id: 'live_plant_apis',
+              name: 'Live Plant APIs & Connectors',
+              type: 'directory',
+              isRoot: true,
+              isPreset: true,
+              fileCount: apis.length,
+              totalSizeBytes: 0,
+              sizeDisplay: 'Live Data',
+              children: apis.map((a) => ({ ...a, type: 'api' })),
+            })
+
+            const totalBytes = allItems.reduce((acc, i) => acc + i.sizeBytes, 0)
+            const totalSizeMB = Number((totalBytes / 1e6).toFixed(2))
+
             res.setHeader('Content-Type', 'application/json')
             res.end(
               JSON.stringify({
-                sources: [...items, ...apis],
-                count: items.length + apis.length,
-                corpusCount: items.length,
+                directories: global.__configuredSourceDirs,
+                tree,
+                sources: [...allItems, ...apis],
+                count: allItems.length + apis.length,
+                corpusCount: allItems.length,
+                totalSizeBytes: totalBytes,
+                totalSizeDisplay: `${totalSizeMB} MB`,
               })
             )
             return
@@ -326,6 +642,53 @@ function systemAndModelsPlugin() {
             res.end(JSON.stringify({ error: err.message }))
             return
           }
+        }
+
+        // Serve Inspection / Standalone Console data endpoints for Vite dev
+        if (url === '/api/graph' && req.method === 'GET') {
+          try {
+            const inspPath = path.resolve(cwd, 'backend', 'evaluation', 'inspection_data.json')
+            if (fs.existsSync(inspPath)) {
+              const data = JSON.parse(fs.readFileSync(inspPath, 'utf-8'))
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ...data.graph, source: 'snapshot', live: true }))
+              return
+            }
+          } catch {}
+        }
+
+        if (url === '/api/chunks' && req.method === 'GET') {
+          try {
+            const inspPath = path.resolve(cwd, 'backend', 'evaluation', 'inspection_data.json')
+            if (fs.existsSync(inspPath)) {
+              const data = JSON.parse(fs.readFileSync(inspPath, 'utf-8'))
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  chunks: data.chunks || [],
+                  similarity: data.similarity || [],
+                  chunking: data.chunking || null,
+                  embedding_dim: data.embedding_dim || null,
+                  pca_explained_variance: data.pca_explained_variance || [],
+                  source: 'snapshot',
+                  live: true,
+                })
+              )
+              return
+            }
+          } catch {}
+        }
+
+        if (url === '/api/images' && req.method === 'GET') {
+          try {
+            const imgPath = path.resolve(cwd, 'backend', 'evaluation', 'image_data.json')
+            if (fs.existsSync(imgPath)) {
+              const data = JSON.parse(fs.readFileSync(imgPath, 'utf-8'))
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ images: data.images || [], source: 'snapshot', live: true }))
+              return
+            }
+          } catch {}
         }
 
         if (url === '/api/models' && req.method === 'GET') {

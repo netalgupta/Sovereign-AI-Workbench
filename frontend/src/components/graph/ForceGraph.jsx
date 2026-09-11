@@ -20,23 +20,7 @@ import { useEffect, useRef, useCallback } from 'react'
  * and a battery drain on a laptop running local models.
  */
 
-const LABEL_COLOR_VARS = {
-  Equipment: '--graph-equipment',
-  PipelineSegment: '--graph-segment',
-  Document: '--graph-document',
-  Incident: '--graph-incident',
-  Person: '--graph-person',
-}
-
-/** Neo4j stores a different key property per label (GRAPH_SPEC §4.1), so
- *  there is no single "name" field to read. */
-export function nodeName(node) {
-  const p = node.properties || {}
-  return (
-    p.tag || p.segment_name || p.name || p.summary || p.title || p.filename ||
-    `${node.labels[0]} ${String(node.id).split(':').pop()}`
-  )
-}
+import { getNodeColor, nodeName } from './graphTheme'
 
 export function ForceGraph({
   nodes: rawNodes,
@@ -56,7 +40,8 @@ export function ForceGraph({
   })
 
   const cssVar = useCallback((name) => {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
+    if (typeof window === 'undefined') return ''
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   }, [])
 
   // Build simulation bodies once per dataset. Positions start on a circle
@@ -186,44 +171,143 @@ export function ForceGraph({
       ctx.translate(st.panX, st.panY)
       ctx.scale(st.zoom, st.zoom)
 
-      const lineColor = cssVar('--color-border')
-      const accent = cssVar('--color-accent') || '#c26a10'
-      ctx.lineWidth = 1
+      const isDark =
+        typeof document !== 'undefined' &&
+        (document.documentElement.getAttribute('data-theme') === 'dark' ||
+         document.documentElement.classList.contains('dark') ||
+         (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches))
+
+      const lineColor = cssVar('--color-border') || (isDark ? '#2B2520' : '#E5DFD7')
+      const accent = cssVar('--color-accent') || (isDark ? '#D97757' : '#B5654A')
+
+      // 1. Draw Links
       for (const l of st.links) {
         if (!visible(l.s) && !visible(l.t)) continue
-        const hot = selectedId && (l.s.id === selectedId || l.t.id === selectedId)
-        ctx.strokeStyle = hot ? accent : lineColor
-        ctx.globalAlpha = hot ? 0.95 : 0.45
+        const isSelectedLink = selectedId && (l.s.id === selectedId || l.t.id === selectedId)
+        const isHoveredLink = st.hover && (l.s.id === st.hover.id || l.t.id === st.hover.id)
+
         ctx.beginPath()
         ctx.moveTo(l.s.x, l.s.y)
         ctx.lineTo(l.t.x, l.t.y)
+
+        if (isSelectedLink) {
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 2.2
+          ctx.globalAlpha = 0.95
+        } else if (isHoveredLink) {
+          ctx.strokeStyle = isDark ? '#F0EDE7' : '#2A2724'
+          ctx.lineWidth = 1.6
+          ctx.globalAlpha = 0.75
+        } else if (selectedId || st.hover) {
+          // Softly dim other links when an active node is selected or hovered
+          ctx.strokeStyle = lineColor
+          ctx.lineWidth = 0.8
+          ctx.globalAlpha = 0.15
+        } else {
+          ctx.strokeStyle = lineColor
+          ctx.lineWidth = 1
+          ctx.globalAlpha = 0.45
+        }
         ctx.stroke()
       }
       ctx.globalAlpha = 1
 
+      // 2. Draw Nodes with vibrant category colors, subtle halos and crisp borders
       for (const n of st.nodes) {
         if (!visible(n)) continue
+        const r = radius(n, st)
+        const isSelected = n.id === selectedId
+        const isHovered = n === st.hover
+        const nodeCol = getNodeColor(n, cssVar)
+
+        const isConnectedToActive =
+          (selectedId &&
+            st.links.some(
+              (l) =>
+                (l.s.id === selectedId && l.t.id === n.id) ||
+                (l.t.id === selectedId && l.s.id === n.id)
+            )) ||
+          (st.hover &&
+            st.links.some(
+              (l) =>
+                (l.s.id === st.hover.id && l.t.id === n.id) ||
+                (l.t.id === st.hover.id && l.s.id === n.id)
+            ))
+
+        const shouldDim =
+          (selectedId || st.hover) && !isSelected && !isHovered && !isConnectedToActive
+
+        // Outer glow/aura for selected or hovered nodes
+        if (isSelected || isHovered) {
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, r + (isSelected ? 5 : 3.5), 0, Math.PI * 2)
+          ctx.fillStyle = nodeCol
+          ctx.globalAlpha = shouldDim ? 0.08 : isSelected ? 0.35 : 0.22
+          ctx.fill()
+        }
+
+        ctx.globalAlpha = shouldDim ? 0.35 : 1
+
+        // Main node circle
         ctx.beginPath()
-        ctx.arc(n.x, n.y, radius(n, st), 0, Math.PI * 2)
-        ctx.fillStyle = cssVar(LABEL_COLOR_VARS[n.labels[0]] || '--color-text-muted')
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+        ctx.fillStyle = nodeCol
         ctx.fill()
-        if (n.id === selectedId || n === st.hover) {
-          ctx.strokeStyle = cssVar('--color-text')
-          ctx.lineWidth = 1.5
+
+        // Crisp border for contrast and definition
+        ctx.beginPath()
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+        if (isSelected) {
+          ctx.strokeStyle = '#FFFFFF'
+          ctx.lineWidth = 2.4
+          ctx.stroke()
+        } else if (isHovered) {
+          ctx.strokeStyle = '#FFFFFF'
+          ctx.lineWidth = 1.8
+          ctx.stroke()
+        } else {
+          ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.65)'
+          ctx.lineWidth = 1.2
           ctx.stroke()
         }
       }
+      ctx.globalAlpha = 1
 
-      ctx.font = '500 10px "IBM Plex Mono", ui-monospace, monospace'
-      ctx.fillStyle = cssVar('--color-text-muted')
+      // 3. Draw Node Labels with modern typography and outline halos
       ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
       for (const n of st.nodes) {
         if (!visible(n)) continue
-        // Label only what can be read: hubs, the selection, and everything
-        // once zoomed in. Labelling all 101 at 1x is unreadable mush.
-        if (n.degree >= 2 || n.id === selectedId || n === st.hover || st.zoom > 1.6) {
-          const t = n.name.length > 18 ? `${n.name.slice(0, 17)}…` : n.name
-          ctx.fillText(t, n.x, n.y - radius(n, st) - 4)
+        const isSelected = n.id === selectedId
+        const isHovered = n === st.hover
+
+        // Label hubs, selected, hovered, or when zoomed in
+        if (n.degree >= 2 || isSelected || isHovered || st.zoom > 1.45) {
+          const t = n.name.length > 20 ? `${n.name.slice(0, 19)}…` : n.name
+          const r = radius(n, st)
+          const textY = n.y - r - 4
+
+          ctx.font =
+            isSelected || isHovered
+              ? '600 11px Inter, system-ui, -apple-system, sans-serif'
+              : '500 10.5px Inter, system-ui, -apple-system, sans-serif'
+
+          // Text halo for high readability against canvas lines and dark/light background
+          ctx.strokeStyle = isDark ? 'rgba(20, 18, 15, 0.92)' : 'rgba(250, 247, 242, 0.92)'
+          ctx.lineWidth = 3
+          ctx.lineJoin = 'round'
+          ctx.strokeText(t, n.x, textY)
+
+          // Foreground text
+          ctx.fillStyle =
+            isSelected || isHovered
+              ? isDark
+                ? '#FFFFFF'
+                : '#14120F'
+              : isDark
+              ? '#E2DFD8'
+              : '#2A2724'
+          ctx.fillText(t, n.x, textY)
         }
       }
 

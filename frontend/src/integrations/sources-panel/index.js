@@ -1,7 +1,5 @@
-import React from 'react'
-// Teammate swap: change the import below to:
-// import Component from './SourcesPanel'
-import Component from './Placeholder'
+import { SourcesPage } from '../../pages/SourcesPage'
+const Component = SourcesPage
 
 import { validateProps } from './contract'
 export * from './contract'
