@@ -110,7 +110,7 @@ export default function Placeholder({
       >
         <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
           <Filter size={13} style={{ color: 'var(--color-text-muted)' }} />
-          {['all', 'sop', 'catalyst', 'emissions', 'telemetry'].map((cat) => (
+          {['all', 'sops', 'inspection', 'quality', 'sap_mock', 'correspondence', 'diagrams'].map((cat) => (
             <button
               key={cat}
               type="button"
@@ -121,7 +121,7 @@ export default function Placeholder({
                 color: localCategory === cat ? '#fff' : 'var(--color-text-muted)',
               }}
             >
-              {cat}
+              {cat.replace('_', ' ')}
             </button>
           ))}
         </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -13,16 +13,20 @@ import {
   Sun,
   Moon,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react'
 import { showToast } from '../store/toastStore'
 import { useThemeStore } from '../store/themeStore'
 
 /**
- * Initial mock data matching models/models.yaml schema exactly:
- * - id: unique model identifier
- * - backend: ollama | vllm | transformers | onnx
- * - model: model artifact identifier or path
- * - task_tags: string array of task capabilities
+ * Initial backend models matching models/models.yaml + embedded backend engines:
+ * - Coder Sub-Agent (qwen2.5-coder:7b via Ollama)
+ * - Reasoning & Drafting Sub-Agent (qwen2.5:14b via Ollama)
+ * - Vision Sub-Agent (qwen2.5vl:7b via Ollama)
+ * - Fast Router / Classifier (phi-3.5-mini via Ollama)
+ * - Dense Vector Embeddings (BAAI/bge-large-en-v1.5 via sentence-transformers)
+ * - Local Voice-Note Transcription (Systran/faster-whisper-base via ctranslate2)
+ * - High-Precision OCR (ch_PP-OCRv4 via paddlex)
  */
 const INITIAL_MODELS = [
   {
@@ -32,67 +36,142 @@ const INITIAL_MODELS = [
     task_tags: ['code_generation', 'code_review', 'debugging'],
     vram_usage: '4.8 GB',
     status: 'active',
+    role: 'Code Sub-Agent',
+    engine_type: 'ollama_registry',
   },
   {
     id: 'reasoning-model',
     backend: 'ollama',
     model: 'qwen2.5:14b',
     task_tags: ['summarization', 'drafting', 'approval_notes', 'planning'],
-    vram_usage: '6.2 GB',
+    vram_usage: '8.5 GB',
     status: 'active',
+    role: 'Reasoning & Drafting Sub-Agent',
+    engine_type: 'ollama_registry',
   },
   {
     id: 'vision-model',
     backend: 'ollama',
     model: 'qwen2.5vl:7b',
     task_tags: ['ocr', 'image_understanding', 'diagram_reading'],
-    vram_usage: '5.1 GB',
+    vram_usage: '5.2 GB',
     status: 'active',
+    role: 'Vision Sub-Agent',
+    engine_type: 'ollama_registry',
   },
   {
     id: 'fast-router',
     backend: 'ollama',
     model: 'phi-3.5-mini',
-    task_tags: ['classification', 'routing', 'intent_mapping'],
+    task_tags: ['classification', 'routing'],
     vram_usage: '2.2 GB',
     status: 'active',
+    role: 'Task Classifier & Verifier',
+    engine_type: 'ollama_registry',
   },
   {
-    id: 'local-llama-safety',
-    backend: 'vllm',
-    model: 'llama-3.2:3b-instruct',
-    task_tags: ['safety_audit', 'compliance_guard', 'interlock_verify'],
-    vram_usage: '2.8 GB',
+    id: 'bge-large-embeddings',
+    backend: 'sentence-transformers',
+    model: 'BAAI/bge-large-en-v1.5',
+    task_tags: ['dense_embeddings', 'hybrid_search', 'vector_indexing'],
+    vram_usage: '1.3 GB (RAM)',
     status: 'active',
+    role: 'Dense Vector Embeddings',
+    engine_type: 'embedded',
+  },
+  {
+    id: 'faster-whisper-audio',
+    backend: 'ctranslate2',
+    model: 'Systran/faster-whisper-base',
+    task_tags: ['audio_transcription', 'voice_notes'],
+    vram_usage: '0.5 GB (RAM)',
+    status: 'active',
+    role: 'Local Speech-to-Text',
+    engine_type: 'embedded',
+  },
+  {
+    id: 'paddleocr-engine',
+    backend: 'paddlex',
+    model: 'ch_PP-OCRv4',
+    task_tags: ['ocr_detection', 'ocr_recognition', 'table_extraction'],
+    vram_usage: '0.3 GB (RAM)',
+    status: 'active',
+    role: 'Printed Document OCR',
+    engine_type: 'embedded',
   },
 ]
 
 /**
- * Pre-configured presets for the FR-4 live demo moment.
+ * Pre-configured presets matching venue upgrade tier in DEPENDENCIES.md §1:
+ * Adding or upgrading a model is an edit to models.yaml + reload, no code changes (FR-4).
  */
 const MODEL_PRESETS = [
   {
-    label: 'DeepSeek-Coder 6.7B',
-    id: 'deepseek-coder',
+    label: 'Qwen2.5-Coder 14B',
+    id: 'coder-model-venue',
     backend: 'ollama',
-    model: 'deepseek-coder:6.7b',
-    task_tags: 'code_generation, ast_parsing, unit_tests',
+    model: 'qwen2.5-coder:14b',
+    task_tags: 'code_generation, code_review, debugging, ast_parsing',
   },
   {
-    label: 'Mistral-NeMo 12B',
-    id: 'mistral-nemo',
-    backend: 'vllm',
-    model: 'mistralai/Mistral-Nemo-Instruct-2407',
-    task_tags: 'reasoning, multi_turn, long_context',
+    label: 'Qwen2.5 32B',
+    id: 'reasoning-model-venue',
+    backend: 'ollama',
+    model: 'qwen2.5:32b',
+    task_tags: 'summarization, drafting, approval_notes, planning',
   },
   {
-    label: 'Llama-3.2 Vision 11B',
-    id: 'llama-vision-11b',
-    backend: 'transformers',
-    model: 'meta-llama/Llama-3.2-11B-Vision-Instruct',
-    task_tags: 'piping_diagrams, p_and_id_inspection, ocr',
+    label: 'Qwen2.5-VL 32B',
+    id: 'vision-model-venue',
+    backend: 'ollama',
+    model: 'qwen2.5vl:32b',
+    task_tags: 'ocr, image_understanding, diagram_reading, p_and_id_inspection',
+  },
+  {
+    label: 'BGE-Large-En v1.5',
+    id: 'bge-large-embeddings',
+    backend: 'sentence-transformers',
+    model: 'BAAI/bge-large-en-v1.5',
+    task_tags: 'dense_embeddings, hybrid_search, vector_indexing',
   },
 ]
+
+/**
+ * Baseline device & storage state fallback before live host telemetry loads
+ */
+const INITIAL_SYSTEM_INFO = {
+  device: {
+    platform: 'win32',
+    osName: 'Host Workstation',
+    hostname: 'Localhost',
+    mountPoint: 'C:\\',
+    driveLetter: 'C:',
+    fileSystem: 'NTFS',
+    devicePath: 'Local Storage Volume',
+    cpuModel: 'Host Multi-Core CPU',
+    cpuCores: 8,
+    totalMemGB: 16.0,
+    freeMemGB: 4.0,
+    gpu: null,
+    encryption: 'BitLocker / Hardware Volume Protected',
+    isAirGapped: true,
+  },
+  storage: {
+    totalBytes: 1000000000000,
+    freeBytes: 300000000000,
+    usedBytes: 700000000000,
+    totalGB: 1000.0,
+    usedGB: 700.0,
+    freeGB: 300.0,
+    utilizationPct: 70.0,
+    breakdown: [
+      { id: 'models', label: 'Model Weights (GGUF / Ollama)', sizeGB: 5.2, sizeDisplay: '5.2 GB', color: 'var(--color-accent)' },
+      { id: 'vector_store', label: 'FAISS Vector Store & SQLite', sizeGB: 0.001, sizeDisplay: '30.8 KB (FAISS Index)', color: '#2563EB' },
+      { id: 'corpus', label: 'MRPL Engineering Corpus', sizeGB: 0.003, sizeDisplay: '2.5 MB (14 docs)', color: '#059669' },
+      { id: 'system', label: 'Audit Logs, OS & App Space', sizeGB: 707.1, sizeDisplay: '707.1 GB', color: '#D97706' },
+    ],
+  },
+}
 
 /**
  * RBAC Matrix Definition (FRONTEND.md §3.11):
@@ -105,11 +184,11 @@ const RBAC_TIERS = [
     description: 'Operational troubleshooting, sensor telemetry, and standard operating procedure lookup.',
     permissions: {
       sops: true,
-      safety: true,
-      emissions: true,
-      telemetry: true,
-      market: false,
-      audit: false,
+      inspection: true,
+      quality: true,
+      sap_mock: true,
+      correspondence: false,
+      diagrams: true,
     },
   },
   {
@@ -118,11 +197,11 @@ const RBAC_TIERS = [
     description: 'Health, Safety & Environment compliance, runaway prevention guidelines, and safety interlock review.',
     permissions: {
       sops: true,
-      safety: true,
-      emissions: true,
-      telemetry: true,
-      market: false,
-      audit: true,
+      inspection: true,
+      quality: true,
+      sap_mock: false,
+      correspondence: false,
+      diagrams: true,
     },
   },
   {
@@ -131,11 +210,11 @@ const RBAC_TIERS = [
     description: 'Management of Change (MOC) sign-off, critical parameter overrides, and cross-unit economic optimization.',
     permissions: {
       sops: true,
-      safety: true,
-      emissions: true,
-      telemetry: true,
-      market: true,
-      audit: true,
+      inspection: true,
+      quality: true,
+      sap_mock: true,
+      correspondence: true,
+      diagrams: true,
     },
   },
   {
@@ -144,22 +223,22 @@ const RBAC_TIERS = [
     description: 'Air-gapped model registry orchestration, hardware encryption keys, and network interface security.',
     permissions: {
       sops: true,
-      safety: true,
-      emissions: true,
-      telemetry: true,
-      market: true,
-      audit: true,
+      inspection: true,
+      quality: true,
+      sap_mock: true,
+      correspondence: true,
+      diagrams: true,
     },
   },
 ]
 
 const RBAC_CATEGORIES = [
-  { id: 'sops', label: 'Operating Manuals & SOPs' },
-  { id: 'safety', label: 'Catalyst Runaway Prevention' },
-  { id: 'emissions', label: 'Emissions & Environmental Regs' },
-  { id: 'telemetry', label: 'Sensor Telemetry & DCS APIs' },
-  { id: 'market', label: 'Market Prices & Economics' },
-  { id: 'audit', label: 'System & Air-Gap Audit Logs' },
+  { id: 'sops', label: '01_SOPs & Safety (HCU-2 & Aromatics)' },
+  { id: 'inspection', label: '02_Inspection & Maintenance (CCR-1 & Hassan)' },
+  { id: 'quality', label: '03_Quality & Process Data (Novolen QA & Merox)' },
+  { id: 'sap_mock', label: '04_SAP ERP Mock Records (Materials Master)' },
+  { id: 'correspondence', label: '05_Depot Correspondence (Kasargod)' },
+  { id: 'diagrams', label: '06_Diagrams & Scans (P&ID & OCR Checklist)' },
 ]
 
 /**
@@ -173,6 +252,8 @@ const RBAC_CATEGORIES = [
 export function SettingsPage() {
   const { theme, toggleTheme } = useThemeStore()
   const [models, setModels] = useState(INITIAL_MODELS)
+  const [systemInfo, setSystemInfo] = useState(INITIAL_SYSTEM_INFO)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   // Add Model Form State
   const [formData, setFormData] = useState({
@@ -181,6 +262,113 @@ export function SettingsPage() {
     model: '',
     task_tags: '',
   })
+
+  const fetchSystemAndModels = async () => {
+    setIsRefreshing(true)
+    try {
+      // 1. Fetch live host system & storage info
+      const sysRes = await fetch('/api/system-info')
+      if (sysRes.ok) {
+        const sysData = await sysRes.json()
+        if (sysData?.storage && sysData?.device) {
+          setSystemInfo(sysData)
+        }
+      }
+    } catch {
+      // Fallback to browser storage API if server offline
+      if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+        try {
+          const est = await navigator.storage.estimate()
+          if (est.quota) {
+            const totalGB = Number((est.quota / 1e9).toFixed(1))
+            const usedGB = Number(((est.usage || 0) / 1e9).toFixed(1))
+            const freeGB = Number((Math.max(0, est.quota - (est.usage || 0)) / 1e9).toFixed(1))
+            const utilPct = Number((((est.usage || 0) / est.quota) * 100).toFixed(1))
+            setSystemInfo((prev) => ({
+              ...prev,
+              storage: {
+                ...prev.storage,
+                totalGB,
+                usedGB,
+                freeGB,
+                utilizationPct: utilPct,
+              },
+            }))
+          }
+        } catch {}
+      }
+    }
+
+    try {
+      // 2. Fetch live models from models.yaml
+      const modelsRes = await fetch('/api/models')
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json()
+        if (modelsData.registry && modelsData.auxiliary) {
+          setModels([...modelsData.registry, ...modelsData.auxiliary])
+        } else if (Array.isArray(modelsData)) {
+          setModels(modelsData)
+        }
+      }
+    } catch {}
+    setIsRefreshing(false)
+  }
+
+  useEffect(() => {
+    let active = true
+
+    const initLoad = async () => {
+      try {
+        const sysRes = await fetch('/api/system-info')
+        if (sysRes.ok && active) {
+          const sysData = await sysRes.json()
+          if (sysData?.storage && sysData?.device) {
+            setSystemInfo(sysData)
+          }
+        }
+      } catch {
+        if (typeof navigator !== 'undefined' && navigator.storage?.estimate && active) {
+          try {
+            const est = await navigator.storage.estimate()
+            if (est.quota) {
+              const totalGB = Number((est.quota / 1e9).toFixed(1))
+              const usedGB = Number(((est.usage || 0) / 1e9).toFixed(1))
+              const freeGB = Number((Math.max(0, est.quota - (est.usage || 0)) / 1e9).toFixed(1))
+              const utilPct = Number((((est.usage || 0) / est.quota) * 100).toFixed(1))
+              setSystemInfo((prev) => ({
+                ...prev,
+                storage: {
+                  ...prev.storage,
+                  totalGB,
+                  usedGB,
+                  freeGB,
+                  utilizationPct: utilPct,
+                },
+              }))
+            }
+          } catch {}
+        }
+      }
+
+      try {
+        const modelsRes = await fetch('/api/models')
+        if (modelsRes.ok && active) {
+          const modelsData = await modelsRes.json()
+          if (modelsData.registry && modelsData.auxiliary) {
+            setModels([...modelsData.registry, ...modelsData.auxiliary])
+          } else if (Array.isArray(modelsData)) {
+            setModels(modelsData)
+          }
+        }
+      } catch {}
+    }
+
+    initLoad()
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   const handleApplyPreset = (preset) => {
     setFormData({
@@ -192,7 +380,7 @@ export function SettingsPage() {
     showToast(`Preset loaded: ${preset.label}`, 'info')
   }
 
-  const handleAddModel = (e) => {
+  const handleAddModel = async (e) => {
     e.preventDefault()
 
     if (!formData.id.trim() || !formData.model.trim()) {
@@ -205,13 +393,29 @@ export function SettingsPage() {
       .map((t) => t.trim().toLowerCase().replace(/\s+/g, '_'))
       .filter(Boolean)
 
+    let estimatedVram = '4.5 GB'
+    if (formData.model.includes('14b')) estimatedVram = '8.5 GB'
+    else if (formData.model.includes('32b') || formData.model.includes('70b')) estimatedVram = '18.0 GB'
+    else if (formData.model.includes('mini') || formData.model.includes('3b')) estimatedVram = '2.2 GB'
+
     const newModel = {
       id: formData.id.trim(),
       backend: formData.backend,
       model: formData.model.trim(),
       task_tags: tagsArray.length > 0 ? tagsArray : ['general_inference'],
-      vram_usage: '3.4 GB (Estimated)',
+      vram_usage: `${estimatedVram} (Estimated)`,
       status: 'active',
+      engine_type: 'ollama_registry',
+    }
+
+    try {
+      await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newModel),
+      })
+    } catch (err) {
+      console.warn('Could not persist to models.yaml via API:', err)
     }
 
     setModels((prev) => [...prev, newModel])
@@ -367,69 +571,96 @@ export function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
-                  {models.map((m) => (
-                    <tr
-                      key={m.id}
-                      className="transition-fast hover:bg-[var(--color-surface-hover)]"
-                    >
-                      <td className="py-3 px-4 font-mono font-semibold" style={{ color: 'var(--color-text)' }}>
-                        {m.id}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span
-                          className="font-mono text-[10px] px-2 py-0.5 rounded font-medium uppercase"
-                          style={{
-                            background:
-                              m.backend === 'ollama'
-                                ? 'rgba(234, 88, 12, 0.12)'
-                                : m.backend === 'vllm'
-                                ? 'rgba(59, 130, 246, 0.12)'
-                                : 'rgba(168, 85, 247, 0.12)',
-                            color:
-                              m.backend === 'ollama'
-                                ? 'var(--color-accent)'
-                                : m.backend === 'vllm'
-                                ? '#2563EB'
-                                : '#9333EA',
-                            border: '1px solid var(--color-border)',
-                          }}
-                        >
-                          {m.backend}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 font-mono font-medium" style={{ color: 'var(--color-text)' }}>
-                        {m.model}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex flex-wrap gap-1">
-                          {m.task_tags.map((tag) => (
-                            <span
-                              key={tag}
-                              className="inline-block text-[10px] px-2 py-0.5 rounded font-medium"
-                              style={{
-                                background: 'var(--color-overlay)',
-                                color: 'var(--color-text-muted)',
-                              }}
-                            >
-                              {tag}
+                  {models.map((m) => {
+                    const isOllama = m.backend === 'ollama'
+                    const isSentenceTransformers = m.backend === 'sentence-transformers'
+                    const isCTranslate2 = m.backend === 'ctranslate2'
+                    const isPaddle = m.backend === 'paddlex'
+
+                    const badgeStyle = isOllama
+                      ? { background: 'rgba(234, 88, 12, 0.12)', color: 'var(--color-accent)' }
+                      : isSentenceTransformers
+                      ? { background: 'rgba(37, 99, 235, 0.12)', color: '#2563EB' }
+                      : isCTranslate2
+                      ? { background: 'rgba(5, 150, 105, 0.12)', color: '#059669' }
+                      : isPaddle
+                      ? { background: 'rgba(147, 51, 234, 0.12)', color: '#9333EA' }
+                      : { background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }
+
+                    return (
+                      <tr
+                        key={m.id}
+                        className="transition-fast hover:bg-[var(--color-surface-hover)]"
+                      >
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-semibold" style={{ color: 'var(--color-text)' }}>
+                              {m.id}
                             </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-center font-mono text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-                        {m.vram_usage}
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <span
-                          className="inline-flex items-center gap-1.5 text-[11px] font-medium"
-                          style={{ color: 'var(--color-success)' }}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-success)' }} />
-                          Loaded
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                            {m.engine_type === 'embedded' && (
+                              <span
+                                className="text-[9px] font-sans font-semibold px-1.5 py-0.5 rounded tracking-wide uppercase"
+                                style={{
+                                  background: 'var(--color-overlay)',
+                                  color: 'var(--color-text-muted)',
+                                  border: '1px solid var(--color-border)',
+                                }}
+                              >
+                                Embedded Engine
+                              </span>
+                            )}
+                          </div>
+                          {m.role && (
+                            <div className="text-[10px] font-sans font-normal mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                              {m.role}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className="font-mono text-[10px] px-2 py-0.5 rounded font-medium uppercase whitespace-nowrap"
+                            style={{
+                              ...badgeStyle,
+                              border: '1px solid var(--color-border)',
+                            }}
+                          >
+                            {m.backend}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-mono font-medium" style={{ color: 'var(--color-text)' }}>
+                          {m.model}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex flex-wrap gap-1">
+                            {m.task_tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="inline-block text-[10px] px-2 py-0.5 rounded font-medium font-mono"
+                                style={{
+                                  background: 'var(--color-overlay)',
+                                  color: 'var(--color-text-muted)',
+                                }}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-center font-mono text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                          {m.vram_usage}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <span
+                            className="inline-flex items-center gap-1.5 text-[11px] font-medium"
+                            style={{ color: 'var(--color-success)' }}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-success)' }} />
+                            {m.engine_type === 'embedded' ? 'Resident' : 'Loaded'}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -674,24 +905,42 @@ export function SettingsPage() {
         </section>
 
         {/* ─────────────────────────────────────────────────────────────────
-            SECTION 3: Portable Drive & Encryption Status (NFR-2 / NFR-3)
+            SECTION 3: Host Storage & Hardware Telemetry (NFR-2 / NFR-3)
            ───────────────────────────────────────────────────────────────── */}
         <section className="flex flex-col gap-4">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: 'var(--color-accent-tint)', color: 'var(--color-accent)' }}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div
+                className="w-7 h-7 rounded-lg flex items-center justify-center"
+                style={{ background: 'var(--color-accent-tint)', color: 'var(--color-accent)' }}
+              >
+                <HardDrive size={15} strokeWidth={2.2} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold tracking-tight">
+                  Drive &amp; Hardware Encryption Status
+                </h2>
+                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  Hardware telemetry, BitLocker/LUKS2 encryption, and localized offline storage gauge (NFR-2, NFR-3).
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => fetchSystemAndModels(true)}
+              disabled={isRefreshing}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)] disabled:opacity-50 shadow-xs"
+              style={{
+                background: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text)',
+              }}
+              title="Poll live disk and hardware metrics"
             >
-              <HardDrive size={15} strokeWidth={2.2} />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold tracking-tight">
-                Drive &amp; Hardware Encryption Status
-              </h2>
-              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                Hardware isolation, BitLocker/LUKS2 encryption, and localized offline storage gauge (NFR-2, NFR-3).
-              </p>
-            </div>
+              <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
+              <span>{isRefreshing ? 'Syncing...' : 'Poll Hardware'}</span>
+            </button>
           </div>
 
           <div
@@ -717,7 +966,7 @@ export function SettingsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
-                      Portable Drive: Mounted &amp; Encrypted
+                      Local Volume: {systemInfo.device.mountPoint} ({systemInfo.device.fileSystem})
                     </h3>
                     <span
                       className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold whitespace-nowrap"
@@ -731,8 +980,16 @@ export function SettingsPage() {
                     </span>
                   </div>
                   <div className="font-mono text-[11px] mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 min-w-0" style={{ color: 'var(--color-text-muted)' }}>
-                    <span>Device: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>/dev/mapper/sovereign-storage</strong></span>
-                    <span>· Mount: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>/media/sovereign-data</strong></span>
+                    <span>Device: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>{systemInfo.device.devicePath}</strong></span>
+                    <span>· Host: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>{systemInfo.device.hostname}</strong></span>
+                    <span>· OS: <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>{systemInfo.device.osName}</strong></span>
+                  </div>
+                  <div className="text-[11px] mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[var(--color-text-muted)]">
+                    <span>CPU: <strong className="font-mono font-medium" style={{ color: 'var(--color-text)' }}>{systemInfo.device.cpuModel} ({systemInfo.device.cpuCores} cores)</strong></span>
+                    <span>RAM: <strong className="font-mono font-medium" style={{ color: 'var(--color-text)' }}>{systemInfo.device.totalMemGB} GB</strong></span>
+                    {systemInfo.device.gpu && (
+                      <span>GPU: <strong className="font-mono font-medium" style={{ color: 'var(--color-accent)' }}>{systemInfo.device.gpu.name} ({(systemInfo.device.gpu.vramTotalMB / 1024).toFixed(1)} GB VRAM)</strong></span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -742,13 +999,13 @@ export function SettingsPage() {
                 <div
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap"
                   style={{
-                    background: 'var(--color-error-tint)',
+                    background: 'var(--color-accent-tint)',
                     border: '1px solid var(--color-accent-border)',
                     color: 'var(--color-accent)',
                   }}
                 >
                   <Lock size={12} strokeWidth={2.4} />
-                  <span>LUKS2 / AES-256-XTS</span>
+                  <span>{systemInfo.device.encryption}</span>
                 </div>
                 <div
                   className="px-2.5 py-1 rounded-md text-[11px] font-semibold whitespace-nowrap"
@@ -757,7 +1014,7 @@ export function SettingsPage() {
                     color: 'var(--color-text-muted)',
                   }}
                 >
-                  FIPS 140-3 Validated
+                  Air-Gapped Sovereign Node
                 </div>
               </div>
             </div>
@@ -766,46 +1023,38 @@ export function SettingsPage() {
             <div className="flex flex-col gap-2 pt-1 min-w-0">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs min-w-0">
                 <span className="font-medium whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
-                  Total Encrypted Storage Capacity
+                  Total Host Storage Capacity ({systemInfo.device.driveLetter || systemInfo.device.mountPoint})
                 </span>
                 <span className="font-mono font-semibold break-words text-left sm:text-right" style={{ color: 'var(--color-accent)' }}>
-                  246.8 GB used / 512.0 GB <span className="opacity-80 font-normal">(48.2% utilized · 265.2 GB free)</span>
+                  {systemInfo.storage.usedGB} GB used / {systemInfo.storage.totalGB} GB{' '}
+                  <span className="opacity-80 font-normal">
+                    ({systemInfo.storage.utilizationPct}% utilized · {systemInfo.storage.freeGB} GB free)
+                  </span>
                 </span>
               </div>
 
               {/* Segmented Progress Bar */}
               <div
-                className="w-full h-3 rounded-md overflow-hidden flex"
+                className="w-full h-3.5 rounded-md overflow-hidden flex"
                 style={{ background: 'var(--color-overlay)' }}
               >
-                <div
-                  style={{ width: '22%', background: 'var(--color-accent)' }}
-                  title="Model Weights (GGUF / Safetensors): 112.4 GB"
-                />
-                <div
-                  style={{ width: '13%', background: '#2563EB' }}
-                  title="Milvus Vector DB (Dense + BM25): 64.2 GB"
-                />
-                <div
-                  style={{ width: '9%', background: '#059669' }}
-                  title="Engineering Document Corpus: 48.8 GB"
-                />
-                <div
-                  style={{ width: '4.2%', background: '#D97706' }}
-                  title="Audit Trails & System Cache: 21.4 GB"
-                />
+                {systemInfo.storage.breakdown.map((seg) => {
+                  const pct = Math.max(1, (seg.sizeGB / systemInfo.storage.totalGB) * 100)
+                  return (
+                    <div
+                      key={seg.id}
+                      style={{ width: `${pct}%`, background: seg.color }}
+                      title={`${seg.label}: ${seg.sizeDisplay || (seg.sizeGB >= 1 ? `${seg.sizeGB} GB` : `${(seg.sizeGB * 1024).toFixed(1)} MB`)}`}
+                    />
+                  )
+                })}
               </div>
 
               {/* Segment Legend */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                {[
-                  { label: 'Model Weights (GGUF)', size: '112.4 GB', color: 'var(--color-accent)' },
-                  { label: 'Milvus Vector DB', size: '64.2 GB', color: '#2563EB' },
-                  { label: 'Document Corpus', size: '48.8 GB', color: '#059669' },
-                  { label: 'Audit Logs & Cache', size: '21.4 GB', color: '#D97706' },
-                ].map((item) => (
+                {systemInfo.storage.breakdown.map((item) => (
                   <div
-                    key={item.label}
+                    key={item.id}
                     className="flex items-center gap-2 p-2 rounded-lg border text-left"
                     style={{
                       background: 'var(--color-surface)',
@@ -818,7 +1067,7 @@ export function SettingsPage() {
                         {item.label}
                       </div>
                       <div className="font-mono text-xs font-bold leading-tight mt-0.5" style={{ color: 'var(--color-text)' }}>
-                        {item.size}
+                        {item.sizeDisplay || (item.sizeGB >= 1 ? `${item.sizeGB} GB` : `${(item.sizeGB * 1024).toFixed(1)} MB`)}
                       </div>
                     </div>
                   </div>
@@ -839,9 +1088,9 @@ export function SettingsPage() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                 {[
-                  'AES-256-XTS hardware block encryption active on mount',
+                  'BitLocker / LUKS2 hardware block encryption active on mount',
                   'Zero outbound sockets: Loopback bound only (CARD 07 verified)',
-                  'Read-only model weight partition prevents run-time tampering',
+                  'FAISS + SQLite vector index isolated in-memory on local socket',
                   'Volatile RAM cache purged on operator logout or session end',
                 ].map((check, i) => (
                   <div key={i} className="flex items-center gap-2">

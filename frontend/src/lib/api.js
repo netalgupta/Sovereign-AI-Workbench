@@ -22,34 +22,38 @@ const MOCK_LATENCY_MS = 400
 // When Aditya's backend returns real retrieval passages, this constant is
 // replaced by the live API response body. No other file changes.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Mock citation data — grounded directly in the actual MRPL_RAG_Test_Corpus.
+// Matches the Citation contract shape exactly.
+// ---------------------------------------------------------------------------
 const MOCK_CITATIONS = [
   {
     id: 1,
-    doc: 'HCU_Operations_Manual.pdf',
-    section: 'Section 4.2 — Feed Rate Operating Limits',
+    doc: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
+    section: 'Section 4.2 — Feed Rate Operating Limits & WABT End-of-Run',
     passage:
-      'The design-basis feed rate for the Hydrocracking Unit (HCU-2) shall not exceed 110 % of the nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Exceedance for more than 15 minutes triggers an automatic interlock via the DCS feed-forward controller (FFC-201).',
+      'The design-basis feed rate for Hydrocracking Unit 2 (HCU-2) shall not exceed 110 % of nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Sustained feed elevation accelerates bed fouling; WABT trigger limit is 410 °C. Exceedance for more than 15 minutes triggers an automatic interlock via the DCS feed-forward controller (FFC-201).',
   },
   {
     id: 2,
-    doc: 'Safety_Guidelines_2024.docx',
-    section: 'Page 14 — High-Temperature Catalyst Runaway Prevention',
+    doc: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
+    section: 'Section 2.1 — High-Temperature Catalyst Runaway Prevention',
     passage:
-      'Operating at elevated feed rates increases LHSV (Liquid Hourly Space Velocity) which reduces residence time. At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable; H₂/HC ratio must be maintained above 1,000 Nm³/m³ to suppress runaway. See Table 3-A for alarm setpoints.',
+      'Operating at elevated feed rates increases LHSV (Liquid Hourly Space Velocity) which reduces residence time. At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable across Beds 1-3; H₂/HC ratio must be maintained above 1,000 Nm³/m³ to suppress runaway. Continuous VOC monitoring active.',
   },
   {
     id: 3,
-    doc: 'Emissions_Regulations_2024.pdf',
-    section: 'Section 9 — Downstream Fractionation Column Flooding Criteria',
+    doc: 'Novolen_Batch_QA_Report_Aug2026.pdf',
+    section: 'Section 3.1 — Downstream Excursion & Fractionation Flooding Criteria',
     passage:
       'Column flooding is defined as the condition where liquid entrainment rate exceeds 10 % of vapour flow. At feed rates above 110 % of design capacity, flooding probability increases to 34 % based on the correlation: F_factor = u_v × √ρ_v. Immediate operator intervention is required per MOC procedure.',
   },
   {
     id: 4,
-    doc: 'Historical_Trend_Data.csv',
-    section: 'Row 1042–1090 — Thermocouple Array TC-201 (4 Shifts)',
+    doc: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
+    section: 'Sheet 1 (Weeks 1–12) — Thermocouple Array TC-201 Telemetry & H2 Quality',
     passage:
-      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C · TC-201D: 380.9 °C · TC-201E: 382.6 °C · TC-201F: 381.7 °C. Rolling average across 6 sensors: 381.95 °C. Upper operating limit: 400 °C. Rate-of-change: +0.4 °C/hr (well within ±2.0 °C/hr threshold).',
+      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C · TC-201D: 380.9 °C · TC-201E: 382.6 °C · TC-201F: 381.7 °C. Rolling average across 6 sensors: 381.95 °C. Upper operating limit: 400 °C. Rate-of-change: +0.4 °C/hr. PSA-3 purity drift to 99.65% cross-referenced.',
   },
 ]
 
@@ -63,15 +67,15 @@ function buildMockReply(userMessage) {
 
 ---
 
-### Operational Risk Assessment
+### Operational Risk Assessment (Grounded in MRPL Corpus)
 
-Increasing the HCU feed rate beyond 110 % design capacity introduces three compounding risks: thermal runaway in the catalyst bed, H₂ compressor capacity saturation, and fractionation column flooding. [1][2]
+Increasing the HCU feed rate beyond 110 % design capacity introduces three compounding risks: thermal runaway across Reactor R-201 Beds 1-3, H₂ compressor capacity saturation (K-201), and downstream fractionation column flooding. [1][2]
 
-The key safety constraint is the feed-forward interlock (FFC-201) which activates at sustained exceedance. Operating above this threshold reduces catalyst residency time and risks exothermic runaway. [2]
+The primary safety constraint is the feed-forward interlock (FFC-201) and the WABT end-of-run trigger (> 410 °C per SOP-114-Rev3). Operating above this threshold reduces catalyst residency time and risks rapid exothermic excursion. [1][2]
 
-### Current Reactor Inlet Temperatures
+### Current Reactor Inlet Temperatures (Thermocouple Telemetry)
 
-Based on the latest thermocouple array readings (4-shift average): [4]
+Based on the latest thermocouple array readings (4-shift rolling average from process logs): [4]
 
 | Sensor | Reading (°C) | Limit (°C) | Status |
 |--------|-------------|-----------|--------|
@@ -87,17 +91,17 @@ Based on the latest thermocouple array readings (4-shift average): [4]
 ### Recommended Guard Logic
 
 \`\`\`python
-# Feed-rate guard — per SOP-HCU-412 §4.3
+# Feed-rate guard — per SOP-114-Rev3 §4.2 & FFC-201 interlock
 if feed_rate > 1.10 * design_capacity:
-    alert("High risk: exceeds 110% design threshold")
-    suggest_mitigation(cool_quench=True)
+    alert("High risk: exceeds 110% design threshold (1,450 m³/h)")
+    suggest_mitigation(cool_quench=True, bed_quench_valve="QFC-18")
 
-# Catalyst bed temperature check
-if inlet_temp > 395:  # 5°C early-warning headroom
-    trigger_alarm(level="WARNING", channel="TC-201")
+# Catalyst bed temperature check against WABT headroom
+if inlet_temp > 395:  # 5°C early-warning headroom before 400°C threshold
+    trigger_alarm(level="WARNING", channel="TC-201", target_unit="HCU-2")
 \`\`\`
 
-> ⚠️ **Operator note:** If feed rate must exceed 110 % for operational reasons, engage the quench flow controller (QFC-18) first and increase the H₂/HC ratio above 1,000 Nm³/m³ before any ramp. [3]`
+> ⚠️ **Operator note:** If feed rate must exceed 110 % for operational reasons, engage quench flow controller (QFC-18) first and maintain H₂/HC ratio above 1,000 Nm³/m³ before any ramp. [3]`
 }
 
 // ---------------------------------------------------------------------------

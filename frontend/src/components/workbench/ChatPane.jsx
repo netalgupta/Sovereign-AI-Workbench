@@ -67,11 +67,12 @@ function formatThinkingHeader(phrase, stepCount = 4, duration = '4.7s') {
 }
 
 // Inline live-thinking trace data definitions
+// Inline live-thinking trace data definitions
 const ACTIVE_TRACE_ITEMS = [
-  { time: '10:20:05.10', text: 'Router mapped intent: [quench_control, column_reflux_stabilization]' },
-  { time: '10:20:05.34', text: 'Milvus hybrid search on collection "hcu_emergency_procedures" (dense + sparse BM25)' },
-  { time: '10:20:05.80', text: 'Retrieved 3 SOP sections: SOP-HCU-412 §4.3 (Quench Flow Rates)' },
-  { time: '10:20:06.15', text: 'Cross-encoder reranking completed: threshold >= 0.86 (2 candidate procedures isolated)' },
+  { time: '10:20:05.10', text: 'Router mapped intent: [quench_control, bed_temperature_stabilization, hcu_2]' },
+  { time: '10:20:05.34', text: 'FAISS hybrid search on MRPL corpus (dense BGE-Large + sparse BM25)' },
+  { time: '10:20:05.80', text: 'Retrieved 3 sections: SOP-114-Rev3 §4.2 (WABT Limits & Bed Quench Rates)' },
+  { time: '10:20:06.15', text: 'Cross-encoder reranking completed: score >= 0.88 (2 candidate procedures isolated)' },
   { time: '10:20:06.60', text: 'Sandboxed context buffered: 2,120 tokens in zero-egress local memory' },
 ]
 
@@ -83,7 +84,7 @@ const COMPLETED_REASONING_STEPS_1 = [
     category: 'verification',
     icon: FileCheck,
     trace: [
-      { time: '10:14:04.10', text: 'Ingested plant safety parameter matrix: API-521 & Plant SOP §14.2' },
+      { time: '10:14:04.10', text: 'Ingested plant safety parameter matrix: SOP-114-Rev3 & DCS interlock FFC-201' },
       { time: '10:14:04.45', text: 'Evaluated boundary threshold: ΔP_max <= 420 m³/h at current feed-rate' },
       { time: '10:14:04.98', text: 'Safety margin confirmed: +18.2% operational headroom (status: PASS)' },
     ],
@@ -107,9 +108,9 @@ const COMPLETED_REASONING_STEPS_1 = [
     category: 'retrieval',
     icon: Search,
     trace: [
-      { time: '10:14:01.40', text: 'Milvus search against collection "hcu_operations_docs"' },
-      { time: '10:14:01.88', text: 'Dense embeddings matched 3 chunks from HCU_Operations_Manual.pdf' },
-      { time: '10:14:02.10', text: 'Retrieved 2 chunks from Safety_Guidelines_2024.docx' },
+      { time: '10:14:01.40', text: 'FAISS vector search against MRPL Engineering Corpus' },
+      { time: '10:14:01.88', text: 'Dense embeddings matched 3 chunks from SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx' },
+      { time: '10:14:02.10', text: 'Retrieved 2 chunks from Aromatic_Complex_Benzene_Safety_Circular.docx' },
     ],
   },
   {
@@ -131,7 +132,7 @@ const COMPLETED_REASONING_STEPS_2 = [
     label: 'Queried sensor trends',
     duration: '0.8s',
     trace: [
-      { time: '10:18:12.10', text: 'Fetched historical time-series from Historical_Trend_Data.csv (Row 1042-1090)' },
+      { time: '10:18:12.10', text: 'Fetched historical time-series from PSA_Hydrogen_Purity_Trend_Log.xlsx (Weeks 1-12)' },
       { time: '10:18:12.45', text: 'Parsed thermocouple array TC-201A through TC-201F across 4 shifts' },
     ],
   },
@@ -140,7 +141,7 @@ const COMPLETED_REASONING_STEPS_2 = [
     label: 'Evaluated operating envelope',
     duration: '0.6s',
     trace: [
-      { time: '10:18:12.80', text: 'Current average: 382°C vs upper limit 400°C (headroom: 18°C)' },
+      { time: '10:18:12.80', text: 'Current average: 382°C vs upper limit 400°C (headroom: 18°C, WABT limit 410°C)' },
       { time: '10:18:13.10', text: 'Rate of change: +0.4°C/hr (well below thermal excursion threshold of +2.0°C/hr)' },
     ],
   },
@@ -149,41 +150,41 @@ const COMPLETED_REASONING_STEPS_2 = [
     label: 'Synthesized telemetry summary',
     duration: '0.5s',
     trace: [
-      { time: '10:18:13.40', text: 'Generated verification citation [4] pointing to row-level CSV sensor log' },
+      { time: '10:18:13.40', text: 'Generated verification citation [4] pointing to row-level sensor telemetry log' },
     ],
   },
 ]
 
 // Mock citation data for the STATIC demo turns (pre-loaded session)
-// These match the same shape as api.js MOCK_CITATIONS.
+// Grounded in actual MRPL_RAG_Test_Corpus documents
 const DEMO_CITATIONS = [
   {
     id: 1,
-    doc: 'HCU_Operations_Manual.pdf',
-    section: 'Section 4.2 — Feed Rate Operating Limits',
+    doc: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
+    section: 'Section 4.2 — Feed Rate Operating Limits & WABT End-of-Run',
     passage:
-      'The design-basis feed rate for the Hydrocracking Unit (HCU-2) shall not exceed 110 % of the nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Exceedance for more than 15 minutes triggers an automatic interlock via DCS feed-forward controller (FFC-201).',
+      'The design-basis feed rate for Hydrocracking Unit 2 (HCU-2) shall not exceed 110 % of nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Sustained feed elevation accelerates bed fouling; WABT trigger limit is 410 °C. Exceedance triggers DCS interlock FFC-201.',
   },
   {
     id: 2,
-    doc: 'Safety_Guidelines_2024.docx',
-    section: 'Page 14 — High-Temperature Catalyst Runaway Prevention',
+    doc: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
+    section: 'Section 2.1 — High-Temperature Catalyst Runaway Prevention',
     passage:
-      'At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable. H₂/HC ratio must be maintained above 1,000 Nm³/m³ to suppress runaway. See Table 3-A for alarm setpoints.',
+      'At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable. H₂/HC ratio must be maintained above 1,000 Nm³/m³ across Beds 1-3 to suppress runaway. Continuous monitoring required.',
   },
   {
     id: 3,
-    doc: 'Emissions_Regulations_2024.pdf',
-    section: 'Section 9 — Downstream Fractionation Column Flooding Criteria',
+    doc: 'Novolen_Batch_QA_Report_Aug2026.pdf',
+    section: 'Section 3.1 — Downstream Fractionation Column Flooding Criteria',
     passage:
       'At feed rates above 110 % of design capacity, flooding probability increases to 34 % based on the correlation: F_factor = u_v × √ρ_v. Immediate operator intervention is required per MOC procedure.',
   },
   {
     id: 4,
-    doc: 'Historical_Trend_Data.csv',
-    section: 'Row 1042–1090 — Thermocouple Array TC-201 (4 Shifts)',
+    doc: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
+    section: 'Sheet 1 (Weeks 1–12) — Thermocouple Array TC-201 (4 Shifts)',
     passage:
-      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C. Rolling average: 381.95 °C. Upper limit: 400 °C. Rate-of-change: +0.4 °C/hr.',
+      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C. Rolling average: 381.95 °C. Upper limit: 400 °C. Rate-of-change: +0.4 °C/hr. PSA-3 purity drift cross-referenced.',
   },
 ]
 
@@ -208,8 +209,8 @@ export function ChatPane() {
   // Code block copy state
   const [copiedCode, setCopiedCode] = useState(false)
 
-  // Model selector state (Cosmetic only)
-  const [selectedModel, setSelectedModel] = useState('GPT-4o (Engineering)')
+  // Model selector state (Cosmetic selector pointing to real models.yaml entries)
+  const [selectedModel, setSelectedModel] = useState('Qwen 2.5-14B (Reasoning)')
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
 
   // ── Word Rotation for Completed Thinking Blocks ─────────────────────────
@@ -308,9 +309,9 @@ export function ChatPane() {
   }, [])
 
   const MODELS = [
-    'GPT-4o (Engineering)',
-    'Qwen 2.5-Coder (7B Local)',
     'Qwen 2.5-14B (Reasoning)',
+    'Qwen 2.5-Coder (7B Local)',
+    'Qwen 2.5-VL (Vision & Diagrams)',
     'Phi-3.5 Mini (Fast Router)',
   ]
 
@@ -676,10 +677,10 @@ export function ChatPane() {
 
             {/* Bullet points */}
             <div className="flex flex-col gap-1.5">
-              <span className="font-semibold">Based on the operator manual:</span>
+              <span className="font-semibold">Based on SOP-114-Rev3 & Aromatic Safety Circular:</span>
               <div className="flex flex-col gap-1 pl-2">
-                <div>1. Elevated reactor temperatures and potential catalyst thermal runaway</div>
-                <div>2. Increased H₂ consumption leading to makeup compressor capacity limits</div>
+                <div>1. Elevated reactor temperatures and potential catalyst thermal runaway (WABT trigger &gt; 410 °C)</div>
+                <div>2. Increased H₂ consumption leading to makeup compressor capacity limits (K-201)</div>
                 <div>3. Higher chance of downstream fractionation column flooding</div>
               </div>
             </div>

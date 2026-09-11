@@ -11,9 +11,9 @@ import { FileText, ExternalLink, ShieldCheck } from 'lucide-react'
  */
 export default function Placeholder({
   citationId = '1',
-  sourceDocName = 'HCU_Operations_Manual.pdf',
-  pageOrSection = 'Section 4.2 — Feed Rate Limits',
-  passage = 'Maximum allowable HCU fresh feed rate under current catalyst run length is 112% of design.',
+  sourceDocName = 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
+  pageOrSection = 'Section 4.2 — WABT Trigger & Catalyst Operating Limits',
+  passage = 'The design-basis feed rate for Hydrocracker Unit 2 (HCU-2) shall not exceed 110 % of nameplate capacity. Sustained exceedance accelerates bed fouling; WABT trigger limit is 410 °C.',
   sourceUrl = '/sources',
   confidence = 0.94,
   onViewSource,

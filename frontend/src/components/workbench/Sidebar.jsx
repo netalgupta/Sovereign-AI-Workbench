@@ -19,51 +19,44 @@ import { showToast } from '../../store/toastStore'
 
 const INITIAL_SOURCES = [
   {
-    id: '1',
-    name: 'HCU_Operations_Manual.pdf',
-    type: 'PDF',
-    size: '12 MB',
-    addedAgo: 'Added 3d ago',
-    category: 'documents',
-    color: '#D93829',
-    bg: 'rgba(217, 56, 41, 0.12)',
-    border: 'rgba(217, 56, 41, 0.28)',
-    iconText: 'PDF',
-    enabled: true,
-  },
-  {
-    id: '2',
-    name: 'Safety_Guidelines_2024.docx',
+    id: '01_SOPs_and_Procedures_SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
+    name: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
     type: 'DOCX',
-    size: '2.4 MB',
-    addedAgo: 'Added 1w ago',
+    size: '37.7 KB',
+    addedAgo: 'Ingested on-prem',
     category: 'documents',
-    color: '#2B6CB0',
-    bg: 'rgba(43, 108, 176, 0.12)',
-    border: 'rgba(43, 108, 176, 0.28)',
+    subcategory: 'sops',
+    badge: 'SOP & Safety',
+    color: '#2563EB',
+    bg: 'rgba(37, 99, 235, 0.12)',
+    border: 'rgba(37, 99, 235, 0.28)',
     iconText: 'DOCX',
     enabled: true,
   },
   {
-    id: '3',
-    name: 'Unit_Performance_Data.xlsx',
-    type: 'XLSX',
-    size: '1.1 MB',
-    addedAgo: 'Added 2w ago',
+    id: '01_SOPs_and_Procedures_Aromatic_Complex_Benzene_Safety_Circular.docx',
+    name: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
+    type: 'DOCX',
+    size: '37.0 KB',
+    addedAgo: 'Ingested on-prem',
     category: 'documents',
-    color: '#2F855A',
-    bg: 'rgba(47, 133, 90, 0.12)',
-    border: 'rgba(47, 133, 90, 0.28)',
-    iconText: 'XLSX',
+    subcategory: 'sops',
+    badge: 'SOP & Safety',
+    color: '#2563EB',
+    bg: 'rgba(37, 99, 235, 0.12)',
+    border: 'rgba(37, 99, 235, 0.28)',
+    iconText: 'DOCX',
     enabled: true,
   },
   {
-    id: '4',
-    name: 'Emissions_Regulations.pdf',
+    id: '02_Inspection_and_Maintenance_Inspection_Report_CCR1_Regeneration_Cycle.pdf',
+    name: 'Inspection_Report_CCR1_Regeneration_Cycle.pdf',
     type: 'PDF',
-    size: '3.8 MB',
-    addedAgo: 'Added 5d ago',
+    size: '38.2 KB',
+    addedAgo: 'Ingested on-prem',
     category: 'documents',
+    subcategory: 'inspection',
+    badge: 'Inspection & Maintenance',
     color: '#D93829',
     bg: 'rgba(217, 56, 41, 0.12)',
     border: 'rgba(217, 56, 41, 0.28)',
@@ -71,38 +64,165 @@ const INITIAL_SOURCES = [
     enabled: true,
   },
   {
-    id: '5',
-    name: 'Historical_Trend_Data.csv',
-    type: 'CSV',
-    size: '14 MB',
-    addedAgo: 'Added 4d ago',
+    id: '02_Inspection_and_Maintenance_Maintenance_Log_Q3_2026.xlsx',
+    name: 'Maintenance_Log_Q3_2026.xlsx',
+    type: 'XLSX',
+    size: '11.4 KB',
+    addedAgo: 'Ingested on-prem',
     category: 'data',
-    color: 'var(--color-text)',
-    bg: 'var(--color-overlay)',
-    border: 'var(--color-border)',
-    iconType: 'database',
+    subcategory: 'inspection',
+    badge: 'Inspection & Maintenance',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.12)',
+    border: 'rgba(5, 150, 105, 0.28)',
+    iconText: 'XLSX',
     enabled: true,
   },
   {
-    id: '6',
-    name: 'Catalyst_Specifications.pdf',
+    id: '02_Inspection_and_Maintenance_Pipeline_Incident_Report_Hassan_Segment.pdf',
+    name: 'Pipeline_Incident_Report_Hassan_Segment.pdf',
     type: 'PDF',
-    size: '2.1 MB',
-    addedAgo: 'Added 2w ago',
+    size: '36.3 KB',
+    addedAgo: 'Ingested on-prem',
     category: 'documents',
-    color: 'var(--color-text-muted)',
-    bg: 'var(--color-overlay)',
-    border: 'var(--color-border)',
+    subcategory: 'inspection',
+    badge: 'Inspection & Maintenance',
+    color: '#D93829',
+    bg: 'rgba(217, 56, 41, 0.12)',
+    border: 'rgba(217, 56, 41, 0.28)',
     iconText: 'PDF',
-    enabled: false,
+    enabled: true,
   },
   {
-    id: '7',
-    name: 'Market_Prices_API',
+    id: '03_Quality_and_Process_Data_Novolen_Batch_QA_Report_Aug2026.pdf',
+    name: 'Novolen_Batch_QA_Report_Aug2026.pdf',
+    type: 'PDF',
+    size: '42.1 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'documents',
+    subcategory: 'quality',
+    badge: 'QA & Process Data',
+    color: '#D93829',
+    bg: 'rgba(217, 56, 41, 0.12)',
+    border: 'rgba(217, 56, 41, 0.28)',
+    iconText: 'PDF',
+    enabled: true,
+  },
+  {
+    id: '03_Quality_and_Process_Data_PSA_Hydrogen_Purity_Trend_Log.xlsx',
+    name: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
+    type: 'XLSX',
+    size: '11.4 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'data',
+    subcategory: 'quality',
+    badge: 'QA & Process Data',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.12)',
+    border: 'rgba(5, 150, 105, 0.28)',
+    iconText: 'XLSX',
+    enabled: true,
+  },
+  {
+    id: '03_Quality_and_Process_Data_Sulphur_Spec_Compliance_LabSheet.xlsx',
+    name: 'Sulphur_Spec_Compliance_LabSheet.xlsx',
+    type: 'XLSX',
+    size: '9.8 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'data',
+    subcategory: 'quality',
+    badge: 'QA & Process Data',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.12)',
+    border: 'rgba(5, 150, 105, 0.28)',
+    iconText: 'XLSX',
+    enabled: true,
+  },
+  {
+    id: '04_SAP_Mock_Exports_SAP_Mock_Materials_Master_Export.xlsx',
+    name: 'SAP_Mock_Materials_Master_Export.xlsx',
+    type: 'XLSX',
+    size: '11.8 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'data',
+    subcategory: 'sap_mock',
+    badge: 'SAP ERP Export',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.12)',
+    border: 'rgba(5, 150, 105, 0.28)',
+    iconText: 'XLSX',
+    enabled: true,
+  },
+  {
+    id: '05_Correspondence_Correspondence_Depot_HQ_Thread_Kasargod.docx',
+    name: 'Correspondence_Depot_HQ_Thread_Kasargod.docx',
+    type: 'DOCX',
+    size: '36.6 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'documents',
+    subcategory: 'correspondence',
+    badge: 'Depot Operations',
+    color: '#2563EB',
+    bg: 'rgba(37, 99, 235, 0.12)',
+    border: 'rgba(37, 99, 235, 0.28)',
+    iconText: 'DOCX',
+    enabled: true,
+  },
+  {
+    id: '06_Diagrams_and_Scans_Hydrocracker_PID_Schematic.png',
+    name: 'Hydrocracker_PID_Schematic.png',
+    type: 'P&ID',
+    size: '93.8 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'documents',
+    subcategory: 'diagrams',
+    badge: 'Schematics & Scans',
+    color: '#0D9488',
+    bg: 'rgba(13, 148, 136, 0.12)',
+    border: 'rgba(13, 148, 136, 0.28)',
+    iconText: 'P&ID',
+    enabled: true,
+  },
+  {
+    id: '06_Diagrams_and_Scans_Pipeline_Segment_Map_Mangalore_Hassan.png',
+    name: 'Pipeline_Segment_Map_Mangalore_Hassan.png',
+    type: 'P&ID',
+    size: '59.0 KB',
+    addedAgo: 'Ingested on-prem',
+    category: 'documents',
+    subcategory: 'diagrams',
+    badge: 'Schematics & Scans',
+    color: '#0D9488',
+    bg: 'rgba(13, 148, 136, 0.12)',
+    border: 'rgba(13, 148, 136, 0.28)',
+    iconText: 'P&ID',
+    enabled: true,
+  },
+  {
+    id: '06_Diagrams_and_Scans_Scanned_Inspection_Checklist_CCR1.png',
+    name: 'Scanned_Inspection_Checklist_CCR1.png',
+    type: 'SCAN',
+    size: '1.96 MB',
+    addedAgo: 'Ingested on-prem',
+    category: 'documents',
+    subcategory: 'diagrams',
+    badge: 'Schematics & Scans',
+    color: '#0D9488',
+    bg: 'rgba(13, 148, 136, 0.12)',
+    border: 'rgba(13, 148, 136, 0.28)',
+    iconText: 'SCAN',
+    enabled: true,
+  },
+  {
+    id: 'sap-plant-sensors-api',
+    name: 'SAP_Plant_Sensors_API',
+    label: 'SAP ERP Local Connector (RFC/BAPI Mock)',
     type: 'API',
     size: 'Live Data Source',
-    addedAgo: 'Added 1d ago',
+    addedAgo: 'Online (Loopback)',
     category: 'apis',
+    subcategory: 'apis',
+    badge: 'SAP ERP RFC/BAPI',
     color: 'var(--color-accent)',
     bg: 'var(--color-accent-tint)',
     border: 'var(--color-accent-border)',
@@ -111,12 +231,15 @@ const INITIAL_SOURCES = [
     enabled: true,
   },
   {
-    id: '8',
-    name: 'SAP_Plant_Sensors_API',
+    id: 'dcs-scada-telemetry-feed',
+    name: 'DCS_SCADA_Telemetry_Feed',
+    label: 'DCS / SCADA Telemetry Stream (OPC-UA)',
     type: 'API',
     size: 'Live Data Source',
-    addedAgo: 'Added 2d ago',
+    addedAgo: 'Online (Loopback)',
     category: 'apis',
+    subcategory: 'apis',
+    badge: 'OPC-UA Real-Time',
     color: 'var(--color-accent)',
     bg: 'var(--color-accent-tint)',
     border: 'var(--color-accent-border)',
@@ -195,6 +318,18 @@ export function Sidebar() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isSearchOpen])
+
+  // Fetch live MRPL Corpus directly from server on mount
+  useEffect(() => {
+    fetch('/api/corpus')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.sources && Array.isArray(data.sources)) {
+          setSources(data.sources)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Expose test automation helpers
   useEffect(() => {
@@ -578,8 +713,8 @@ export function Sidebar() {
                       className="flex items-center justify-between text-[9px]"
                       style={{ color: 'var(--color-text-muted)' }}
                     >
-                      <span>Local Storage</span>
-                      <span className="font-mono">2.4 GB / 10 GB</span>
+                      <span>MRPL Engineering Corpus</span>
+                      <span className="font-mono font-medium">2.50 MB (13 files)</span>
                     </div>
                     <div
                       className="w-full h-1.5 rounded-xs overflow-hidden"
@@ -588,7 +723,7 @@ export function Sidebar() {
                       <div
                         className="h-full rounded-xs transition-base"
                         style={{
-                          width: '24%',
+                          width: '100%',
                           background: 'var(--color-accent)',
                         }}
                       />
@@ -772,7 +907,7 @@ export function Sidebar() {
                 autoFocus
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Type a command or search documents..."
+                placeholder="Type a command or search MRPL corpus..."
                 className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-text-faint)]"
                 style={{ color: 'var(--color-text)' }}
                 onKeyDown={(e) => {
@@ -811,9 +946,9 @@ export function Sidebar() {
               </span>
               {[
                 {
-                  label: 'Search 8 local documents & plant APIs',
+                  label: 'Search 13 MRPL corpus documents & plant APIs',
                   icon: Database,
-                  action: () => showToast('Indexing 8 local sources in Milvus collection', 'info'),
+                  action: () => showToast('Indexed 13 MRPL corpus documents in local FAISS vector store', 'info'),
                 },
                 {
                   label: 'Jump to full-screen Plan DAG graph (/plan)',

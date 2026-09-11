@@ -84,10 +84,10 @@ export const CANONICAL_AUDIT_ENTRIES = [
     id: 'AUD-20260910-004',
     timestamp: '2026-09-10 12:15:18',
     actionType: 'INGEST',
-    toolOrComponent: 'MilvusVectorDB',
+    toolOrComponent: 'FAISS_VectorStore',
     user: 'system',
     status: 'SUCCESS',
-    summary: 'Re-indexed HCU_Operations_Manual.pdf chunk embeddings with SHA-256 integrity seal.',
+    summary: 'Re-indexed SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx chunk embeddings with SHA-256 integrity seal.',
   },
   {
     id: 'AUD-20260910-005',

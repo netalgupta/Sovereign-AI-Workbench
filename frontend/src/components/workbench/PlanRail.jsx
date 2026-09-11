@@ -30,8 +30,8 @@ const INITIAL_STEPS = [
     icon: Search,
     trace: [
       { time: '10:14:05.12', text: 'Query router mapped intent to [hcu_refinery_operations, safety_sop]' },
-      { time: '10:14:05.34', text: 'Milvus hybrid search initiated on collection "hcu_docs" (dense + sparse BM25)' },
-      { time: '10:14:05.89', text: 'Embedding score matched 6 chunks from SOP-HCU-412 & API-521 standard' },
+      { time: '10:14:05.34', text: 'FAISS hybrid search on MRPL corpus (dense BGE-Large + sparse BM25)' },
+      { time: '10:14:05.89', text: 'Embedding score matched 6 chunks from SOP-114-Rev3 & Benzene Safety Circular' },
       { time: '10:14:06.42', text: 'Cross-encoder reranking completed (threshold >= 0.82) -> 3 chunks isolated' },
       { time: '10:14:07.01', text: 'Zero-egress memory buffer: 2,410 tokens isolated in local sandbox' },
     ],

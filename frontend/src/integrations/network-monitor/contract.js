@@ -100,7 +100,7 @@ export const CANONICAL_NETWORK_STATE = {
       remote_addr: '127.0.0.1:54323',
       status: 'ESTABLISHED',
       is_external: false,
-      process: 'milvus-standalone',
+      process: 'faiss-worker-process',
       timestamp: '2026-09-10 14:30:00',
     },
   ],
