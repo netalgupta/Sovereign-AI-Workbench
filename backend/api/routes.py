@@ -392,6 +392,50 @@ def call_tool_endpoint(body: ToolCallRequest) -> dict:
     return {"result": result}
 
 
+# ------------------------------------------------------------------- plan
+
+class PlanRequestBody(BaseModel):
+    request: str
+    session_id: str = "default"
+
+
+@router.post("/plan")
+def build_plan(body: PlanRequestBody) -> dict:
+    """Decompose a request into a dependency graph of steps (FR-5).
+
+    Returns the AgentState shape FRONTEND.md §3.4's plan rail reads
+    directly, including `ready` — the steps whose dependencies are
+    satisfied right now. Independent steps appear together rather than in
+    sequence, which is the visible difference between a plan graph and a
+    numbered list.
+
+    This is a real reasoning-model call and takes tens of seconds on
+    CPU-only hardware.
+    """
+    from backend.orchestrator.planner import PlanningError, plan_request
+    from backend.orchestrator.state import AgentState
+
+    state = AgentState(session_id=body.session_id, original_request=body.request)
+    try:
+        state = plan_request(state)
+    except PlanningError as exc:
+        # 422, not 500: the request was well-formed and the server is
+        # healthy — the model produced something unusable, which the
+        # caller can act on by rephrasing or retrying.
+        raise HTTPException(422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — Ollama down is a 503, not a crash
+        raise HTTPException(503, detail=f"Planner model unavailable: {exc}") from exc
+
+    return {
+        "session_id": state.session_id,
+        "original_request": state.original_request,
+        "plan": [s.model_dump() for s in state.plan],
+        "ready": [s.step_id for s in state.ready_steps()],
+        "is_complete": state.is_complete(),
+        "is_blocked": state.is_blocked(),
+    }
+
+
 # -------------------------------------------------------------- approvals
 
 def _gate():
