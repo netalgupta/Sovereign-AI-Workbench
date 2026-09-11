@@ -371,6 +371,9 @@ export function Sidebar() {
 
   useEffect(() => {
     fetchCorpus()
+    const handleCorpusUpdated = () => fetchCorpus()
+    window.addEventListener('corpus-updated', handleCorpusUpdated)
+    return () => window.removeEventListener('corpus-updated', handleCorpusUpdated)
   }, [])
 
   // Expose test automation helpers

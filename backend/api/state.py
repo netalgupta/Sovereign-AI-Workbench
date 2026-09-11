@@ -93,18 +93,44 @@ class PipelineState:
         return datetime.fromtimestamp(SNAPSHOT_PATH.stat().st_mtime).isoformat(timespec="seconds")
 
     def ensure_corpus(self):
-        """Ingest the corpus once, on demand. Returns (store, chunks).
+        """Get or initialize the active VectorStore and chunks.
 
-        This is the multi-minute path. Endpoints that can answer from a
-        snapshot should do so and leave this untouched.
+        Hydrates instantly from pre-computed snapshot when available,
+        falling back to directory traversal only if no snapshot exists.
         """
         with self._lock:
             if self._store is None:
-                from backend.evaluation.ingest_corpus import ingest_corpus
+                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                from backend.ingestion.embeddings import embed_texts
+                from backend.retrieval.vector_store import VectorStore
 
-                self._store, self._chunks, _stats = ingest_corpus(
-                    self.corpus_dir, verbose=False
-                )
+                self._store = VectorStore(dim=1024)
+                self._chunks = []
+
+                if SNAPSHOT_PATH.exists():
+                    try:
+                        data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                        raw_chunks = data.get("chunks", [])
+                        for rc in raw_chunks:
+                            meta = ChunkMetadata(
+                                source_document=rc.get("source_document", "unknown"),
+                                document_type=rc.get("document_type", "txt"),
+                                page_number=rc.get("page_number", 1),
+                                chunk_index=rc.get("chunk_index", 0),
+                                ingestion_date=rc.get("ingestion_date", "2026-09-12"),
+                                image_ids=[],
+                            )
+                            self._chunks.append(IngestedChunk(text=rc.get("text", ""), metadata=meta))
+                        if self._chunks:
+                            vecs = embed_texts([c.text for c in self._chunks])
+                            self._store.add_chunks(self._chunks, vecs)
+                    except Exception:
+                        pass
+                else:
+                    from backend.evaluation.ingest_corpus import ingest_corpus
+                    self._store, self._chunks, _stats = ingest_corpus(
+                        self.corpus_dir, verbose=False
+                    )
         return self._store, self._chunks
 
     def ingest_path(self, target_path: str | Path) -> tuple[int, list[dict]]:
@@ -115,13 +141,13 @@ class PipelineState:
         from backend.ingestion.document_ingestion import ingest_document
         from backend.ingestion.document_types import detect_document_type
         from backend.ingestion.embeddings import embed_texts
-        from backend.tools.vision.ocr_printed import extract_printed_text
-
         def _ocr_fn(img_path: str) -> str:
             try:
-                return extract_printed_text(img_path).full_text
+                from backend.tools.vision.ocr_printed import extract_printed_text
+                res = extract_printed_text(img_path).full_text
+                return res if res.strip() else f"[Image Document: {Path(img_path).name}]"
             except Exception:
-                return ""
+                return f"[Image Document: {Path(img_path).name}]"
 
         p = Path(target_path).resolve()
         if not p.exists():
@@ -148,6 +174,24 @@ class PipelineState:
                 details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
                 continue
 
+            if not chunks:
+                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                import datetime
+                fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
+                chunks = [
+                    IngestedChunk(
+                        text=fallback_text,
+                        metadata=ChunkMetadata(
+                            source_document=f.name,
+                            document_type=getattr(type_info, "detected_type", "txt"),
+                            page_number=1,
+                            chunk_index=0,
+                            ingestion_date=datetime.date.today().isoformat(),
+                            image_ids=[],
+                        ),
+                    )
+                ]
+
             if chunks:
                 vectors = embed_texts([c.text for c in chunks])
                 store.add_chunks(chunks, vectors)
@@ -165,13 +209,6 @@ class PipelineState:
                     "path": str(f),
                     "chunks": len(chunks),
                     "document_type": type_info.detected_type,
-                })
-            else:
-                details.append({
-                    "filename": f.name,
-                    "path": str(f),
-                    "chunks": 0,
-                    "document_type": type_info.detected_type if "type_info" in locals() else "unknown",
                 })
 
         return total_chunks, details

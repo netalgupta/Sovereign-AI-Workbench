@@ -20,5 +20,40 @@
     "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\MRPL_Chart_Stress_Corpus",
     "isPreset": true,
     "enabled": true
+  },
+  {
+    "id": "dir_test_docs_folder",
+    "name": "test_docs_folder",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\test_docs_folder",
+    "isPreset": false,
+    "enabled": true
+  },
+  {
+    "id": "dir_docs",
+    "name": "docs",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\docs",
+    "isPreset": false,
+    "enabled": true
+  },
+  {
+    "id": "dir_models",
+    "name": "models",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\models",
+    "isPreset": false,
+    "enabled": true
+  },
+  {
+    "id": "dir_2ea70b7bd1",
+    "name": "custom_plant_specs",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\custom_plant_specs",
+    "isPreset": false,
+    "enabled": true
+  },
+  {
+    "id": "dir_1ed7c511df",
+    "name": "test_custom_dir",
+    "path": "C:\\SIH\\SIH26117-Sovereign-Workbench\\test_custom_dir",
+    "isPreset": false,
+    "enabled": true
   }
 ]

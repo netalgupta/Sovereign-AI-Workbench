@@ -272,6 +272,9 @@ export function SourcesRail() {
 
   useEffect(() => {
     fetchCorpus()
+    const handleCorpusUpdated = () => fetchCorpus()
+    window.addEventListener('corpus-updated', handleCorpusUpdated)
+    return () => window.removeEventListener('corpus-updated', handleCorpusUpdated)
   }, [])
 
   const handleDeleteSource = async (source) => {

@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
 
@@ -184,38 +185,85 @@ function systemAndModelsPlugin() {
 
         // Active watched directories list with on-disk persistence
         const configFilePath = path.resolve(cwd, 'backend', 'evaluation', 'configured_sources.json')
+
+        function getDirectoryId(dirPath) {
+          const norm = path.normalize(dirPath).toLowerCase()
+          const hash = crypto.createHash('sha256').update(norm).digest('hex').slice(0, 10)
+          return `dir_${hash}`
+        }
+
         function loadConfiguredDirs() {
+          let list = []
           if (fs.existsSync(configFilePath)) {
             try {
               const saved = JSON.parse(fs.readFileSync(configFilePath, 'utf-8'))
-              if (Array.isArray(saved) && saved.length > 0) return saved
+              if (Array.isArray(saved) && saved.length > 0) list = saved
             } catch {}
           }
-          return [
-            {
+          if (list.length === 0) {
+            list = [
+              {
+                id: 'user_uploads_corpus',
+                name: 'User Ingested Sources',
+                path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads'),
+                isPreset: true,
+                isUserUploads: true,
+                enabled: true,
+              },
+              {
+                id: 'mrpl_rag_corpus',
+                name: 'MRPL_RAG_Test_Corpus',
+                path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus'),
+                isPreset: true,
+                enabled: true,
+              },
+              {
+                id: 'mrpl_chart_corpus',
+                name: 'MRPL_Chart_Stress_Corpus',
+                path: path.resolve(cwd, 'MRPL_Chart_Stress_Corpus'),
+                isPreset: true,
+                enabled: true,
+              },
+            ]
+          }
+
+          // Ensure user_uploads_corpus is first
+          const userUploadsIndex = list.findIndex(
+            (d) => d.id === 'user_uploads_corpus' || d.name === 'User Ingested Sources' || (d.path && d.path.includes('07_User_Uploads'))
+          )
+          if (userUploadsIndex > 0) {
+            const [uu] = list.splice(userUploadsIndex, 1)
+            list.unshift(uu)
+          } else if (userUploadsIndex === -1) {
+            list.unshift({
               id: 'user_uploads_corpus',
               name: 'User Ingested Sources',
               path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads'),
               isPreset: true,
               isUserUploads: true,
               enabled: true,
-            },
-            {
-              id: 'mrpl_rag_corpus',
-              name: 'MRPL_RAG_Test_Corpus',
-              path: path.resolve(cwd, 'MRPL_RAG_Test_Corpus'),
-              isPreset: true,
-              enabled: true,
-            },
-            {
-              id: 'mrpl_chart_corpus',
-              name: 'MRPL_Chart_Stress_Corpus',
-              path: path.resolve(cwd, 'MRPL_Chart_Stress_Corpus'),
-              isPreset: true,
-              enabled: true,
-            },
-          ]
+            })
+          }
+
+          // Deduplicate and ensure each directory has a unique, deterministic ID
+          const seen = new Set()
+          const deduped = []
+          for (const d of list) {
+            if (!d.path) continue
+            const norm = path.normalize(d.path).toLowerCase()
+            if (seen.has(norm)) continue
+            seen.add(norm)
+            if (!d.id || d.id.startsWith('dir_433a5c') || deduped.some((x) => x.id === d.id)) {
+              d.id = d.isPreset ? d.id : getDirectoryId(d.path)
+            }
+            deduped.push({
+              ...d,
+              path: path.normalize(d.path),
+            })
+          }
+          return deduped
         }
+
         function saveConfiguredDirs(dirs) {
           try {
             const dir = path.dirname(configFilePath)
@@ -224,9 +272,33 @@ function systemAndModelsPlugin() {
           } catch {}
         }
 
-        if (!global.__configuredSourceDirs || !global.__configuredSourceDirs.some((d) => d.id === 'user_uploads_corpus')) {
-          global.__configuredSourceDirs = loadConfiguredDirs()
-          saveConfiguredDirs(global.__configuredSourceDirs)
+        global.__configuredSourceDirs = loadConfiguredDirs()
+        saveConfiguredDirs(global.__configuredSourceDirs)
+
+        // Generic local file streaming for preview/reading across all configured sources
+        if (url === '/api/sources/file' && req.method === 'GET') {
+          try {
+            const urlObj = new URL(req.url, 'http://localhost')
+            const reqPath = urlObj.searchParams.get('path')
+            if (reqPath && fs.existsSync(reqPath) && fs.statSync(reqPath).isFile()) {
+              const ext = path.extname(reqPath).toLowerCase()
+              const mimeMap = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.pdf': 'application/pdf',
+                '.txt': 'text/plain; charset=utf-8',
+                '.md': 'text/markdown; charset=utf-8',
+                '.json': 'application/json; charset=utf-8',
+                '.csv': 'text/csv; charset=utf-8',
+                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              }
+              res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream')
+              fs.createReadStream(reqPath).pipe(res)
+              return
+            }
+          } catch {}
         }
 
         if (url?.startsWith('/MRPL_Chart_Stress_Corpus/') || url?.startsWith('/MRPL_RAG_Test_Corpus/')) {
@@ -264,7 +336,7 @@ function systemAndModelsPlugin() {
               }
               if (targetPath) {
                 const normTarget = path.normalize(targetPath).toLowerCase()
-                global.__configuredSourceDirs = (global.__configuredSourceDirs || []).filter(
+                global.__configuredSourceDirs = loadConfiguredDirs().filter(
                   (d) =>
                     d.id !== targetPath &&
                     path.normalize(d.path).toLowerCase() !== normTarget &&
@@ -293,7 +365,6 @@ function systemAndModelsPlugin() {
                         const chartRoot = path.normalize(path.resolve(cwd, 'MRPL_Chart_Stress_Corpus')).toLowerCase()
                         const uploadsRoot = path.normalize(path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads')).toLowerCase()
                         if (normalizedP === uploadsRoot) {
-                          // Clear contents of 07_User_Uploads without removing folder
                           for (const file of fs.readdirSync(p)) {
                             fs.rmSync(path.join(p, file), { recursive: true, force: true })
                           }
@@ -364,12 +435,35 @@ function systemAndModelsPlugin() {
                 })
               }
 
-              // Ensure MRPL_RAG_Test_Corpus is enabled
-              const corpusDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus')
-              const existingCorpus = (global.__configuredSourceDirs || []).find((d) => d.path === corpusDir)
-              if (existingCorpus) {
-                existingCorpus.enabled = true
+              // Check if any files were uploaded with a folder structure (from "Browse Folder…" or directory drop)
+              const topFolders = new Set()
+              for (const sf of savedFiles) {
+                const parts = sf.relPath.split(/[\\/]/)
+                if (parts.length > 1 && parts[0]) {
+                  topFolders.add(parts[0])
+                }
               }
+
+              global.__configuredSourceDirs = loadConfiguredDirs()
+              for (const folder of topFolders) {
+                const folderPath = path.resolve(targetBaseDir, folder)
+                const id = getDirectoryId(folderPath)
+                const norm = path.normalize(folderPath).toLowerCase()
+                const exists = global.__configuredSourceDirs.some(
+                  (d) => path.normalize(d.path).toLowerCase() === norm
+                )
+                if (!exists) {
+                  global.__configuredSourceDirs.push({
+                    id,
+                    name: folder,
+                    path: folderPath,
+                    isPreset: false,
+                    isUploadedFolder: true,
+                    enabled: true,
+                  })
+                }
+              }
+              saveConfiguredDirs(global.__configuredSourceDirs)
 
               // Trigger chunking and embedding pipeline in FastAPI backend
               let totalChunks = 0
@@ -399,6 +493,7 @@ function systemAndModelsPlugin() {
                   saved: savedFiles,
                   total_chunks: totalChunks,
                   documents,
+                  directories: global.__configuredSourceDirs,
                   message: `Successfully ingested ${savedFiles.length} file(s): ${totalChunks} chunks created, embedded (1024-d), and indexed into FAISS.`,
                 })
               )
@@ -424,15 +519,11 @@ function systemAndModelsPlugin() {
                 res.end(JSON.stringify({ error: 'Missing path parameter' }))
                 return
               }
-              const resolved = path.isAbsolute(dirPath) ? dirPath : path.resolve(cwd, dirPath)
+              const resolved = path.isAbsolute(dirPath) ? path.normalize(dirPath) : path.resolve(cwd, dirPath)
               if (!fs.existsSync(resolved)) {
-                try {
-                  fs.mkdirSync(resolved, { recursive: true })
-                } catch {
-                  res.statusCode = 404
-                  res.end(JSON.stringify({ error: `Path does not exist on disk: ${resolved}` }))
-                  return
-                }
+                res.statusCode = 404
+                res.end(JSON.stringify({ error: `Path does not exist on disk: ${resolved}` }))
+                return
               }
               const stat = fs.statSync(resolved)
               let totalChunks = 0
@@ -463,16 +554,19 @@ function systemAndModelsPlugin() {
                   console.warn('[Ingest error]', err.message)
                 }
 
+                global.__configuredSourceDirs = loadConfiguredDirs()
                 saveConfiguredDirs(global.__configuredSourceDirs)
 
+                const fileId = `file_${crypto.createHash('sha256').update(path.normalize(destFile).toLowerCase()).digest('hex').slice(0, 10)}`
                 res.setHeader('Content-Type', 'application/json')
                 res.end(
                   JSON.stringify({
                     success: true,
                     total_chunks: totalChunks,
                     documents,
+                    directories: global.__configuredSourceDirs,
                     added: {
-                      id: `file_${Buffer.from(destFile).toString('hex').slice(0, 10)}`,
+                      id: fileId,
                       name: fileName,
                       path: destFile,
                       isFile: true,
@@ -483,11 +577,17 @@ function systemAndModelsPlugin() {
                 return
               }
 
+              // Handle directory path
               const dirName = path.basename(resolved) || 'Custom_Corpus'
-              const id = `dir_${Buffer.from(resolved).toString('hex').slice(0, 10)}`
-              const existingIdx = global.__configuredSourceDirs.findIndex((d) => d.path === resolved)
+              const id = getDirectoryId(resolved)
+              const normResolved = path.normalize(resolved).toLowerCase()
+              global.__configuredSourceDirs = loadConfiguredDirs()
+              const existingIdx = global.__configuredSourceDirs.findIndex(
+                (d) => path.normalize(d.path).toLowerCase() === normResolved
+              )
               if (existingIdx >= 0) {
                 global.__configuredSourceDirs[existingIdx].enabled = true
+                global.__configuredSourceDirs[existingIdx].id = id
               } else {
                 global.__configuredSourceDirs.push({
                   id,
@@ -516,13 +616,16 @@ function systemAndModelsPlugin() {
               }
 
               res.setHeader('Content-Type', 'application/json')
-              res.end(JSON.stringify({
-                success: true,
-                total_chunks: totalChunks,
-                documents,
-                added: { id, name: dirName, path: resolved },
-                message: `Directory "${dirName}" registered: ${totalChunks} chunks created, embedded, and indexed into FAISS.`,
-              }))
+              res.end(
+                JSON.stringify({
+                  success: true,
+                  total_chunks: totalChunks,
+                  documents,
+                  directories: global.__configuredSourceDirs,
+                  added: { id, name: dirName, path: resolved },
+                  message: `Directory "${dirName}" registered: ${totalChunks} chunks created, embedded, and indexed into FAISS.`,
+                })
+              )
               return
             } catch (err) {
               res.statusCode = 500
@@ -537,6 +640,12 @@ function systemAndModelsPlugin() {
           try {
             const allItems = []
             const tree = []
+            global.__configuredSourceDirs = loadConfiguredDirs()
+
+            // List of custom subpaths to avoid double-listing in parent
+            const customSubpaths = global.__configuredSourceDirs
+              .filter((d) => !d.isPreset)
+              .map((d) => path.normalize(d.path).toLowerCase())
 
             for (const dirConfig of global.__configuredSourceDirs) {
               if (!dirConfig.enabled || !fs.existsSync(dirConfig.path)) continue
@@ -564,9 +673,13 @@ function systemAndModelsPlugin() {
                 for (const entry of entries) {
                   const entryFullPath = path.join(currentDir, entry.name)
                   const entryRelPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name
+                  const normEntryFullPath = path.normalize(entryFullPath).toLowerCase()
 
                   if (entry.isDirectory()) {
                     if (dirConfig.id === 'mrpl_rag_corpus' && entry.name === '07_User_Uploads') {
+                      continue
+                    }
+                    if (dirConfig.isPreset && customSubpaths.includes(normEntryFullPath)) {
                       continue
                     }
                     const subDirNode = {
@@ -654,7 +767,31 @@ function systemAndModelsPlugin() {
                       border = 'rgba(16, 185, 129, 0.28)'
                     }
 
-                    if (category === 'data') {
+                    if (ext === 'md' || ext === 'markdown') {
+                      category = 'documents'
+                      badge = 'Markdown Document'
+                      color = '#CBD5E1'
+                      bg = 'rgba(203, 213, 225, 0.12)'
+                      border = 'rgba(203, 213, 225, 0.28)'
+                    } else if (ext === 'json') {
+                      category = 'data'
+                      badge = 'JSON Spec / Data'
+                      color = '#FB923C'
+                      bg = 'rgba(251, 146, 60, 0.12)'
+                      border = 'rgba(251, 146, 60, 0.28)'
+                    } else if (ext === 'yaml' || ext === 'yml') {
+                      category = 'data'
+                      badge = 'Config Spec'
+                      color = '#F59E0B'
+                      bg = 'rgba(245, 158, 11, 0.12)'
+                      border = 'rgba(245, 158, 11, 0.28)'
+                    } else if (['py', 'sql', 'sh', 'ps1', 'bat'].includes(ext)) {
+                      category = 'documents'
+                      badge = 'Script / Code'
+                      color = '#60A5FA'
+                      bg = 'rgba(96, 165, 250, 0.12)'
+                      border = 'rgba(96, 165, 250, 0.28)'
+                    } else if (category === 'data') {
                       color = '#059669'
                       bg = 'rgba(5, 150, 105, 0.12)'
                       border = 'rgba(5, 150, 105, 0.28)'

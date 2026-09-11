@@ -302,7 +302,20 @@ export function SourceFileTree({
           </div>
 
           {/* Children container */}
-          {isExpanded && <div className="flex flex-col">{children}</div>}
+          {isExpanded && (
+            <div className="flex flex-col">
+              {children.length > 0 ? (
+                children
+              ) : (
+                <div
+                  className="text-[10px] italic py-1 opacity-70"
+                  style={{ paddingLeft: `${depth * 12 + 26}px`, color: 'var(--color-text-muted)' }}
+                >
+                  (No matching documents in folder)
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )
     }

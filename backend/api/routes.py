@@ -353,20 +353,57 @@ class UploadSourcesRequest(BaseModel):
 @router.post("/sources/upload")
 def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
     """Accept uploaded files, write to disk, and chunk & embed them into FAISS."""
+    import hashlib
+    import json as _json
+
     state = get_state()
     target_base_dir = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads"
     target_base_dir.mkdir(parents=True, exist_ok=True)
 
     saved_files = []
+    top_folders: set[str] = set()
     for f in body.files:
-        clean_name = Path(f.relPath or f.name).name
-        dest = target_base_dir / clean_name
+        # Preserve relative path (subdir/filename) — strip leading slashes/dots only
+        clean_rel = (f.relPath or f.name).replace("\\", "/").lstrip("./")
+        dest = target_base_dir / clean_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             raw_bytes = base64.b64decode(f.contentBase64)
             dest.write_bytes(raw_bytes)
             saved_files.append(dest)
+            parts = clean_rel.split("/")
+            if len(parts) > 1 and parts[0]:
+                top_folders.add(parts[0])
         except Exception:
             continue
+
+    # Register any top-level uploaded folder as a named corpus source
+    if top_folders:
+        config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        dirs: list[dict] = []
+        if config_file.exists():
+            try:
+                dirs = _json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        for folder in top_folders:
+            folder_path = target_base_dir / folder
+            norm_lower = str(folder_path.resolve()).lower()
+            folder_hash = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+            folder_id = f"dir_{folder_hash}"
+            if not any(str(Path(d.get("path", "")).resolve()).lower() == norm_lower for d in dirs):
+                dirs.append({
+                    "id": folder_id,
+                    "name": folder,
+                    "path": str(folder_path.resolve()),
+                    "isPreset": False,
+                    "isUploadedFolder": True,
+                    "enabled": True,
+                })
+        try:
+            config_file.write_text(_json.dumps(dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     total_chunks = 0
     all_details = []
@@ -406,9 +443,143 @@ def ingest_source_endpoint(body: IngestPathRequest) -> dict:
     }
 
 
+@router.get("/corpus")
+def get_corpus() -> dict:
+    """Native corpus endpoint matching configured sources and directory tree."""
+    import json
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if not dirs:
+        dirs = [
+            {
+                "id": "user_uploads_corpus",
+                "name": "User Ingested Sources",
+                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus" / "07_User_Uploads"),
+                "isPreset": True,
+                "isUserUploads": True,
+                "enabled": True,
+            },
+            {
+                "id": "mrpl_rag_corpus",
+                "name": "MRPL_RAG_Test_Corpus",
+                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus"),
+                "isPreset": True,
+                "enabled": True,
+            },
+            {
+                "id": "mrpl_chart_corpus",
+                "name": "MRPL_Chart_Stress_Corpus",
+                "path": str(Path.cwd() / "MRPL_Chart_Stress_Corpus"),
+                "isPreset": True,
+                "enabled": True,
+            },
+        ]
+
+    tree = []
+    all_items = []
+    custom_subpaths = [
+        str(Path(d.get("path", "")).resolve()).lower()
+        for d in dirs if not d.get("isPreset", False)
+    ]
+
+    for dir_cfg in dirs:
+        p = Path(dir_cfg.get("path", ""))
+        if not dir_cfg.get("enabled", True) or not p.exists():
+            continue
+
+        dir_node = {
+            "id": dir_cfg.get("id"),
+            "name": dir_cfg.get("name", p.name),
+            "fullPath": str(p),
+            "type": "directory",
+            "isRoot": True,
+            "isPreset": dir_cfg.get("isPreset", False),
+            "children": [],
+            "fileCount": 0,
+            "totalSizeBytes": 0,
+        }
+
+        def _scan(current_dir: Path, rel_prefix: str, parent: dict):
+            try:
+                entries = sorted(current_dir.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            except Exception:
+                return
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                entry_rel = f"{rel_prefix}/{entry.name}" if rel_prefix else entry.name
+                clean_id_rel = entry_rel.replace("/", "_").replace("\\", "_")
+                if entry.is_dir():
+                    if dir_cfg.get("id") == "mrpl_rag_corpus" and entry.name == "07_User_Uploads":
+                        continue
+                    if dir_cfg.get("isPreset", False) and str(entry.resolve()).lower() in custom_subpaths:
+                        continue
+                    sub = {
+                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "name": entry.name,
+                        "fullPath": str(entry),
+                        "relPath": entry_rel,
+                        "type": "directory",
+                        "isRoot": False,
+                        "children": [],
+                        "fileCount": 0,
+                        "totalSizeBytes": 0,
+                    }
+                    _scan(entry, entry_rel, sub)
+                    parent["children"].append(sub)
+                    parent["fileCount"] += sub["fileCount"]
+                    parent["totalSizeBytes"] += sub["totalSizeBytes"]
+                elif entry.is_file():
+                    stat = entry.stat()
+                    ext = entry.suffix.lstrip(".").lower()
+                    file_item = {
+                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "name": entry.name,
+                        "type": ext.upper(),
+                        "extension": ext,
+                        "size": f"{round(stat.st_size / 1024, 1)} KB",
+                        "sizeBytes": stat.st_size,
+                        "folder": rel_prefix or dir_cfg.get("name"),
+                        "relPath": entry_rel,
+                        "fullPath": str(entry),
+                        "corpus": dir_cfg.get("name"),
+                        "enabled": True,
+                    }
+                    parent["children"].append({**file_item, "type": "file"})
+                    parent["fileCount"] += 1
+                    parent["totalSizeBytes"] += stat.st_size
+                    all_items.append(file_item)
+
+        _scan(p, "", dir_node)
+        dir_node["sizeDisplay"] = (
+            f"{round(dir_node['totalSizeBytes'] / (1024 * 1024), 2)} MB"
+            if dir_node["totalSizeBytes"] > 1e6
+            else f"{round(dir_node['totalSizeBytes'] / 1024)} KB"
+        )
+        tree.append(dir_node)
+
+    total_bytes = sum(i["sizeBytes"] for i in all_items)
+    return {
+        "directories": dirs,
+        "tree": tree,
+        "sources": all_items,
+        "count": len(all_items),
+        "corpusCount": len(all_items),
+        "totalSizeBytes": total_bytes,
+        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 2)} MB",
+    }
+
+
 @router.post("/sources")
 def add_source(body: AddSourceRequest) -> dict:
     """Watch a folder or file, chunking and embedding it immediately into the knowledge base."""
+    import hashlib
+    import json
     state = get_state()
     target = Path(body.path).resolve()
     if not target.exists():
@@ -431,20 +602,67 @@ def add_source(body: AddSourceRequest) -> dict:
     except Exception as exc:
         raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
 
+    # Synchronize with configured_sources.json
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    norm_path = str(target.resolve())
+    norm_lower = norm_path.lower()
+    hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+
+    found = False
+    for d in dirs:
+        if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+            d["enabled"] = True
+            found = True
+            break
+    if not found and target.is_dir():
+        dirs.append({
+            "id": dir_id,
+            "name": target.name or "Custom_Corpus",
+            "path": norm_path,
+            "isPreset": False,
+            "enabled": True,
+        })
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
     return {
         "success": True,
         "total_chunks": total_chunks,
         "documents": details,
+        "directories": dirs,
         "source": source.model_dump() if source else {"path": str(target)},
         "message": f"Source '{target.name}' registered: {total_chunks} chunks created, embedded (1024-d), and indexed in FAISS.",
     }
 
 
-
 @router.delete("/sources")
 def remove_source(path: str = Query(...)) -> dict:
     """Remove a source file or directory from active knowledge base and vector store."""
+    import json
     state = get_state()
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+            norm_target = str(Path(path).resolve()).lower()
+            dirs = [
+                d for d in dirs
+                if d.get("id") != path
+                and str(Path(d.get("path", "")).resolve()).lower() != norm_target
+                and d.get("name", "").lower() != norm_target
+            ]
+            config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
     return state.delete_source(path)
 
 

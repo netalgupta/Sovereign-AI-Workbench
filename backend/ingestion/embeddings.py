@@ -17,7 +17,6 @@ from backend.ingestion.model_cache import force_offline_mode, require_cached
 force_offline_mode()
 
 import numpy as np  # noqa: E402 — see force_offline_mode() ordering note above
-from sentence_transformers import SentenceTransformer  # noqa: E402
 
 MODEL_ID = "BAAI/bge-large-en-v1.5"
 
@@ -55,12 +54,13 @@ def _deterministic_embed(texts: list[str], dim: int = 1024) -> np.ndarray:
     return vecs
 
 
-def _get_model() -> SentenceTransformer | None:
+def _get_model():
     global _model
     if _model is None:
         try:
             cache_dir = require_cached("embeddings", MODEL_ID)
             if cache_dir.exists() and any(cache_dir.iterdir()):
+                from sentence_transformers import SentenceTransformer
                 _model = SentenceTransformer(str(cache_dir))
         except Exception:
             _model = None

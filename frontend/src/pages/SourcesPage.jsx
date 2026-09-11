@@ -52,25 +52,51 @@ export function SourcesPage() {
   const [imageFilter, setImageFilter] = useState('all') // 'all' | 'scans' | 'stress' | 'fabricated'
 
   // Fetch corpus and pipeline data on mount
-  const fetchCorpus = useCallback(async () => {
+  const fetchCorpus = useCallback(async (targetToSelect = null) => {
     try {
       const res = await fetch('/api/corpus')
       if (res.ok) {
         const data = await res.json()
         setCorpusData(data)
-        setSelectedFile((prev) => prev || (data.sources?.length > 0 ? data.sources[0] : null))
+        if (targetToSelect) {
+          const targetName = (targetToSelect.name || targetToSelect.path || '').toLowerCase()
+          const matched = (data.sources || []).find(
+            (s) =>
+              s.id === targetToSelect.id ||
+              s.fullPath === targetToSelect.path ||
+              s.fullPath?.toLowerCase() === targetToSelect.path?.toLowerCase() ||
+              s.name?.toLowerCase() === targetName ||
+              s.corpus?.toLowerCase() === targetName
+          )
+          if (matched) {
+            setSelectedFile(matched)
+          } else if (data.sources?.length > 0) {
+            setSelectedFile(data.sources[0])
+          }
+        } else {
+          setSelectedFile((prev) => prev || (data.sources?.length > 0 ? data.sources[0] : null))
+        }
       }
     } catch {}
   }, [])
 
-  const refreshAll = async () => {
+  const refreshAll = async (addedResult = null) => {
     setIsRefreshing(true)
     try {
-      await fetch('/api/sources/scan', { method: 'POST' })
-      await fetchCorpus()
-      const [g, c, i] = await Promise.all([api.graph(), api.chunks(), api.images()])
-      setGraph(g)
-      setChunks(c)
+      await fetch('/api/sources/scan', { method: 'POST' }).catch(() => null)
+      const target = addedResult?.added || (addedResult?.saved?.length > 0 ? addedResult.saved[0] : null)
+      if (target) {
+        setFileFilterCategory('all')
+        setFileSearchQuery('')
+      }
+      await fetchCorpus(target)
+      const [g, c, i] = await Promise.all([
+        api.graph().catch(() => null),
+        api.chunks().catch(() => null),
+        api.images().catch(() => ({ images: [] })),
+      ])
+      if (g) setGraph(g)
+      if (c) setChunks(c)
       let imgList = i?.images || []
       if (imgList.length === 0) {
         try {
@@ -82,6 +108,7 @@ export function SourcesPage() {
         } catch {}
       }
       setImages(imgList)
+      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addedResult }))
       showToast('Sources & pipeline index synchronized with on-disk state', 'success')
     } catch {
       showToast('Rescan completed', 'info')
@@ -89,6 +116,14 @@ export function SourcesPage() {
       setIsRefreshing(false)
     }
   }
+
+  useEffect(() => {
+    const handleCorpusUpdated = (e) => {
+      fetchCorpus(e?.detail?.added || (e?.detail?.saved?.length > 0 ? e.detail.saved[0] : null))
+    }
+    window.addEventListener('corpus-updated', handleCorpusUpdated)
+    return () => window.removeEventListener('corpus-updated', handleCorpusUpdated)
+  }, [fetchCorpus])
 
   const handleDeleteSource = async (source) => {
     if (!source) return

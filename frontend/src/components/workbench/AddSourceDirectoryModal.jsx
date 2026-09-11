@@ -77,7 +77,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         data.message || `Successfully ingested ${data.count || filesToUpload.length} source document(s)${chunkNotice}`,
         'success'
       )
-      if (onDirectoriesUpdated) onDirectoriesUpdated()
+      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
       onClose()
     } catch (err) {
       showToast(err.message || 'Failed to upload source documents', 'error')
@@ -111,7 +111,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
 
       showToast(data.message || `Source registered: ${pathToAdd}`, 'success')
       setCustomPath('')
-      if (onDirectoriesUpdated) onDirectoriesUpdated()
+      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
       onClose()
     } catch (err) {
       showToast(err.message || 'Failed to register source', 'error')
@@ -138,10 +138,65 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     e.target.value = ''
   }
 
-  // Handle drag & drop
+  // Handle drag & drop with recursive folder traversal
   const handleDrop = async (e) => {
     e.preventDefault()
     setDragOver(false)
+    if (!e.dataTransfer) return
+
+    const items = e.dataTransfer.items
+    if (items && items.length > 0) {
+      const filesToProcess = []
+
+      const traverseEntry = async (item, pathPrefix = '') => {
+        return new Promise((resolve) => {
+          if (item.isFile) {
+            item.file((file) => {
+              Object.defineProperty(file, 'webkitRelativePath', {
+                value: pathPrefix ? `${pathPrefix}/${file.name}` : file.name,
+                writable: true,
+              })
+              filesToProcess.push(file)
+              resolve()
+            })
+          } else if (item.isDirectory) {
+            const dirReader = item.createReader()
+            const readEntries = () => {
+              dirReader.readEntries(async (entries) => {
+                if (entries.length === 0) {
+                  resolve()
+                } else {
+                  for (const entry of entries) {
+                    await traverseEntry(entry, pathPrefix ? `${pathPrefix}/${item.name}` : item.name)
+                  }
+                  readEntries()
+                }
+              })
+            }
+            readEntries()
+          } else {
+            resolve()
+          }
+        })
+      }
+
+      const entries = []
+      for (let i = 0; i < items.length; i++) {
+        const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null
+        if (entry) entries.push(entry)
+      }
+
+      if (entries.length > 0) {
+        for (const entry of entries) {
+          await traverseEntry(entry)
+        }
+        if (filesToProcess.length > 0) {
+          await uploadFiles(filesToProcess)
+          return
+        }
+      }
+    }
+
     const files = e.dataTransfer.files
     if (files && files.length > 0) {
       await uploadFiles(files)
@@ -193,7 +248,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           ref={fileInputRef}
           onChange={handleFilesPicked}
           multiple
-          accept=".pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.txt,.json,.csv"
+          accept=".pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.txt,.json,.csv,.md,.markdown,.yaml,.yml,.log,.py,.sql"
           className="hidden"
         />
 
