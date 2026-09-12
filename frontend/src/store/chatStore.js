@@ -156,14 +156,45 @@ export const useChatStore = create((set, get) => ({
    * Called by the typewriter hook every tick to advance displayedContent.
    * This is the only place displayedContent is mutated.
    *
+   * ACCEPTS EITHER A STRING OR AN UPDATER FUNCTION, and the function form
+   * is not optional politeness -- it is the entire reason assistant
+   * replies rendered as an empty bubble.
+   *
+   * useTypewriter's tick calls this React-style:
+   *
+   *     setDisplayedContent(messageId, (prev) => { ...; return next })
+   *
+   * while this reducer assigned the second argument straight through:
+   *
+   *     displayedContent: newDisplayed
+   *
+   * So displayedContent was set to the FUNCTION OBJECT. React renders
+   * nothing for a function child, so the bubble stayed blank -- and
+   * because the updater never ran, the revealedIndex inside it never
+   * advanced, so the interval never reached its own stop condition and
+   * the message sat on "streaming..." forever.
+   *
+   * The backend was returning 200 OK with a correct grounded answer the
+   * whole time. Every reply this app has ever produced was discarded at
+   * this line.
+   *
    * @param {string} id
-   * @param {string} newDisplayed — the updated displayed string
+   * @param {string | ((prev: string) => string)} newDisplayed
    */
   setDisplayedContent: (id, newDisplayed) => {
     set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === id ? { ...m, displayedContent: newDisplayed } : m
-      ),
+      messages: state.messages.map((m) => {
+        if (m.id !== id) return m
+        const next =
+          typeof newDisplayed === 'function'
+            ? newDisplayed(m.displayedContent ?? '')
+            : newDisplayed
+        // Guard the invariant rather than trusting callers: whatever an
+        // updater returns, this field must end up a string, because the
+        // failure mode for anything else is a silently blank message
+        // rather than an error anyone would notice.
+        return { ...m, displayedContent: typeof next === 'string' ? next : String(next ?? '') }
+      }),
     }))
   },
 

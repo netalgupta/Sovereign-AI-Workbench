@@ -210,7 +210,9 @@ export function ChatPane() {
   const [copiedCode, setCopiedCode] = useState(false)
 
   // Model selector state (Cosmetic selector pointing to real models.yaml entries)
-  const [selectedModel, setSelectedModel] = useState('Qwen 2.5-14B (Reasoning)')
+  // Kept for the trigger label only; routing is per-task, so there is no
+  // "selected" model to send anywhere.
+  const [selectedModel, setSelectedModel] = useState('Model registry')
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
 
   // ── Word Rotation for Completed Thinking Blocks ─────────────────────────
@@ -308,12 +310,45 @@ export function ChatPane() {
     }
   }, [])
 
-  const MODELS = [
-    'Qwen 2.5-14B (Reasoning)',
-    'Qwen 2.5-Coder (7B Local)',
-    'Qwen 2.5-VL (Vision & Diagrams)',
-    'Phi-3.5 Mini (Fast Router)',
-  ]
+  // The registry as it ACTUALLY IS, fetched from /api/models.
+  //
+  // This was four hardcoded display strings. Three problems:
+  //
+  //   1. They were decorative. Selecting one called showToast("Switched
+  //      model profile to: ...") and changed nothing -- sendMessage()
+  //      takes no model argument, because routing is per-task
+  //      (AGENTS_SPEC §3), not per-chat. The control asserted a
+  //      capability the system does not have and never acted on.
+  //
+  //   2. They listed models that are not pulled. "Qwen 2.5-Coder (7B
+  //      Local)" is not on this machine, and "Phi-3.5 Mini" pointed at
+  //      a models.yaml entry whose tag did not exist on Ollama at all.
+  //      The picker was the last place anyone would look for that, and
+  //      it displayed both as available.
+  //
+  //   3. Hardcoding model names in the UI is what CLAUDE.md constraint
+  //      #2 exists to prevent: only models.yaml names a model. Adding a
+  //      model to the registry should not require editing a component.
+  //
+  // It is now a registry VIEW, not a switcher: it shows which models the
+  // task router can reach and which are missing, with the pull command.
+  const [models, setModels] = useState([])
+  const [modelsError, setModelsError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/models')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => {
+        if (cancelled) return
+        setModels(d.models || [])
+        setModelsError(d.ollama_reachable ? null : d.ollama_error || 'Ollama unreachable')
+      })
+      .catch((e) => !cancelled && setModelsError(e.message))
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const CODE_SNIPPET = `if feed_rate > 1.10 * design_capacity:
     alert("High risk: exceeds design threshold")
@@ -1180,22 +1215,65 @@ export function ChatPane() {
                 >
                   Active Model Registry
                 </div>
-                {MODELS.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => {
-                      setSelectedModel(m)
-                      setModelDropdownOpen(false)
-                      showToast(`Switched model profile to: ${m}`, 'info')
-                    }}
-                    className="w-full px-3 py-1.5 text-left text-xs flex items-center justify-between transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
-                    style={{ color: selectedModel === m ? 'var(--color-accent)' : 'var(--color-text)' }}
+                {modelsError && (
+                  <div
+                    className="px-3 py-1.5 text-[10px] leading-snug"
+                    style={{ color: 'var(--color-text-muted)' }}
                   >
-                    <span>{m}</span>
-                    {selectedModel === m && <Check size={12} strokeWidth={2.5} />}
-                  </button>
-                ))}
+                    Could not read the registry: {modelsError}
+                  </div>
+                )}
+                {!modelsError && models.length === 0 && (
+                  <div
+                    className="px-3 py-1.5 text-[10px]"
+                    style={{ color: 'var(--color-text-muted)' }}
+                  >
+                    Loading registry…
+                  </div>
+                )}
+                {models.map((m) => {
+                  const ready = m.status === 'available'
+                  return (
+                    <div
+                      key={m.id}
+                      className="w-full px-3 py-1.5 text-xs flex items-center justify-between gap-2"
+                      title={m.detail || `${m.model} — ${m.task_tags.join(', ')}`}
+                    >
+                      <div className="flex flex-col min-w-0">
+                        <span
+                          className="truncate"
+                          style={{ color: ready ? 'var(--color-text)' : 'var(--color-text-faint)' }}
+                        >
+                          {m.id}
+                        </span>
+                        <span
+                          className="truncate text-[10px]"
+                          style={{ color: 'var(--color-text-muted)' }}
+                        >
+                          {m.model}
+                          {m.size_display ? ` · ${m.size_display}` : ''}
+                        </span>
+                      </div>
+                      {ready ? (
+                        <Check size={12} strokeWidth={2.5} style={{ color: 'var(--color-accent)' }} />
+                      ) : (
+                        <span
+                          className="text-[9px] uppercase tracking-wide whitespace-nowrap"
+                          style={{ color: 'var(--color-text-faint)' }}
+                        >
+                          not pulled
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+                <div
+                  className="px-3 pt-1.5 pb-1 mt-1 text-[9px] leading-snug"
+                  style={{ color: 'var(--color-text-faint)', borderTop: '1px solid var(--color-border)' }}
+                >
+                  Routing is per task, not per chat — the orchestrator picks
+                  the model for each step.
+                </div>
               </div>
             )}
           </div>

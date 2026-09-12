@@ -57,4 +57,5 @@ def test_resolve_model_name_uses_this_repos_real_models_yaml_by_default():
     # resolution against this repo's real /models/models.yaml, not a
     # test fixture. If this breaks, the real registry file moved or
     # changed shape.
-    assert resolve_model_name("fast-router") == "phi-3.5-mini"
+    # The REAL registry (the fixture-based tests above pin the fixture).
+    assert resolve_model_name("fast-router") == "phi3.5"

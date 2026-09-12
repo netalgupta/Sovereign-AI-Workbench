@@ -21,5 +21,14 @@
 
 - id: fast-router
   backend: ollama
-  model: phi-3.5-mini
+  # Was "phi-3.5-mini", which DOES NOT EXIST on Ollama:
+  #   ollama pull phi-3.5-mini
+  #   Error: pull model manifest: file does not exist
+  # So fast-router had never worked. Both the router (CARD 03) and the
+  # self-verification agent (AGENTS_SPEC §5) resolve to this id, and both
+  # 404'd on every call -- which is why verification reported "could not
+  # run" rather than a verdict. The real tag is phi3.5 (2.2 GB, 3.8B).
+  # Same bug class as qwen2-vl:7b -> qwen2.5vl:7b, found earlier: a
+  # plausible-looking name that was never actually pulled.
+  model: phi3.5
   task_tags: [classification, routing]

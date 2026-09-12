@@ -1473,6 +1473,19 @@ def chat(body: ChatRequestBody) -> dict:
         "session_id": state.session_id,
         "awaiting_human_approval": state.awaiting_human_approval,
         "approval_action": approval_action,
+        # The self-verification verdict (AGENTS_SPEC §5) was computed and
+        # then not returned, so the UI had no way to distinguish a
+        # confirmed answer from one the verifier objected to. Shipping
+        # the verdict is the entire point of having a verifier.
+        "verification": (
+            {
+                "passed": state.verification_result.passed,
+                "reason": state.verification_result.reason,
+                "checked_claims": state.verification_result.checked_claims,
+            }
+            if state.verification_result
+            else None
+        ),
     }
 
 

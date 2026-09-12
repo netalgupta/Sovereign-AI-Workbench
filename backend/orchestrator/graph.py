@@ -533,8 +533,36 @@ def verify_node(state: AgentState) -> dict[str, Any]:
         }
 
     update: dict[str, Any] = {"verification_result": verified.verification_result}
+
     if outcome is VerificationOutcome.UNCONFIRMED:
         update["draft_output"] = state.draft_output + "\n\n" + unconfirmed_warning(verified)
+        return update
+
+    if outcome is VerificationOutcome.REPLAN:
+        # The verifier DISAGREED with the answer.
+        #
+        # §5 treats REPLAN as non-terminal, but this graph's only edge out
+        # of verify is END -- so a disagreement used to change nothing at
+        # all and reach the user invisibly. The verifier ran, objected,
+        # and was discarded, which is the same rubber stamp as the old
+        # hardcoded satisfied:true wearing a different costume.
+        #
+        # Until a replan edge exists, the honest handling is to show the
+        # objection rather than bury it. The reader can weigh it: the
+        # verifier is a 3.8B model and is sometimes wrong about domain
+        # specifics (it has, for instance, objected to "g/10min" as the
+        # MFI unit, which is correct notation). An objection shown is
+        # something a person can overrule; an objection dropped is a
+        # disagreement the system resolved silently in its own favour.
+        reason = (verified.verification_result.reason or "").strip()
+        update["draft_output"] = (
+            state.draft_output
+            + "\n\n> **Self-check flagged this answer.** "
+            + (reason or "The verifier did not confirm this output.")
+            + "\n>\n> The answer above is shown unchanged. Treat it as "
+            + "unconfirmed until checked against the cited source."
+        )
+
     return update
 
 
