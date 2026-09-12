@@ -411,34 +411,60 @@ def planner_node(state: AgentState) -> dict[str, Any]:
     except Exception as _plan_exc:  # noqa: BLE001
         T.warn(f"planner failed ({type(_plan_exc).__name__}); using the "
                f"deterministic fallback plan")
-        # Fallback to standard deterministic multi-step plan if offline/Ollama unavailable
-        try:
-            task_type = classify_task(state.original_request)
-        except Exception:
-            task_type = "reasoning"
+
+        # THE FALLBACK USED TO COST MORE THAN THE PLANNER IT REPLACES.
+        #
+        # It called classify_task() here -- an LLM call to fast-router,
+        # WITH A RETRY, so up to two. Measured on "Wassup buddy": the
+        # planner failed after 9.69s, and the turn still took 47.14s.
+        # The missing ~37 seconds were this call, because reasoning-model
+        # was resident and fast-router had to be swapped in on an 8 GB
+        # card.
+        #
+        # Its entire contribution was choosing between "math" and
+        # "reasoning" as the label on step-2. A model call, a model
+        # swap, and 37 seconds, to pick a string. The local arithmetic
+        # matcher answers the same question for free and is the same
+        # check the math branch itself uses to decide whether there is
+        # anything to compute.
+        has_arithmetic = extract_arithmetic_expression(state.original_request) is not None
+
+        # AND THE STEPS IT INVENTED WERE NOT REAL.
+        #
+        # step-2 "Verify engineering calculations and safety envelopes"
+        # and step-3 "Synthesize verified findings into grounded
+        # briefing" both dispatch to the `reasoning` agent, whose branch
+        # in dispatch_node is `step.status = "done"` -- a no-op. So the
+        # trace printed
+        #
+        #     step-2  reasoning  done  Verify engineering calculations...
+        #
+        # for a message where nothing whatsoever was verified. That is
+        # the same defect as the fabricated approval payload: a record
+        # of work that did not happen, in the log an operator would use
+        # to understand what the system did. The synthesis is done by
+        # synthesize_node, which is not a plan step at all.
+        #
+        # What is left is what actually runs.
         fallback_steps = [
             PlanStep(
-                step_id="step-1",
-                description="Retrieve operational parameters and technical specifications",
+                step_id="retrieve",
+                description=f"Retrieve passages for: {state.original_request.strip()[:110]}",
                 assigned_agent="retrieval",
                 status="pending",
                 depends_on=[],
-            ),
-            PlanStep(
-                step_id="step-2",
-                description="Verify engineering calculations and safety envelopes",
-                assigned_agent="math" if task_type == "math" else "reasoning",
-                status="pending",
-                depends_on=["step-1"],
-            ),
-            PlanStep(
-                step_id="step-3",
-                description="Synthesize verified findings into grounded briefing",
-                assigned_agent="reasoning",
-                status="pending",
-                depends_on=["step-2"],
-            ),
+            )
         ]
+        if has_arithmetic:
+            fallback_steps.append(
+                PlanStep(
+                    step_id="calculate",
+                    description="Evaluate the arithmetic in the request with the math tool",
+                    assigned_agent="math",
+                    status="pending",
+                    depends_on=[],
+                )
+            )
         return {"plan": fallback_steps, "current_step_index": 0}
 
 

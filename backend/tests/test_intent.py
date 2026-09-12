@@ -253,3 +253,137 @@ def test_an_instant_path_does_not_call_the_planner():
         planner.plan_request = original
 
     assert calls == []
+
+
+# ---------------------------------------------------------------------
+# "Wassup buddy" -- 47.14s, because the greeting list had a hole in it.
+# ---------------------------------------------------------------------
+
+
+def test_greetings_are_matched_by_shape_not_by_a_word_list():
+    """Every hole in a list of greetings is a 47-second turn.
+
+    "Wassup buddy" was not in the enumerated openers, so it took the
+    full pipeline: a failed LLM planner (9.69s), a fallback plan that
+    made ANOTHER model call, a corpus search, and a refusal.
+
+    The pattern now describes the structure -- an opener, then only
+    forms of address and pleasantries, then nothing -- so the list of
+    things it covers is not the list of things someone thought of.
+    """
+    for greeting in (
+        "Wassup buddy", "wassup", "whatsup", "what's up", "sup", "yo",
+        "yo yo", "heya", "hiya", "howdy", "hey there", "hello hello",
+        "hey team", "hi all", "good morning", "morning!", "namaste",
+        "namaskar", "kem cho", "hi, how are you?", "hey buddy how's it going",
+        "hi again", "hey man", "hey guys", "hiii", "heyyy",
+        "yo dude what's new", "good day sir", "hello, nice to meet you",
+    ):
+        assert classify(greeting).kind == "greeting", greeting
+
+
+def test_a_loose_greeting_pattern_must_not_swallow_a_real_request():
+    """The guard that pays for the looseness above.
+
+    Each of these OPENS with a greeting token and then carries content.
+    Matching any of them would answer a plant question from a constant,
+    which is the expensive way to be wrong.
+    """
+    for request in (
+        "morning shift handover report",
+        "evening summary of the maintenance log",
+        "hey can you check the HCU-2 limits",
+        "yo what is the MFI for H030SG",
+        "hi, what is the reactor temperature limit?",
+        "afternoon inspection schedule",
+        "good morning, please draft the incident report",
+        "sup with the catalyst changeout",
+        "hello world program in python",
+        "hey, summarise the Hassan incident",
+    ):
+        assert classify(request).kind != "greeting", request
+
+
+def test_the_fallback_plan_does_not_call_a_model():
+    """The fallback cost more than the planner it replaces.
+
+    On "Wassup buddy" the planner failed after 9.69s and the turn still
+    took 47.14s. The missing ~37 seconds were classify_task() -- an LLM
+    call, with a retry, forcing a model swap on an 8 GB card -- whose
+    entire contribution was choosing between "math" and "reasoning" as
+    the label on a step.
+    """
+    import backend.orchestrator.graph as G
+    from backend.orchestrator.state import AgentState
+
+    def _no_plan(*args, **kwargs):
+        raise G.PlanningError("planner unavailable in this test")
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("the fallback plan must not call a model")
+
+    # THE REQUEST MUST REACH THE FALLBACK. A single-intent lookup is
+    # answered by simple_plan() before the LLM planner is ever called,
+    # so an earlier version of this test -- "tell me about the reactor"
+    # -- passed against the very code it was written to catch. Anything
+    # comparative goes to the real planner, which is stubbed to fail.
+    request = "compare the reactor limits with the spec and summarise both"
+    from backend.orchestrator.simple_intent import is_simple_lookup
+
+    assert not is_simple_lookup(request), "this test needs the planner path"
+
+    original_plan, original_classify = G.plan_request, G.classify_task
+    G.plan_request, G.classify_task = _no_plan, _explode
+    try:
+        out = G.planner_node(AgentState(session_id="t", original_request=request))
+    finally:
+        G.plan_request, G.classify_task = original_plan, original_classify
+
+    assert [s.step_id for s in out["plan"]] == ["retrieve"]
+
+
+def test_the_fallback_plan_claims_only_the_work_that_runs():
+    """It used to report steps that are no-ops in the dispatcher.
+
+    "Verify engineering calculations and safety envelopes" and
+    "Synthesize verified findings into grounded briefing" both dispatch
+    to the `reasoning` agent, whose branch is `step.status = "done"`.
+    So the trace showed
+
+        step-2  reasoning  done  Verify engineering calculations...
+
+    for a turn in which nothing was verified. Same defect as the
+    fabricated approval payload: a record of work that did not happen,
+    in the log an operator reads to find out what the system did.
+    """
+    import backend.orchestrator.graph as G
+    from backend.orchestrator.state import AgentState
+
+    def _no_plan(*args, **kwargs):
+        raise G.PlanningError("planner unavailable in this test")
+
+    def _no_model(*args, **kwargs):
+        raise AssertionError("the fallback plan must not call a model")
+
+    original, original_classify = G.plan_request, G.classify_task
+    G.plan_request, G.classify_task = _no_plan, _no_model
+    try:
+        # Comparative, so it reaches the planner rather than being
+        # answered by simple_plan().
+        plain = G.planner_node(
+            AgentState(
+                session_id="t",
+                original_request="compare the log entries with the spec and summarise",
+            )
+        )["plan"]
+        with_math = G.planner_node(
+            AgentState(session_id="t", original_request="from the log, what is 12 * 4")
+        )["plan"]
+    finally:
+        G.plan_request, G.classify_task = original, original_classify
+
+    assert [s.assigned_agent for s in plain] == ["retrieval"]
+    assert all(s.status == "pending" for s in plain), "a plan step starts pending"
+    # The math step appears only when there is arithmetic to evaluate,
+    # decided by the same local matcher the math branch itself uses.
+    assert [s.assigned_agent for s in with_math] == ["retrieval", "math"]

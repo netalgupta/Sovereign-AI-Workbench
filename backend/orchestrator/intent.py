@@ -55,14 +55,44 @@ class Intent:
     needs_corpus: bool
 
 
-# Deliberately anchored and short. "hi" matches; "hint at the HCU-2
-# limits" does not, because the pattern requires the whole message to be
-# the greeting plus optional pleasantries.
+# A GREETING IS A SHAPE, NOT A WORD LIST.
+#
+# The first version enumerated openers and one optional address word.
+# "Wassup buddy" was not in it, so it took the full pipeline: a failed
+# LLM planner (9.69s), a fallback plan that made ANOTHER model call, a
+# corpus search, and a refusal. 47.14 seconds. Every hole in a list of
+# greetings is a 47-second turn, and a list of greetings has no end --
+# the next one will be "yo yo", "kem cho", "hey hey there".
+#
+# So the pattern describes the structure instead: an opener, followed
+# only by forms of address and pleasantries, and nothing else. Adding a
+# regional greeting is now one word in _GREET_OPENER rather than a new
+# branch, and a message that carries any content beyond the greeting
+# fails to match -- which is the property that actually matters.
+_GREET_OPENER = (
+    r"(?:hi+|hey+|hello+|hola|holla|yo+|sup|wa+s+up|wa+s+sup|what'?s\s+up|"
+    r"whatsup|heya|hiya|howdy|greetings|namaste|namaskar|salaam|salam|"
+    r"vanakkam|kem\s+cho|good\s+(?:morning|afternoon|evening|day)|"
+    r"morning|afternoon|evening|top\s+of\s+the\s+morning)"
+)
+# Who the greeting is addressed to. Carries no information about the
+# plant, so it cannot turn a greeting into a question.
+_GREET_ADDRESS = (
+    r"(?:there|amigo|amig[ao]s|friend|buddy|bud|mate|pal|team|all|everyone|"
+    r"folks|guys|man|bro|dude|sir|ma'?am|madam|boss|chief|again)"
+)
+# Small talk that follows a greeting and asks nothing answerable.
+_GREET_PLEASANTRY = (
+    r"(?:how\s+(?:are|r)\s+(?:you|u|ya)(?:\s+doing|\s+today)?|"
+    r"how'?s\s+it\s+going|how\s+is\s+it\s+going|how'?s\s+things|"
+    r"what'?s\s+new|hope\s+you'?re\s+well|long\s+time\s+no\s+see|"
+    r"nice\s+to\s+meet\s+you|good\s+to\s+see\s+you)"
+)
 _GREETING = re.compile(
-    r"^\s*(hi|hey|hello|hola|yo|sup|namaste|good\s+(morning|afternoon|evening)|"
-    r"greetings|howdy|hiya)\b[\s!.,]*"
-    r"(there|amigo|friend|buddy|mate|team|all|everyone)?[\s!.,]*"
-    r"(how\s+(are|r)\s+(you|u)[\s?!.]*)?$",
+    r"^\s*" + _GREET_OPENER + r"\b"
+    r"(?:[\s!.,?-]*(?:" + _GREET_OPENER + r"|" + _GREET_ADDRESS + r"|"
+    + _GREET_PLEASANTRY + r")\b)*"
+    r"[\s!.,?-]*$",
     re.I,
 )
 
