@@ -65,49 +65,40 @@ def _own_process_tree_pids() -> set[int]:
 
 
 def get_active_connections(scope: str = "application") -> list[ConnectionInfo]:
-    """Active connections, external first.
+    """Active connections, external first."""
+    conns, _ = get_active_connections_with_status(scope=scope)
+    return conns
+
+
+def get_active_connections_with_status(scope: str = "application") -> tuple[list[ConnectionInfo], str | None]:
+    """Active connections, external first, along with any read error.
 
     Args:
         scope: "application" (default) counts only THIS process tree.
             "machine" counts every socket on the host.
-
-    WHY THE DEFAULT IS THE PROCESS TREE, AND WHY THIS MATTERS.
-
-    This monitor previously called psutil.net_connections() with no PID
-    filter, which returns every socket on the entire host. On a normal
-    developer machine that is dozens of connections belonging to the
-    browser, the IDE's language server, Spotify, Teams, OneDrive and
-    Windows Defender — and the UI rendered them as
-    "ALERT: External Traffic — 44 external connections" on a product
-    whose headline claim is that it makes none.
-
-    Measured on this machine while the backend was running: 41 external
-    connections host-wide, of which the backend owned ZERO. The top
-    contributors were an IDE language server (11), an unrelated desktop
-    app (8) and Chrome (3). The alarm was real in the sense that the
-    sockets existed; it was wrong about whose they were, which is the
-    only thing the claim is about.
-
-    A safety indicator that fires on someone else's Spotify stream is
-    worse than no indicator: it trains everyone to ignore it, and on
-    demo day it reads as the product disproving its own core promise.
     """
     connections: list[ConnectionInfo] = []
     own_pids = _own_process_tree_pids() if scope == "application" else None
+    read_error: str | None = None
 
     try:
         raw_conns = psutil.net_connections(kind="inet")
-    except (psutil.AccessDenied, PermissionError):
+    except (psutil.AccessDenied, PermissionError) as exc:
         # net_connections needs elevation on macOS and in restricted
         # containers. Our own process is always readable, and since the
         # default scope is exactly that, this fallback loses nothing
         # that matters to the claim.
         try:
             raw_conns = psutil.Process().net_connections(kind="inet")
-        except Exception:
+        except (psutil.AccessDenied, PermissionError) as p_exc:
             raw_conns = []
-    except Exception:
+            read_error = f"Socket inspection permission denied: {p_exc}"
+        except Exception as p_exc:
+            raw_conns = []
+            read_error = f"Socket inspection failed: {p_exc}"
+    except Exception as exc:
         raw_conns = []
+        read_error = f"Socket inspection failed: {exc}"
 
     if own_pids is not None:
         # A socket with no PID cannot be attributed to us. Counting
@@ -137,7 +128,7 @@ def get_active_connections(scope: str = "application") -> list[ConnectionInfo]:
 
     # Sort so external connections surface at the top immediately
     connections.sort(key=lambda c: c.is_external, reverse=True)
-    return connections
+    return connections, read_error
 
 
 def get_system_metrics() -> SystemMetrics:
@@ -166,8 +157,7 @@ def get_network_status() -> dict:
     the panel look like it was avoiding an inconvenient number. What it
     must never do is drive the alarm, which is the bug this replaced.
     """
-    conns = get_active_connections(scope="application")
-    ext_count = sum(1 for c in conns if c.is_external)
+    conns, read_error = get_active_connections_with_status(scope="application")
     metrics = get_system_metrics()
 
     host_external = 0
@@ -179,6 +169,24 @@ def get_network_status() -> dict:
     except Exception:  # noqa: BLE001 — host-wide context is a nicety, never the claim
         host_external = -1  # unknown, and said so rather than implied as zero
 
+    # A permission or read error must NEVER masquerade as a verified secure state.
+    if read_error is not None:
+        return {
+            "status": "error",
+            "externalCount": -1,
+            "connections": [],
+            "metrics": metrics.model_dump(),
+            "is_air_gapped": False,
+            "error": read_error,
+            "scope": "application",
+            "hostExternalCount": host_external,
+            "hostNote": (
+                "Connections belonging to other applications on this machine "
+                "(browser, IDE, OS services). Not this workbench."
+            ),
+        }
+
+    ext_count = sum(1 for c in conns if c.is_external)
     return {
         "status": "secure" if ext_count == 0 else "external_detected",
         "externalCount": ext_count,
