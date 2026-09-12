@@ -25,10 +25,12 @@ Please read it fully — several scopes changed.
 
 What's working right now:
 • Chat end to end, grounded answers with real citations
-• 38 API endpoints, 17 callable tools — all listed in docs/INTEGRATION.md
+• 40 API endpoints, 19 callable tools — all listed in docs/INTEGRATION.md
 • Hybrid retrieval + GraphRAG, knowledge graph (101 nodes)
 • Approval gate, audit log, sandbox (egress-isolated, proven)
-• 351 tests passing
+• NEW: the agent now CHOOSES its own tools and narrates while working —
+  POST /api/chat/stream streams it live (text, work, text, work)
+• 357 tests passing
 
 Two things that changed and will confuse you if you don't know:
 1. START THE BACKEND BEFORE THE FRONTEND. If you don't, the Vite dev
@@ -129,6 +131,28 @@ And four things with a working backend and NO UI at all:
 • Retrieval trace UI — the backend prints the full trace to console,
   none of it is visible in the app
 • Ingestion progress feed — GET /api/ingestion/{job_id}
+
+AND the big new one — GRANULAR AGENT THINKING UI:
+POST /api/chat/stream now streams the agent working, live. Narration
+token by token, every tool call WITH ITS ARGUMENTS before it runs, every
+result with its real output and duration. Text, work, text, work — the
+way a real agent reads. One measured turn = 173 events.
+Contract: docs/Technical_Specs/AGENT_STREAM_PROTOCOL.md
+
+Show the tool ARGUMENTS. That is a safety control, not a debug view:
+the model once called evaluate_expression("-381.95 - 400") for
+"381.95 minus 400" and the tool correctly returned -781.95. The wrong
+answer arrives with a real tool-call receipt attached. A human seeing
+the arguments is the ONLY thing that catches that.
+
+Read the "Known limitation" section first — answers on the streaming
+path are currently worse than /api/chat. Thats mine to fix, not yours.
+Build the surface; dont be surprised by the answers.
+
+You also own 4 BACKEND TOOLS now (TOOLS.md rows 16, 18, 32, 60) —
+NetworkX graph analytics is the natural partner to your hop
+visualisation: the traversal gives you the subgraph, NetworkX tells you
+which nodes in it actually matter.
 
 If /api/graph ever returns 0 nodes, the graph container lost its data
 (happened 3 times). Rebuild in seconds, no LLM calls:

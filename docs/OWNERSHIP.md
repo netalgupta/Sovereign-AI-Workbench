@@ -98,6 +98,12 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Grounded generation + citation validation | Aryan | Netal (citation chips) |
 | Self-verification (§5) | Aryan | Kanishka (trace viewer) |
 | Contradiction detection | Aryan | Netal |
+| **Agentic tool-calling loop** (`agent_loop.py`) | **Aryan** (built; answer quality open) | — |
+| **Agent event stream** (`POST /api/chat/stream`) | **Aryan** (built) | **Netal** (granular thinking UI) |
+| `search_documents` / `list_documents` tools | Aryan (built) | — |
+| NetworkX graph analytics (row 32) | **Netal** | **Netal** |
+| Version/revision tracking (row 16) | **Netal** | **Netal** |
+| Correspondence summarisation (rows 18, 60) | **Netal** | **Netal** |
 
 ### Infrastructure
 | Deliverable | Backend | Frontend |
@@ -136,6 +142,7 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Citation chips + expansion | Netal |
 | Graph explorer `/graph` | Netal |
 | Multi-hop traversal / path visualisation | Netal |
+| Granular agent thinking transcript | Netal |
 | Source page preview | Netal |
 | Chunk / vector inspector | Netal |
 | Output library `/outputs` | Kanishka |

@@ -124,6 +124,73 @@ Two things to know before you start:
   client-supplied-query endpoint — that would be an injection surface on
   the component whose whole job is being trustworthy about provenance.
 
+### 4c. Granular agent thinking UI — **NEW, isolated partition, highest ceiling**
+
+The app answers after 17-25 seconds of silence. What it should do is
+what a good agent does: say what it is about to do, do it, say what it
+got, move on. Text, work, text, work.
+
+**The backend for this is built and streaming today.** `POST /api/chat/stream`
+emits Server-Sent Events as the agent works — narration token by token,
+each tool call *before* it runs with its arguments, each result with its
+real return value and duration. Full contract:
+`docs/Technical_Specs/AGENT_STREAM_PROTOCOL.md`.
+
+A measured turn produced **173 events**. This is yours to render.
+
+What to build:
+- **Interleaved transcript** in arrival order. Narration, then the call,
+  then the result, then more narration. Do not batch the tool calls to
+  the end — the order *is* the explanation.
+- **In-flight tool state.** Show the call the moment it is emitted, with
+  a spinner, then fill in the result. The gap between them is where the
+  work happens and it is often seconds.
+- **Arguments always visible, output collapsed by default.**
+- **Failed-call recovery rendering.** A tool that fails gets fed back to
+  the model, which usually retries. Render repeated calls as a sequence,
+  not by replacing the previous one. A failed tool is not a failed turn.
+- **Approval interception.** `approval_required` means the loop stopped
+  and the tool did NOT run. Show the modal; do not render the turn as
+  finished.
+
+**Why showing arguments is a safety feature, not a debug nicety.**
+Measured: asked for "381.95 minus 400", the model called
+`evaluate_expression("-381.95 - 400")` — a spurious leading minus — and
+the tool correctly computed -781.95 for the expression it was given. The
+answer arrives with a genuine tool-call receipt attached. Nothing
+downstream can tell it is wrong. **A human seeing the arguments is the
+only thing that catches it.** That makes your UI a correctness control,
+not decoration.
+
+**Read the "Known limitation" section of the protocol before you start.**
+Answer quality on this endpoint is currently worse than `/api/chat` —
+the loop retrieves correctly and then under-extracts. That is Aryan's to
+close. You are building the surface; don't be surprised by the answers.
+
+Buffer the `text_delta` events before rendering — token-level fragments
+at 173 events per turn will thrash React otherwise.
+
+### 4d. Tools — you own backend tools too
+
+You are not frontend-only. Take these registry tools, backend and
+frontend both (`docs/TOOLS.md`, Owner column):
+
+| Row | Tool | Why it is yours |
+|---|---|---|
+| 16 | Version / revision tracking (SOP currency) | Pure retrieval-metadata work, pairs with the Sources panel you own |
+| 18 | Correspondence summarisation | Feeds the citation and source surfaces |
+| 32 | NetworkX graph analytics | Centrality, shortest path, clustering — the numbers behind your hop visualisation |
+| 60 | Multi-location correspondence summariser | Depot threads; same shape as 18 |
+
+Row 32 in particular is the natural partner to §4b: the traversal
+endpoint gives you the subgraph, NetworkX gives you which nodes actually
+matter in it. Follow the shape in `backend/tools/retrieval_tools.py` —
+`@tool(name=..., category=..., description=...)`, type hints and a real
+docstring, because the JSON schema is **derived** from them.
+
+If a tool writes a file or sends anything, it registers
+`requires_approval=True`. Non-negotiable; the dispatcher enforces it.
+
 ### 5. Chunk / vector inspector — **NEW**
 **Take over `InstrumentationPage.jsx` and `KnowledgeBasePage.jsx`.**
 Both are prototypes. Make them tools:
@@ -162,7 +229,10 @@ fraction of files looks precise and misleads. Do not add a percentage.
 ---
 
 ## Explicitly Not Your Job
-- Retrieval, graph and embedding logic (Aryan) — you visualise its output
+- Core retrieval, graph and embedding LOGIC (Aryan) — you visualise
+  its output, and you own the four registry tools listed in §4d
+- The agent loop itself and its answer quality (Aryan) — you render
+  its event stream
 - App shell, chat, plan graph, approval modal, settings, Electron (Advay)
 - Output library, calculation trace, audit log (Kanishka)
 - Network monitor, multimodal upload, defect overlay (Sahil)
@@ -188,8 +258,13 @@ fraction of files looks precise and misleads. Do not add a percentage.
   the highest-value item after the page preview — it is the clearest
   proof that the system reasons over connections, and the backend is
   already done.
+- **Day 7-8:** Granular agent thinking UI (§4c) against
+  /api/chat/stream. This is the isolated partition with the highest
+  ceiling in the product — it is what makes the system look like it
+  is reasoning rather than pausing.
 - **Day 8:** Retrieval trace UI in the chat.
-- **Day 9:** Chunk/vector inspector; ingestion progress feed.
+- **Day 9:** Chunk/vector inspector; ingestion progress feed; your
+  registry tools (§4d — rows 16, 18, 32, 60).
 - **Day 10:** Hand to Advay for integration; support his consistency pass.
   Buffer for bugs.
 

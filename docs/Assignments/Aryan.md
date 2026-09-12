@@ -8,6 +8,50 @@
 - Overall technical direction and architecture sign-off (SYSTEM.md is your document to keep accurate)
 - Final say on model selection/quantization tradeoffs given the RTX 4060 constraint (DEPENDENCIES.md §1)
 
+## Agentic tool calling — NEW, and the current quality gap is mine
+
+**Built:** `backend/orchestrator/agent_loop.py` + `POST /api/chat/stream`.
+A real tool-calling loop using Ollama's native function calling
+(verified with qwen2.5:7b): the model sees the registry, chooses a tool,
+gets the result back in the conversation, and continues — narrating
+throughout. Every step is an event; the protocol is
+`docs/Technical_Specs/AGENT_STREAM_PROTOCOL.md`.
+
+This closed a real hole. `dispatch_node` chose tools with a hardcoded
+if/elif on agent type, so 17 registered tools with derived schemas were
+unreachable — the model never CHOSE anything. Hard constraint #3 ("no
+math without a tool call") held only for the one arithmetic path wired
+by hand.
+
+**And it exposed a bigger one:** there was no search tool. The registry's
+"retrieval" category held `find_contradictions` and
+`select_images_for_request`, so it looked populated, while hybrid search
+— the thing the whole product rests on — was reachable only from inside
+`dispatch_node`. Given the full registry and asked for a value printed
+in the corpus, the model called `find_contradictions`, got `[]`, and
+reported that no document contained it. Fixed:
+`backend/tools/retrieval_tools.py` registers `search_documents` and
+`list_documents`.
+
+**MY OPEN ITEM, stated plainly:** answer quality on the streaming path
+is currently WORSE than `/api/chat`. The loop retrieves correctly and
+then under-extracts — the direct path answers "3.4 g/10min [1]"
+consistently where the loop retrieved the right documents and said it
+could not find the value. The difference is scaffolding, not mechanism:
+`/api/chat` applies a grounding prompt tuned against measured failures
+(citation form, answer depth, refusal wording) and the loop hands raw
+passages to a 7B with a general system prompt.
+
+Until that closes: `/api/chat` is the default answering path,
+`/api/chat/stream` is the agentic one, and Netal builds the thinking UI
+against the stream knowing this.
+
+Also mine: tool-selection reliability. Offering all 19 tools to a 7B
+produced `lookup_thermophysical_property` called five times drifting
+into the density of methane. Curating `CHAT_TOOLS` fixed it; that
+curation is a workaround for a model-size limit and should be revisited
+on venue hardware.
+
 ## Explicitly Not Your Job (delegate, don't absorb)
 - Frontend of any kind (Advay's team)
 - Sandbox execution mechanics (Aditya)

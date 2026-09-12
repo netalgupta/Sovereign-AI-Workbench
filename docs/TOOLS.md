@@ -59,12 +59,12 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 13 | Entity/relationship extraction for graph | Aryan | built | 🔴 | Needed for the signature graph query |
 | 14 | Knowledge graph store + query (Neo4j) | Aryan | built | 🔴 | Pipeline-segment / valve-reference query, demoed against real segment names Mangalore–Hassan–Neriya–Devangonthi |
 | 15 | Contradiction detection across documents | Aryan | built | 🟡 | Strong safety-relevant differentiator |
-| 16 | Version/revision tracking | Aryan | not started | 🟡 | SOP-currency checking |
+| 16 | Version/revision tracking | Netal | not started | 🟡 | SOP-currency checking |
 | 17 | Source-grounded citation on every claim | Aryan | built | 🔴 | Non-negotiable per NFR-4 |
-| 18 | Correspondence/email summarization | Aryan | not started | 🟡 | Generic depot-to-HQ use case |
+| 18 | Correspondence/email summarization | Netal | not started | 🟡 | Generic depot-to-HQ use case |
 | 19 | Cross-reference resolver | Aryan | not started | ⚪ | Registry-listed |
 | 57 | Aromatic Complex ↔ refinery cross-document reconciliation | Aryan | not started | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
-| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | Aryan | not started | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
+| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | Netal | not started | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
 
 ## C. Reasoning, Planning & Orchestration — Owner: Aryan (logic), Aditya (infra)
 
@@ -87,7 +87,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 29 | Pint unit-aware calculations | Aryan | not started | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
 | 30 | CoolProp thermophysical properties | Aryan | not started | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
 | 31 | Matplotlib plotting | Aryan | built | 🔴 | Embedded charts in outputs |
-| 32 | NetworkX graph math | Aryan | not started | 🟡 | Pipeline dependency graphs |
+| 32 | NetworkX graph math | Netal | not started | 🟡 | Pipeline dependency graphs |
 | 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | Aryan | built | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
 | 52 | Hydrogen balance calculator (CCR ↔ hydrotreating units) | Aryan | built | 🟡 | MRPL-specific — Pint-based unit-aware mass balance, prevents unit-conversion errors on H2 byproduct tracking. Owner: Aryan |
 | 53 | PSA hydrogen purity trend dashboard | Aryan | built | 🟡 | MRPL-specific — ingests PSA purity logs, plots against the 99.9% target (tool 31), flags drift. Owner: Aryan (data)/Kanishka (chart UI) |

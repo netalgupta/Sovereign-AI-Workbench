@@ -5,7 +5,7 @@ from `docs/TOOLS.md` (Owner + Status columns); "built" means there is a
 registered implementation you can call through `POST /api/tools/call`
 today. Endpoint list enumerated from the running server.
 
-Branch: `aryan/rag-and-graphrag` · Suite: **351 passed, 1 skipped**
+Branch: `aryan/rag-and-graphrag` · Suite: **357 passed, 1 skipped**
 
 ---
 
@@ -17,8 +17,8 @@ Branch: `aryan/rag-and-graphrag` · Suite: **351 passed, 1 skipped**
 | Built | **35** |
 | Not started | **37** |
 | 🔴 demo-critical built | **23 of 33** |
-| Live API endpoints | **38** |
-| Registered, callable tools | **17** |
+| Live API endpoints | **40** |
+| Registered, callable tools | **19** |
 
 ---
 
@@ -38,7 +38,14 @@ ingestion pipeline + progress, source tracking, turn tracing, `draft_docx`.
 Pending: rows 54-60 MRPL-specific retrieval features (56, 57, 59, 60),
 semantic-chunking evaluation, retrieval at real corpus scale.
 
-**Known limitation, not yet fixed:** `all_chunk_texts()` loads the whole
+**Known limitation, not yet fixed (1):** answer quality on
+`/api/chat/stream` is worse than `/api/chat`. The loop retrieves
+correctly and under-extracts — the direct path answers "3.4 g/10min
+[1]" consistently where the loop retrieved the right documents and
+said it could not find the value. Mechanism is sound; the grounding
+scaffolding is missing. `/api/chat` stays the default until this closes.
+
+**Known limitation, not yet fixed (2):** `all_chunk_texts()` loads the whole
 corpus per query. Fine at 50 documents, will not hold at 1000-page PDFs.
 This is the next thing.
 
@@ -69,12 +76,15 @@ approval modal wired to the live gate, settings + live model-add form
 FRONTEND.md §4.1), integration pass over everyone's components.
 
 ### Netal — sources, citations, graph, retrieval transparency
-**Frontend surfaces — scope rebalanced, see `Assignments/Netal.md`**
+**Frontend surfaces + 4 registry tools (rows 16, 18, 32, 60) —
+scope rebalanced, see `Assignments/Netal.md`**
 
 Ready to take over: `GraphExplorerPage`, `KnowledgeBasePage`,
 `InstrumentationPage` — all working prototypes.
 
-Pending and high value: **source page preview** (backend API exists, no
+Pending and high value: **granular agent thinking UI** (backend
+streaming today, `/api/chat/stream`, 173 events per turn — read
+`AGENT_STREAM_PROTOCOL.md`), **source page preview** (backend API exists, no
 viewer), **multi-hop traversal visualisation** (backend built for you,
 `/api/graph/neighbourhood`, returns per-node `distance`), retrieval
 trace UI, ingestion progress feed, citation chips, sources panel.
@@ -121,6 +131,8 @@ trains everyone to ignore it.
 | Corpus sources carry **`category`** | Sidebar filter tabs work against real data |
 | Vite no longer intercepts API routes | The backend wins whenever it is running. **Start the backend first** |
 | `/api/graph/neighbourhood` added | Multi-hop traversal with per-node distance |
+| **Agentic tool-calling loop** + `POST /api/chat/stream` | The agent now CHOOSES tools and narrates while working. Netal renders it |
+| `search_documents` / `list_documents` registered | The registry had no search tool at all — the agent could not look anything up |
 
 ---
 

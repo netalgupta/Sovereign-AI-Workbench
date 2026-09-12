@@ -24,6 +24,8 @@ import io
 from pathlib import Path
 
 import numpy as np
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
@@ -1733,6 +1735,78 @@ def graph_neighbourhood(
             for d in sorted({n["distance"] for n in nodes if n["distance"] is not None})
         },
     }
+
+
+# ------------------------------------------------------ agentic stream
+
+class AgentStreamRequest(BaseModel):
+    message: str
+    session_id: str = "default"
+
+
+@router.post("/chat/stream")
+def chat_stream(body: AgentStreamRequest):
+    """Work on the request, streaming what happens as it happens (SSE).
+
+    WHY THIS EXISTS ALONGSIDE /api/chat.
+
+    /api/chat returns one paragraph after 17-25 seconds of silence. That
+    is the wrong shape for an agent that calls tools: the interesting
+    part -- which tool it reached for, what the tool returned, whether it
+    changed course -- is invisible, and the user has no way to tell a
+    slow answer from a hung one.
+
+    This streams the work: narration as it is written, each tool call
+    with its arguments BEFORE it runs, each result with its real return
+    value and duration. Text, work, text, work.
+
+    SHOWING THE ARGUMENTS IS A SAFETY FEATURE, NOT A FLOURISH.
+
+    Measured on the first run of the loop: asked for "381.95 minus 400",
+    the model called evaluate_expression with "-381.95 - 400" -- a
+    spurious leading minus -- and the tool correctly returned -781.95 for
+    the expression it was given. Hard constraint #3 guarantees the number
+    came from an executed tool. It does NOT guarantee the model asked the
+    tool the right question, and nothing downstream can tell the
+    difference: the answer arrives with a genuine tool-call receipt
+    attached.
+
+    The only thing that catches it is a human seeing the arguments. So
+    the arguments are streamed before the result, deliberately.
+
+    Event types are defined in
+    docs/Technical_Specs/AGENT_STREAM_PROTOCOL.md, which is the contract
+    with the frontend.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from backend.orchestrator.agent_loop import run_agent_loop
+
+    def event_source():
+        try:
+            for event in run_agent_loop(body.message, session_id=body.session_id):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            # A crash mid-stream must reach the client as an event. A
+            # silently truncated SSE stream is indistinguishable from a
+            # slow one, so the UI would spin forever.
+            yield "data: " + json.dumps({
+                "type": "error",
+                "message": f"{type(exc).__name__}: {exc}",
+            }) + "\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Without this, a proxy that buffers will hold the whole
+            # stream and deliver it at the end -- which is exactly the
+            # behaviour this endpoint exists to avoid.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # --------------------------------------------------------- verification
