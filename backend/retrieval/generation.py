@@ -7,6 +7,8 @@ a user's question the way this system is supposed to: grounded, cited,
 and willing to say "not found" instead of guessing.
 """
 
+import re
+
 import requests
 from pydantic import BaseModel
 
@@ -81,6 +83,13 @@ class GeneratedAnswer(BaseModel):
 
 _MARKDOWN_FENCE_LABELS = ("markdown", "md", "")
 
+# A ```markdown / ```md fence anywhere in the answer, with its body
+# captured. Non-greedy so consecutive fences are handled separately.
+_MID_ANSWER_MD_FENCE = re.compile(
+    r"```(?:markdown|md)[^\S\n]*\n(.*?)\n?```",
+    re.S | re.I,
+)
+
 
 def _unwrap_markdown_fence(text: str) -> str:
     """Undo an answer that wrapped ITSELF in a markdown code fence.
@@ -110,8 +119,23 @@ def _unwrap_markdown_fence(text: str) -> str:
     strip_code_fences call.
     """
     stripped = (text or "").strip()
+
+    # ALSO strip markdown-labelled fences that appear MID-answer.
+    #
+    # Observed: an answer that opened with a sentence, then wrapped its
+    # eight numbered procedure steps in a ```markdown block. The whole
+    # answer is not fenced, so the whole-answer check below does not
+    # fire, and the steps render as grey monospace source -- the exact
+    # content the user asked for, displayed as if it were code.
+    #
+    # Safe to do unconditionally for this label only: a fence tagged
+    # `markdown` or `md` is always a mistake in a reply that is already
+    # rendered as markdown. Nobody wants markdown source displayed as
+    # code. Fences tagged python/json/bash are real and untouched.
+    stripped = _MID_ANSWER_MD_FENCE.sub(lambda m: m.group(1).strip(), stripped)
+
     if not stripped.startswith("```") or not stripped.endswith("```"):
-        return text
+        return stripped if stripped != (text or "").strip() else text
 
     newline = stripped.find("\n")
     if newline == -1:

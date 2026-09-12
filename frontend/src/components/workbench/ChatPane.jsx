@@ -236,6 +236,10 @@ export function ChatPane() {
         streaming: true,
         citations: res.citations || [],
         toolCallEvents: res.tool_call_events || [],
+        // Carried so the Verify button can re-ask the same question;
+        // /api/verify re-retrieves the sources itself rather than
+        // trusting a client-supplied copy.
+        userRequest: text,
         plan: res.plan || [],
         verification: res.verification || null,
         elapsedSeconds: liveElapsed,

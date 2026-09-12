@@ -100,6 +100,19 @@ _THRESHOLD_BY_BACKEND = {
 
 # Kept as the documented default for the real model, so existing readers
 # and reports still resolve a number.
+# How many chunks either side of a match to pull in. 1 is deliberate:
+# it repairs chunk-boundary truncation (the common case -- a procedure
+# or table split across one boundary) without tripling the prompt. The
+# generation context is sized for roughly this much text; raising this
+# means raising WORKBENCH_GEN_CTX too, or the SOURCES block is silently
+# truncated and citations are dropped with no error.
+NEIGHBOUR_WINDOW = 1
+
+# Neighbours are context, not results. Scoring them below their anchor
+# keeps a passage that merely sits next to a match from displacing one
+# that actually matched.
+NEIGHBOUR_SCORE_FACTOR = 0.5
+
 CONFIDENCE_THRESHOLD = 0.60
 
 
@@ -250,8 +263,54 @@ def retrieve_with_grounding_check(
         )
 
     ranked_ids = sorted(fused, key=lambda fid: fused[fid], reverse=True)[:top_k]
-    chunks = []
+
+    # PULL IN EACH WINNER'S NEIGHBOURS.
+    #
+    # Retrieval scores chunks independently, so it returns the best
+    # matching passage and nothing around it. For anything sequential --
+    # a procedure, a numbered spec, a table split across a boundary --
+    # that truncates the answer without saying so. Measured:
+    #
+    #   "What is the SOP for Hydrocracker"  -> 1 SOP-114 chunk -> 3 steps
+    #   "Summarise SOP-114-Rev3"            -> 2 SOP-114 chunks -> 8 steps
+    #
+    # Same document, same model; the only difference was which chunks
+    # happened to score. A procedure missing steps 4-8 reads exactly
+    # like a complete one, which is why this is a correctness problem
+    # and not a completeness nicety.
+    #
+    # Neighbours are cheap: an indexed lookup by (document, chunk_index),
+    # no embedding and no scoring. They are also exactly the passages a
+    # person would read next.
+    #
+    # Ordered by (document, chunk_index) rather than by score, so text
+    # that was contiguous in the source arrives contiguous in the prompt.
+    # Feeding a procedure to a model as shuffled fragments is how step
+    # order gets silently rewritten.
+    selected: dict[int, tuple[str, int, float]] = {}
     for faiss_id in ranked_ids:
+        stored = store.get_by_faiss_id(faiss_id)
+        if stored is None:
+            continue
+        selected[faiss_id] = (stored.source_document, stored.chunk_index, fused[faiss_id])
+        for neighbour in store.get_neighbours(
+            stored.source_document, stored.chunk_index, window=NEIGHBOUR_WINDOW
+        ):
+            if neighbour.faiss_id in selected:
+                continue
+            # A neighbour inherits a fraction of its anchor's score so it
+            # never outranks a chunk that actually matched the query --
+            # it is context, not a result.
+            selected[neighbour.faiss_id] = (
+                neighbour.source_document,
+                neighbour.chunk_index,
+                fused[faiss_id] * NEIGHBOUR_SCORE_FACTOR,
+            )
+
+    chunks = []
+    for faiss_id, (_doc, _idx, score) in sorted(
+        selected.items(), key=lambda kv: (kv[1][0], kv[1][1])
+    ):
         stored = store.get_by_faiss_id(faiss_id)
         if stored is None:
             continue
@@ -260,7 +319,7 @@ def retrieve_with_grounding_check(
                 text=stored.text,
                 source_document=stored.source_document,
                 page_number=stored.page_number,
-                score=fused[faiss_id],
+                score=score,
             )
         )
     return GroundedRetrievalResult(

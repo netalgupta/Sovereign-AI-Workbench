@@ -2,7 +2,7 @@
 This file is read by Claude Code / Antigravity (or any coding agent) working in this repository. Keep it accurate as the repo evolves — this is what the AI coding agent uses as ground truth for how to work here.
 
 ## Project Summary
-Sovereign On-Premise Agentic AI Workbench for MRPL (PS26117). Fully offline, multi-model, agentic system. See REQUIREMENTS.md, SYSTEM.md, TOOLS.md, DEPENDENCIES.md in this same folder for full spec — read those before making architectural changes.
+Sovereign On-Premise Agentic AI Workbench for MRPL (PS26117). Fully offline, multi-model, agentic system. Full spec: REQUIREMENTS.md, SYSTEM.md and SIH26117_MRPL_Grounded_Dossier.md at the repo root; TOOLS.md, DEPENDENCIES.md, STAKEHOLDERS.md, OWNERSHIP.md and Technical_Specs/ under docs/. Read those before making architectural changes. The pointer used to say all four were "in this same folder", which was untrue for two of them; docs/ also carried stale copies of the root files (docs/SYSTEM.md still named Qwen2-VL, a tag that does not exist on Ollama and was fixed in the root copy in 3c94963). Those duplicates are deleted. There is now exactly one copy of each file -- link to it, never copy it. docs/OWNERSHIP.md is the tie-breaker when documents disagree about who owns a deliverable.
 
 ## Repo Structure (target layout)
 ```

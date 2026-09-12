@@ -142,7 +142,22 @@ def test_standard_query_executes_plan_and_dispatch():
     assert all(s.status == "done" for s in state.plan)
     assert len(state.tool_call_log) >= 1
     assert state.draft_output is not None
-    assert state.verification_result is not None
+    # Verification is DEFERRED by default and runs on demand via
+    # POST /api/verify, so a normal turn carries no verdict. It used to
+    # run inline on every turn: a second LLM call on a different model,
+    # which on an 8 GB card evicts the generation model and reloads the
+    # verifier. Measured at 9s when the verifier happened to be resident
+    # and 102s when it did not -- 102 seconds added to a 70-second turn,
+    # for a check the user had not asked for and could not see until it
+    # finished.
+    #
+    # Asserting a verdict is present here would pin that behaviour back.
+    # The verification PATH is covered by
+    # test_inline_verification_still_runs_when_enabled below and by the
+    # verification module's own tests.
+    assert state.verification_result is None, (
+        "verification should be deferred; set WORKBENCH_VERIFY_INLINE=1 to run it inline"
+    )
 
 
 def test_agent_state_ready_steps_dependency_resolution():
@@ -210,3 +225,28 @@ def test_ungrounded_question_refuses_instead_of_reassuring():
 
     # A refusal must not carry citations - there is nothing to cite.
     assert not state.retrieved_context
+
+
+def test_inline_verification_still_runs_when_enabled(monkeypatch):
+    """Deferring verification must not mean deleting it.
+
+    The companion to the assertion above: without this, that test would
+    pass just as happily if the verify node had been removed entirely.
+    """
+    monkeypatch.setenv("WORKBENCH_VERIFY_INLINE", "1")
+
+    state = run_agent_turn(
+        "What is the average MFI for Homopolymer H030SG?",
+        session_id="test-inline-verify",
+    )
+
+    assert state.draft_output
+    assert state.verification_result is not None, (
+        "WORKBENCH_VERIFY_INLINE=1 must restore blocking verification"
+    )
+    # The verdict itself is not asserted: the verifier is a small model
+    # and is measurably unreliable on values read from tables (it
+    # false-negatives). Pinning passed=True here would make this test
+    # fail for a reason that has nothing to do with the wiring it
+    # exists to check.
+    assert isinstance(state.verification_result.passed, bool)

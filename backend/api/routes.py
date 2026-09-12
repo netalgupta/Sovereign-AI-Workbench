@@ -1624,6 +1624,90 @@ def system_info() -> dict:
     return info
 
 
+# --------------------------------------------------------- verification
+
+class VerifyRequest(BaseModel):
+    request: str
+    answer: str
+    session_id: str = "default"
+
+
+@router.post("/verify")
+def verify_answer(body: VerifyRequest) -> dict:
+    """Check an answer against the corpus, on demand (AGENTS_SPEC §5).
+
+    WHY THIS IS A SEPARATE ENDPOINT RATHER THAN PART OF /api/chat.
+
+    Verification is a second LLM call on a different model. On an 8 GB
+    card that evicts the generation model and reloads the verifier, and
+    the cost is wildly variable -- measured at 9s when the verifier was
+    already resident and 102s when it had to reload under memory
+    pressure. Inline, that turned a 70-second turn into 175 seconds for
+    a check the user had not asked for and could not see until it
+    finished.
+
+    So the answer is returned as soon as it exists, and this runs when
+    the user presses Verify on a claim that matters to them. The check
+    is unchanged -- same model, same fail-closed parsing, same sources.
+    Only WHEN it runs changed.
+
+    Sources are re-retrieved rather than passed in from the client.
+    Retrieval is ~0.15s and the client's copy is truncated for display;
+    more importantly, a verifier fed sources chosen by the caller is
+    checking a claim against evidence the caller supplied, which is not
+    a check at all.
+    """
+    from backend.orchestrator.state import AgentState
+    from backend.orchestrator.verification import VerificationOutcome, verify_output
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+    if not body.answer.strip():
+        raise HTTPException(400, detail="Nothing to verify: answer is empty.")
+
+    state = get_state()
+    try:
+        store, _ = state.ensure_corpus()
+        grounding = retrieve_with_grounding_check(store, body.request)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"Could not retrieve sources: {exc}") from exc
+
+    agent_state = AgentState(
+        session_id=body.session_id,
+        original_request=body.request,
+        draft_output=body.answer,
+        retrieved_context=[
+            {
+                "text": c.text,
+                "source_document": c.source_document,
+                "page_number": c.page_number,
+                "score": c.score,
+            }
+            for c in grounding.chunks
+        ],
+    )
+
+    try:
+        verified, outcome = verify_output(agent_state)
+    except Exception as exc:  # noqa: BLE001
+        # Cannot verify is NOT verified, and says so in those words.
+        return {
+            "passed": False,
+            "outcome": "unconfirmed",
+            "reason": f"The verifier could not be reached: {type(exc).__name__}: {exc}",
+            "checked_claims": [],
+            "sources_checked": len(agent_state.retrieved_context),
+        }
+
+    result = verified.verification_result
+    return {
+        "passed": bool(result and result.passed),
+        "outcome": outcome.value if isinstance(outcome, VerificationOutcome) else str(outcome),
+        "reason": (result.reason if result else "") or "",
+        "checked_claims": list(result.checked_claims) if result else [],
+        "sources_checked": len(agent_state.retrieved_context),
+    }
+
+
 # -------------------------------------------------------------- network
 
 @router.get("/network/status")

@@ -283,6 +283,103 @@ function TurnTrace({ message }) {
   )
 }
 
+
+/**
+ * On-demand self-check for one answer.
+ *
+ * Verification used to run inline on every turn. It is a second LLM
+ * call on a different model, and on an 8 GB card that evicts the
+ * generation model and reloads the verifier -- measured at 9s when the
+ * verifier happened to be resident and 102s when it did not. Inline,
+ * that turned a 70-second turn into 175 seconds for a check nobody had
+ * asked for, and the same question cost wildly different amounts
+ * depending on what else was loaded.
+ *
+ * So the answer arrives as soon as it exists, and the check runs when
+ * the reader wants it -- which is the right moment anyway, because
+ * whether a claim needs verifying is the reader's judgement, not the
+ * system's.
+ */
+function VerifyButton({ message }) {
+  const [state, setState] = useState('idle') // idle | running | done | error
+  const [result, setResult] = useState(null)
+
+  const request = message.userRequest || ''
+  const answer = message.content || ''
+  if (!answer || message.role !== 'assistant') return null
+
+  const run = async () => {
+    setState('running')
+    try {
+      const res = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request, answer }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setResult(data)
+      setState('done')
+    } catch (err) {
+      setResult({ reason: String(err?.message || err) })
+      setState('error')
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      {state === 'idle' && (
+        <button
+          type="button"
+          onClick={run}
+          className="text-xs cursor-pointer"
+          style={{ background: 'transparent', border: 'none', color: 'var(--color-text-muted)' }}
+          title="Check this answer against the cited sources"
+        >
+          Verify this answer
+        </button>
+      )}
+
+      {state === 'running' && (
+        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+          Checking against sources… (this loads a second model and can take a while)
+        </span>
+      )}
+
+      {state === 'error' && (
+        <span className="text-xs" style={{ color: 'var(--color-accent)' }}>
+          {/* Could not check is NOT checked, and says so. */}
+          Could not run the check: {result?.reason}
+        </span>
+      )}
+
+      {state === 'done' && result && (
+        <div
+          className="text-xs mt-1 pl-2"
+          style={{
+            borderLeft: `2px solid ${result.passed ? 'var(--color-border)' : 'var(--color-accent)'}`,
+            color: 'var(--color-text-muted)',
+          }}
+        >
+          <span style={{ color: result.passed ? 'var(--color-text)' : 'var(--color-accent)' }}>
+            {result.passed ? 'Confirmed against sources' : 'Not confirmed'}
+          </span>
+          {result.reason ? ` — ${result.reason}` : ''}
+          {!result.passed && (
+            <div className="mt-0.5" style={{ color: 'var(--color-text-faint)' }}>
+              {/* Honest about the checker's known limits: it is a small
+                  model that false-negatives on values read from tables. */}
+              The checker is a small model and cannot always confirm values read
+              from tables — treat this as a prompt to check the cited source, not
+              as a finding that the answer is wrong.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   const isStreaming =
@@ -348,6 +445,7 @@ export function MessageBubble({ message }) {
           output, real verdict — from the response, never invented in
           the browser. */}
       {!isStreaming && <TurnTrace message={message} />}
+      {!isStreaming && <VerifyButton message={message} />}
 
       <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>
         {formatTime(message.timestamp)}
