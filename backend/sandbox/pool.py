@@ -20,6 +20,7 @@ Lifecycle:
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import threading
 import time
@@ -120,8 +121,17 @@ class WorkerPool:
 
         resolved_img = self._resolve_image()
         extra_kwargs: dict = {}
-        # Avoid exec format errors on Apple Silicon when running amd64 images
-        if os.uname().sysname == "Darwin" or "DOCKER_DEFAULT_PLATFORM" in os.environ:
+        # Avoid exec format errors on Apple Silicon when running amd64 images.
+        #
+        # platform.system() rather than os.uname(): os.uname does not
+        # exist on Windows at all, so this raised AttributeError inside
+        # pool startup and the sandbox silently never came up —
+        # "Could not start sandbox pool: module 'os' has no attribute
+        # 'uname'" in the server log, with code execution quietly
+        # unavailable for the rest of the session. platform.system()
+        # is the portable spelling and returns "Darwin" on macOS just
+        # the same.
+        if platform.system() == "Darwin" or "DOCKER_DEFAULT_PLATFORM" in os.environ:
             extra_kwargs["platform"] = os.environ.get("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
 
         # useradd UID 1000 is baked into mrpl-sandbox:combined

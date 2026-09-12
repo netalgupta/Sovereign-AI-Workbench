@@ -58,3 +58,10 @@ backend/audit/*.jsonl
 # files already tracked in the corpus directories. Regenerate with
 #   python frontend/standalone/build_console.py
 frontend/standalone/workbench_console.html
+
+# Watched-source config: absolute paths from ONE machine. It was
+# committed with another developer's checkout baked in
+# (C:\SIH\..., plus two unrelated personal projects indexed during
+# testing), which pointed every default at a directory that does not
+# exist here. Machine-local state, like document_registry/ and audit/.
+backend/evaluation/configured_sources.json

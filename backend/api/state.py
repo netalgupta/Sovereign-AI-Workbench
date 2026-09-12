@@ -139,11 +139,27 @@ class PipelineState:
                     )
         return self._store, self._chunks
 
-    def ingest_path(self, target_path: str | Path) -> tuple[int, list[dict]]:
+    def ingest_path(
+        self, target_path: str | Path, job_id: str | None = None
+    ) -> tuple[int, list[dict]]:
         """Chunk, embed, and index a file or folder into the active VectorStore.
 
         Returns (total_chunks_added, list_of_document_details).
+
+        When `job_id` is given, every document's stage transition is
+        reported to the progress tracker so a UI can show WHICH file is
+        being worked on and at WHAT stage. Without that, a folder ingest
+        is a spinner: the work happens inside one call that returns only
+        when everything is finished, which on a folder of scans is
+        minutes of silence.
         """
+        from backend.ingestion.ingestion_progress import DocumentStage, get_tracker
+
+        tracker = get_tracker() if job_id else None
+
+        def _stage(file_path, stage, **kw):
+            if tracker:
+                tracker.set_stage(job_id, str(file_path), stage, **kw)
         from backend.ingestion.document_ingestion import ingest_document
         from backend.ingestion.document_types import detect_document_type
         from backend.ingestion.embeddings import embed_texts
@@ -173,12 +189,20 @@ class PipelineState:
         details = []
 
         for f in files:
+            _stage(f, DocumentStage.EXTRACTING)
             try:
                 type_info = detect_document_type(str(f))
                 chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
             except Exception as exc:
+                # Reported as a terminal FAILED state with the reason, not
+                # skipped quietly. A folder ingest that silently drops
+                # three unreadable PDFs and reports success is what makes
+                # people distrust the corpus later, when an answer is
+                # missing and nobody knows why.
+                _stage(f, DocumentStage.FAILED, detail=f"{type(exc).__name__}: {exc}")
                 details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
                 continue
+            _stage(f, DocumentStage.CHUNKING, chunks=len(chunks))
 
             if not chunks:
                 from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
@@ -199,7 +223,9 @@ class PipelineState:
                 ]
 
             if chunks:
+                _stage(f, DocumentStage.EMBEDDING, chunks=len(chunks))
                 vectors = embed_texts([c.text for c in chunks])
+                _stage(f, DocumentStage.INDEXING)
                 store.add_chunks(chunks, vectors)
                 with self._lock:
                     self._chunks.extend(chunks)
@@ -216,6 +242,7 @@ class PipelineState:
                     "chunks": len(chunks),
                     "document_type": type_info.detected_type,
                 })
+                _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
 
         return total_chunks, details
 

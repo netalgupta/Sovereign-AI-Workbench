@@ -561,22 +561,142 @@ def browse_and_add_files() -> dict:
 
 
 @router.post("/sources/ingest")
-def ingest_source_endpoint(body: IngestPathRequest) -> dict:
-    """Explicit endpoint to chunk, embed, and index a file or directory."""
+def ingest_source_endpoint(body: IngestPathRequest, background: bool = Query(False)) -> dict:
+    """Chunk, embed, and index a file or directory.
+
+    SYNCHRONOUS BY DEFAULT, deliberately. Returning immediately would be
+    the cleaner API, but the existing frontend awaits this call and shows
+    its spinner until it resolves — flipping the default would make the
+    UI report "done" the instant the job was queued, while indexing was
+    still running. A wrong completion is worse than a slow one.
+
+    Progress is available EITHER WAY: a job is registered before any work
+    starts and updated per document, so a UI can poll
+    /api/ingestion/{job_id} on a second connection while its own POST is
+    still in flight. That is what turns the spinner into "extracting
+    SOP-114.docx, 3 of 14 done, ~2 min left" without changing this
+    contract at all.
+
+    Pass background=true to return immediately with just the job_id, once
+    the caller polls rather than awaits.
+    """
+    import threading
+
+    from backend.ingestion.ingestion_progress import get_tracker
+
     state = get_state()
-    try:
-        total_chunks, details = state.ingest_path(body.path)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Ingestion failed: {exc}") from exc
+    root = Path(body.path).resolve()
+    if not root.exists():
+        raise HTTPException(404, detail=f"Path does not exist on disk: {body.path}")
+
+    # Enumerate up front, with the SAME filter ingest_path uses, so the
+    # job knows its full worklist before any slow work starts. A total
+    # that grows as the job runs makes "3 of 5" meaningless.
+    if root.is_file():
+        files = [root]
+    else:
+        files = sorted(
+            f for f in root.rglob("*")
+            if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
+        )
+    if not files:
+        raise HTTPException(400, detail=f"No ingestible files found under {body.path}")
+
+    job = get_tracker().create(str(root), files)
+
+    def _run():
+        try:
+            state.ingest_path(body.path, job_id=job.job_id)
+            get_tracker().finish(job.job_id)
+        except Exception as exc:  # noqa: BLE001 — recorded on the job, not lost to a thread
+            get_tracker().finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+    if not background:
+        total_chunks, details = 0, []
+        try:
+            total_chunks, details = state.ingest_path(body.path, job_id=job.job_id)
+            get_tracker().finish(job.job_id)
+        except FileNotFoundError as exc:
+            get_tracker().finish(job.job_id, error=str(exc))
+            raise HTTPException(404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            get_tracker().finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+            raise HTTPException(500, detail=f"Ingestion failed: {exc}") from exc
+
+        # The original response shape, unchanged -- existing callers and
+        # tests depend on total_chunks/documents/message being here.
+        # job_id is additive, so a caller that wants the per-document
+        # record can still fetch it afterwards.
+        return {
+            "success": True,
+            "job_id": job.job_id,
+            "total_chunks": total_chunks,
+            "documents": details,
+            "message": (
+                f"Successfully ingested {len(details)} document(s): {total_chunks} chunks "
+                "created, embedded, and indexed into FAISS."
+            ),
+        }
+
+    # daemon: a half-finished ingest must not keep the process alive on
+    # shutdown. Work already indexed is kept; the rest is reported as
+    # unfinished rather than silently dropped.
+    threading.Thread(target=_run, name=f"ingest-{job.job_id}", daemon=True).start()
 
     return {
         "success": True,
-        "total_chunks": total_chunks,
-        "documents": details,
-        "message": f"Successfully ingested {len(details)} document(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+        "job_id": job.job_id,
+        "total_documents": len(files),
+        "state": "running",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Ingesting {len(files)} document(s). Poll for per-document progress.",
     }
+
+
+@router.get("/ingestion/{job_id}")
+def ingestion_status(job_id: str, documents: bool = Query(True)) -> dict:
+    """Live status of one ingestion job.
+
+    Reports counts and the CURRENT document rather than a percentage.
+    Per-document cost spans orders of magnitude here — a 2KB text file is
+    milliseconds, a 40-page scan is minutes of OCR — so a fraction of
+    files looks precise and misleads.
+    """
+    from backend.ingestion.ingestion_progress import get_tracker
+
+    job = get_tracker().get(job_id)
+    if job is None:
+        raise HTTPException(404, detail=f"No ingestion job {job_id!r}")
+
+    payload = job.summary()
+    if documents:
+        payload["documents"] = [
+            {
+                "name": d.name,
+                "path": d.path,
+                "suffix": d.suffix,
+                "byte_size": d.byte_size,
+                "stage": d.stage.value,
+                "chunks": d.chunks,
+                "seconds": d.seconds,
+                "detail": d.detail,
+            }
+            for d in job.documents
+        ]
+    return payload
+
+
+@router.get("/ingestion")
+def ingestion_jobs(limit: int = Query(10, ge=1, le=20)) -> dict:
+    """Recent ingestion jobs, newest first.
+
+    Finished jobs are retained so a user who opens the panel afterwards
+    can still see what happened — a result that vanishes when it
+    completes cannot be read.
+    """
+    from backend.ingestion.ingestion_progress import get_tracker
+
+    return {"jobs": [j.summary() for j in get_tracker().recent(limit)]}
 
 
 @router.get("/corpus")

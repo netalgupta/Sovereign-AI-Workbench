@@ -18,6 +18,8 @@ never a legitimate cross-origin caller from anywhere else.
 import logging
 from contextlib import asynccontextmanager
 
+import logging
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -69,6 +71,32 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
+
+# ---------------------------------------------------------------------
+# Quiet the poll endpoints in the access log.
+#
+# The frontend polls /api/network/status about once a second for the
+# zero-egress monitor bar, and /api/ingestion/{id} several times a second
+# while a folder is being indexed. At one access-log line each, they bury
+# every line that actually matters -- a failing ingest, a 403 from the
+# approval gate, a 503 from a dead Neo4j -- under thousands of 200s.
+#
+# Filtered at the LOG layer, not by making the endpoints quieter: the
+# requests are legitimate and should still happen, and anything that is
+# not a 2xx still comes through, because a poll endpoint that starts
+# failing is exactly when you want to see it.
+class _QuietPolls(logging.Filter):
+    NOISY_PATHS = ("/api/network/status", "/api/ingestion")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if not any(path in message for path in self.NOISY_PATHS):
+            return True
+        # Keep anything that is not a plain success.
+        return not any(f'" {code}' in message for code in ("200", "304"))
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
 
 app.include_router(router)
 
