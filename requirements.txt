@@ -35,3 +35,10 @@ sentence-transformers>=3.3
 # Test-only
 pytest>=8.0
 responses>=0.25
+
+# Sandbox execution engine (CARD 04) and the zero-egress network monitor
+# (CARD 07). Added after a merge landed the code without the deps: a
+# fresh clone failed at import, and because the tool catalog imports the
+# sandbox, it took every tool test down with it.
+docker==7.2.0
+psutil==7.0.0

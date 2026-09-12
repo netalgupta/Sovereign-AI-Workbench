@@ -71,7 +71,41 @@ from backend.retrieval.vector_store import VectorStore
 # embeddings encode topic, not entity identity, so they cannot reliably
 # catch a plausible-but-absent tag. Catching those needs entity-level
 # checking against the graph, which this gate does not attempt.
-CONFIDENCE_THRESHOLD = 0.30
+# THE THRESHOLD DEPENDS ON WHICH EMBEDDER IS RUNNING, because the two
+# produce similarity on completely different scales. A single global
+# number is only ever correct for one of them.
+#
+# This was learned the hard way during the orchestrator merge. The value
+# had been lowered 0.60 -> 0.30 so the gate would stop refusing
+# everything on a machine without the model cached. That was a rational
+# response to a real symptom, but on a machine WITH the model it inverts
+# the safety property: measured out-of-corpus similarity bottoms out at
+# 0.344, so a 0.30 floor passes literally everything — the same dead
+# gate NFR-4 was fixed for, reintroduced by a constant.
+#
+#   semantic (bge-large): in-corpus 0.636-0.795, out 0.344-0.580.
+#       0.60 sits in the measured gap.
+#   hash fallback: vectors are bag-of-words projections with no semantic
+#       content, so scores are far lower and compressed. 0.30 is an
+#       empirical floor, NOT a calibrated one — on this backend the gate
+#       is a coarse filter, not a grounding guarantee, because hash
+#       vectors cannot distinguish "about this topic" from "shares
+#       vocabulary with it".
+_THRESHOLD_BY_BACKEND = {
+    "bge-large-en-v1.5": 0.60,
+    "deterministic-hash": 0.30,
+}
+
+# Kept as the documented default for the real model, so existing readers
+# and reports still resolve a number.
+CONFIDENCE_THRESHOLD = 0.60
+
+
+def confidence_threshold() -> float:
+    """The refusal floor for whichever embedder is actually running."""
+    from backend.ingestion.embeddings import active_backend
+
+    return _THRESHOLD_BY_BACKEND.get(active_backend(), CONFIDENCE_THRESHOLD)
 
 
 class GroundedRetrievalResult(BaseModel):
@@ -106,7 +140,7 @@ def retrieve_with_grounding_check(
     dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
     best_similarity = max((score for _fid, score in dense_hits), default=0.0)
 
-    if best_similarity < CONFIDENCE_THRESHOLD:
+    if best_similarity < confidence_threshold():
         return GroundedRetrievalResult(
             found=False, chunks=[], reason="not found in the provided corpus"
         )

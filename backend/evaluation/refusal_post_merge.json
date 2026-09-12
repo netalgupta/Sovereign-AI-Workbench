@@ -1,0 +1,204 @@
+{
+  "threshold": 0.6,
+  "total": 16,
+  "total_refused": 8,
+  "by_group": {
+    "in_scope": {
+      "n": 5,
+      "refused": 0
+    },
+    "adjacent": {
+      "n": 4,
+      "refused": 1
+    },
+    "off_domain": {
+      "n": 3,
+      "refused": 3
+    },
+    "unrelated": {
+      "n": 4,
+      "refused": 4
+    }
+  },
+  "distinct_normalized_values": [
+    1.0
+  ],
+  "rows": [
+    {
+      "group": "in_scope",
+      "question": "What is the WABT end-of-run trigger temperature for HCU-2?",
+      "refused": false,
+      "reason": null,
+      "top_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "raw_top_score": 0.03252,
+      "raw_min_score": 0.00935,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "in_scope",
+      "question": "What caused the off-spec batch H110F-0847?",
+      "refused": false,
+      "reason": null,
+      "top_source": "Novolen_Batch_QA_Report_Aug2026.pdf",
+      "raw_top_score": 0.03089,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "in_scope",
+      "question": "Which Kero Merox sample exceeded the sulphur spec limit?",
+      "refused": false,
+      "reason": null,
+      "top_source": "Sulphur_Spec_Compliance_LabSheet.xlsx",
+      "raw_top_score": 0.03279,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "in_scope",
+      "question": "Why was Tank TK-K-03 at Kasargod held out of service?",
+      "refused": false,
+      "reason": null,
+      "top_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "raw_top_score": 0.03279,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "in_scope",
+      "question": "What is the 8-hour TWA benzene exposure limit?",
+      "refused": false,
+      "reason": null,
+      "top_source": "Aromatic_Complex_Benzene_Safety_Circular.docx",
+      "raw_top_score": 0.03279,
+      "raw_min_score": 0.00935,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the WABT trigger temperature for hydrocracker HCU-9?",
+      "refused": false,
+      "reason": null,
+      "top_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "raw_top_score": 0.03227,
+      "raw_min_score": 0.00935,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "adjacent",
+      "question": "What caused the off-spec batch Z999X-0001?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03132,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "adjacent",
+      "question": "Why was Tank TK-Q-88 at Mangalore taken out of service?",
+      "refused": false,
+      "reason": null,
+      "top_source": "Correspondence_Depot_HQ_Thread_Kasargod.docx",
+      "raw_top_score": 0.03279,
+      "raw_min_score": 0.00935,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "adjacent",
+      "question": "What is the catalyst changeout procedure for the Coker unit?",
+      "refused": false,
+      "reason": null,
+      "top_source": "SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx",
+      "raw_top_score": 0.03279,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the recommended torque for a Boeing 737 landing gear bolt?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03125,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "off_domain",
+      "question": "What is the maximum core temperature for a pressurised water reactor?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03102,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "off_domain",
+      "question": "How many megawatts does the Bhakra Nangal dam generate?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03016,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the best way to poach an egg?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.02903,
+      "raw_min_score": 0.00935,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "unrelated",
+      "question": "How far is Proxima Centauri from Earth?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.0308,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "unrelated",
+      "question": "Who won the 2018 FIFA World Cup?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03252,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    },
+    {
+      "group": "unrelated",
+      "question": "What is the plot of Pride and Prejudice?",
+      "refused": true,
+      "reason": "not found in the provided corpus",
+      "top_source": null,
+      "raw_top_score": 0.03202,
+      "raw_min_score": 0.00926,
+      "normalized_top": 1.0,
+      "candidate_pool": 48
+    }
+  ]
+}

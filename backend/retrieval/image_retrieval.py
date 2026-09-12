@@ -39,7 +39,24 @@ from backend.ingestion.image_store import ImageRecord, ImageStore
 # in grounded_retrieval.py. Tuned conservatively: this threshold gates
 # an ATTACHMENT, so a miss costs the user a follow-up question while a
 # false positive puts a wrong diagram in front of an engineer.
-MIN_IMAGE_MATCH_SIMILARITY = 0.15
+# Same backend-dependence as the confidence gate, and the same history:
+# lowered to 0.15 so schematics would match at all on hash vectors. With
+# the real model that floor matches almost anything, which turns "show me
+# the P&ID" into "here is some image" — and putting the wrong diagram in
+# front of an engineer is worse than attaching none.
+_MIN_SIMILARITY_BY_BACKEND = {
+    "bge-large-en-v1.5": 0.35,
+    "deterministic-hash": 0.15,
+}
+
+MIN_IMAGE_MATCH_SIMILARITY = 0.35
+
+
+def min_image_match_similarity() -> float:
+    """The match floor for whichever embedder is actually running."""
+    from backend.ingestion.embeddings import active_backend
+
+    return _MIN_SIMILARITY_BY_BACKEND.get(active_backend(), MIN_IMAGE_MATCH_SIMILARITY)
 
 
 class ImageMatch(BaseModel):
@@ -81,7 +98,7 @@ def select_images_for_request(
     image_ids: list[str],
     store: ImageStore,
     top_k: int = 1,
-    min_similarity: float = MIN_IMAGE_MATCH_SIMILARITY,
+    min_similarity: float | None = None,
 ) -> list[ImageMatch]:
     """Rank `image_ids` by how well each matches `request`.
 
@@ -95,6 +112,9 @@ def select_images_for_request(
     offered twice.
     """
     from backend.ingestion.embeddings import embed_texts
+
+    if min_similarity is None:
+        min_similarity = min_image_match_similarity()
 
     unique_ids = list(dict.fromkeys(image_ids))
     records = [(i, store.get(i)) for i in unique_ids]
