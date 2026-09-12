@@ -133,6 +133,54 @@ class VectorStore:
         scores, ids = self.index.search(query, top_k)
         return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
 
+    def get_neighbours(
+        self, source_document: str, chunk_index: int, window: int = 1
+    ) -> list["StoredChunk"]:
+        """Chunks either side of `chunk_index` in the same document.
+
+        WHY THIS IS NEEDED. Retrieval scores chunks independently, so it
+        returns the single passage that best matches the query and
+        nothing around it. For a procedure that is the wrong unit of
+        retrieval. Measured on the real corpus:
+
+            "What is the SOP for Hydrocracker"
+              -> one SOP-114 chunk retrieved
+              -> answer listed 3 steps
+
+            "Summarise SOP-114-Rev3"
+              -> two SOP-114 chunks retrieved (4.3 happened to rank)
+              -> answer listed all 8 steps, with parameters
+
+        Same document, same procedure, same model. The difference was
+        purely which chunks happened to score. The answer was not
+        wrong -- it was truncated by the retriever, and nothing in the
+        output said so, which is the dangerous part: a procedure
+        missing steps 4 through 8 reads exactly like a complete one.
+
+        Neighbouring chunks are cheap to fetch (an indexed lookup, no
+        embedding, no scoring) and are the passages a human would read
+        next. This is the standard repair for chunk-boundary truncation.
+        """
+        rows = self._conn.execute(
+            "SELECT faiss_id, text, source_document, document_type, page_number, "
+            "chunk_index, ingestion_date FROM chunks "
+            "WHERE source_document = ? AND chunk_index BETWEEN ? AND ? "
+            "ORDER BY chunk_index",
+            (source_document, chunk_index - window, chunk_index + window),
+        ).fetchall()
+        return [
+            StoredChunk(
+                faiss_id=row[0],
+                text=row[1],
+                source_document=row[2],
+                document_type=row[3],
+                page_number=row[4],
+                chunk_index=row[5],
+                ingestion_date=row[6],
+            )
+            for row in rows
+        ]
+
     def all_chunk_texts(self) -> list[tuple[int, str]]:
         """[(faiss_id, text), ...] for every stored chunk, ordered by
         faiss_id. Needed by CARD 09's BM25 sparse index, which must be

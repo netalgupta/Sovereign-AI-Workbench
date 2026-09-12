@@ -104,7 +104,35 @@ DEFAULT_NUM_GPU = int(os.environ.get("WORKBENCH_NUM_GPU", "99"))
 # instructions), raise this deliberately and re-check residency with
 # `ollama ps` -- silently overflowing the window truncates the SOURCES
 # block, which would drop citations without any error.
-GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "3072"))
+# 6144, RAISED FROM 3072 AFTER A SELF-INFLICTED REGRESSION.
+#
+# 3072 was sized against a measured ~2000-token prompt. Then neighbour
+# expansion doubled the number of retrieved chunks (5 -> 10, by design:
+# it repairs procedures truncated at a chunk boundary), and the same
+# prompt became 2986 tokens against a 3072 window.
+#
+# It did not overflow, which is what made it hard to see. It left ~86
+# tokens for the answer. When the window fills, Ollama drops from the
+# START of the prompt -- and the retrieved value sat at token 57. The
+# model was answering from a prompt whose grounding instructions and
+# first sources had been silently cut.
+#
+# The symptom was a correct question getting "The information provided
+# does not contain any data related to MFI for Homopolymer H030SG" while
+# the trace showed 10 passages retrieved and the value present in them.
+# Retrieval was right; the prompt the model actually saw was not the
+# prompt that was built.
+#
+# This is exactly the failure the previous comment here warned about --
+# "if a future change grows the prompt, raise this deliberately" -- and
+# it was introduced two commits later by the person who wrote the
+# warning. A note is not a mechanism.
+#
+# 6144 holds the measured 2986-token prompt plus a long answer with
+# room to spare. The VRAM argument for a tight window is moot in any
+# case: a 7B generation model and the verifier do not co-reside on an
+# 8 GB card at any context size, so shaving the KV cache bought nothing.
+GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "6144"))
 
 DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 
@@ -130,8 +158,28 @@ DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 SHORT_PROMPT_NUM_CTX = int(os.environ.get("WORKBENCH_SHORT_CTX", "3072"))
 
 
+# Deterministic by default.
+#
+# Ollama defaults to temperature 0.8. Measured: the SAME question
+# ("compare batches for H030SG vs H110F and total them") ran twice
+# through the agent loop and produced 2 tool calls / 25.9s / the correct
+# answer 38, then 6 tool calls / 42.5s / an answer about a completely
+# different quantity. Sampling variance in tool SELECTION compounds --
+# a different first choice becomes the context for every choice after
+# it, so small randomness at the top becomes a different conversation.
+#
+# For a workbench whose claim is that answers are traceable, the same
+# question giving materially different work is its own problem,
+# separate from whether either answer was right.
+DEFAULT_TEMPERATURE = float(os.environ.get("WORKBENCH_TEMPERATURE", "0"))
+
+
 def default_options() -> dict:
-    return {"num_gpu": DEFAULT_NUM_GPU, "num_ctx": GENERATION_NUM_CTX}
+    return {
+        "num_gpu": DEFAULT_NUM_GPU,
+        "num_ctx": GENERATION_NUM_CTX,
+        "temperature": DEFAULT_TEMPERATURE,
+    }
 
 
 def short_prompt_options() -> dict:

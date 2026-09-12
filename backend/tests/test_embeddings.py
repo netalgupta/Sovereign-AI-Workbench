@@ -108,3 +108,71 @@ def test_similar_sentences_score_higher_than_unrelated_ones():
     sim_to_unrelated = float(np.dot(query, unrelated))
 
     assert sim_to_similar > sim_to_unrelated
+
+
+def test_a_failed_load_is_retried_not_abandoned_forever():
+    """A transient failure must not degrade the process permanently.
+
+    `_load_failed = True` used to be set once and never cleared, so a
+    single error disabled semantic retrieval for the lifetime of the
+    process. It happened for real: the server was running while a CUDA
+    torch install replaced torch's DLLs, one load failed mid-swap, and
+    every query afterwards silently used hash vectors.
+
+    The effect was total and invisible. Asked for "assignments and tasks
+    for advay", retrieval returned two other people's files and the
+    answer described a third person. Every vector still had the right
+    shape, every search still returned results, every answer still had
+    citations.
+    """
+    import time
+
+    from backend.ingestion import embeddings
+
+    original_model = embeddings._model
+    original_failed = embeddings._load_failed
+    original_at = embeddings._last_failure_at
+    try:
+        # Simulate a failure that happened just now.
+        embeddings._model = None
+        embeddings._load_failed = True
+        embeddings._last_failure_at = time.time()
+
+        # Inside the backoff window: does not hammer the loader.
+        assert embeddings._get_model() is None
+
+        # Past the window: retries rather than staying degraded.
+        embeddings._last_failure_at = time.time() - embeddings._RETRY_AFTER_SECONDS - 1
+        model = embeddings._get_model()
+        assert model is not None, (
+            "a failed load must be retried after the backoff window, not "
+            "abandoned for the lifetime of the process"
+        )
+        assert embeddings.active_backend() == embeddings.SEMANTIC_BACKEND
+    finally:
+        embeddings._model = original_model
+        embeddings._load_failed = original_failed
+        embeddings._last_failure_at = original_at
+
+
+def test_degradation_is_reportable():
+    """Degraded retrieval must be visible, not inferable from one log line.
+
+    The only evidence of a whole session running on hash vectors was a
+    trace line reading "embedding backend: deterministic-hash" among
+    hundreds of others. /api/health and the per-turn trace now both
+    report it.
+    """
+    from backend.ingestion import embeddings
+
+    original = embeddings._active_backend
+    try:
+        embeddings._active_backend = embeddings.SEMANTIC_BACKEND
+        assert embeddings.degraded_reason() is None
+
+        embeddings._active_backend = embeddings.FALLBACK_BACKEND
+        reason = embeddings.degraded_reason()
+        assert reason, "a degraded backend must explain itself"
+        assert "hash" in reason.lower()
+    finally:
+        embeddings._active_backend = original

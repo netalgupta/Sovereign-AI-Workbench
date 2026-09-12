@@ -116,6 +116,7 @@ export const useChatStore = create((set, get) => ({
       plan = [],
       toolCallEvents = [],
       verification = null,
+      userRequest = '',
     } = opts
     const message = {
       id: generateSessionId(),
@@ -127,6 +128,7 @@ export const useChatStore = create((set, get) => ({
       plan,
       toolCallEvents,
       verification,
+      userRequest,
       timestamp: now(),
     }
     set((state) => ({ messages: [...state.messages, message] }))

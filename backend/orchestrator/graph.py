@@ -484,9 +484,57 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     if is_corpus_question(state.original_request):
         return {"draft_output": answer_corpus_question(state.original_request)}
 
+    # Conversation memory: resolve the follow-up for RETRIEVAL, and hand
+    # the model prior turns as labelled context. Wrapped because a
+    # memory failure must degrade to a stateless (but correct) answer
+    # rather than break the turn -- memory is an improvement, not a
+    # dependency.
+    from backend.observability import turn_log as T
+
+    search_query = None
+    conversation_context = ""
+    try:
+        from backend.memory import resolver, working
+
+        memory = working.load(state.session_id)
+        if not memory.is_empty:
+            resolved = resolver.resolve(state.original_request, memory)
+            if resolved.changed:
+                search_query = resolved.search_query
+                T.kv("memory", f"resolved follow-up: +{resolved.added_terms}")
+            conversation_context = memory.context_block()
+            if memory.focus_documents:
+                T.kv("focus documents", memory.focus_documents[:3])
+
+        # Durable preferences and identity, across all sessions. Appended
+        # after the conversation block and labelled the same way: these
+        # shape HOW the answer is written, never WHAT it claims.
+        from backend.memory.long_term import get_long_term
+
+        durable = get_long_term().context_block()
+        if durable:
+            conversation_context += durable
+            T.kv("long-term facts", "applied")
+
+        # Offer the user's own message for durable storage. Most are not
+        # facts and are rejected; nothing is inferred or guessed.
+        try:
+            get_long_term().remember(
+                state.original_request, source_session=state.session_id
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        T.warn(f"memory unavailable ({type(exc).__name__}); answering statelessly")
+
     try:
         store, _ = get_state().ensure_corpus()
-        answer = generate_grounded_answer(store, state.original_request)
+        answer = generate_grounded_answer(
+            store,
+            state.original_request,
+            search_query=search_query,
+            conversation_context=conversation_context,
+        )
     except Exception as exc:  # noqa: BLE001
         # A synthesis failure is reported as a failure. The previous code
         # would have fallen through to the reassuring template, which is
@@ -597,7 +645,40 @@ def verify_node(state: AgentState) -> dict[str, Any]:
         verify_output,
     )
 
+    import os
+
     from backend.observability import turn_log as T
+
+    # SELF-VERIFICATION IS OFF THE CRITICAL PATH BY DEFAULT.
+    #
+    # It is a second LLM call on a different model, and on an 8 GB card
+    # that means evicting the generation model and loading the verifier
+    # from scratch. Measured on real turns:
+    #
+    #     verify_output   9.0s   (verifier already resident)
+    #     verify_output 102.0s   (reload under memory pressure)
+    #
+    # 102 seconds added to a 70-second turn, for a check the user did not
+    # ask for and cannot see until it finishes. Nobody should wait that
+    # long to read an answer that was ready at 25 seconds, and the
+    # variance is the worst part: the same question costs 70s or 175s
+    # depending on what else happened to be resident.
+    #
+    # The check itself is worth keeping -- it is AGENTS_SPEC §5 and it
+    # catches real problems. What is wrong is running it inline, every
+    # time, before the answer is allowed out. So it now runs ON DEMAND
+    # via POST /api/verify, behind a button next to the answer: the user
+    # reads the reply immediately and asks for a check when the claim
+    # matters to them.
+    #
+    # Set WORKBENCH_VERIFY_INLINE=1 to restore the blocking behaviour
+    # (useful for evaluation harnesses that want every turn verified).
+    if os.environ.get("WORKBENCH_VERIFY_INLINE", "").strip().lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        T.section("SELF-VERIFICATION")
+        T.note(T.DIM("  deferred - run on demand via POST /api/verify"))
+        return {}
 
     T.section("SELF-VERIFICATION")
     try:

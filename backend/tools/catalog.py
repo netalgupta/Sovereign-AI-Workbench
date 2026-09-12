@@ -24,7 +24,14 @@ from backend.tools.registry import tool
 
 # Importing these modules is what registers the tools defined with the
 # decorator inline (numeric_stats, plotting).
-from backend.tools import mrpl_process, numeric_stats, plotting  # noqa: F401
+# retrieval_tools registers search_documents and list_documents.
+# Until it existed the registry had a "retrieval" category containing
+# only find_contradictions and select_images_for_request -- so the
+# category looked populated while the agent had no way to SEARCH the
+# corpus at all. Given the full registry and asked for a value that is
+# printed in the corpus, the model reached for find_contradictions, got
+# an empty list, and reported that no documents contained it.
+from backend.tools import mrpl_process, numeric_stats, plotting, retrieval_tools  # noqa: F401
 from backend.tools.documents import draft_docx  # noqa: F401
 
 

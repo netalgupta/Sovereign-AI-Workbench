@@ -8,110 +8,126 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 
 ## A. Vision & Document Understanding — Owner: Sahil (build), Aryan (model integration)
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 1 | Printed OCR (PaddleOCR) | 🔴 | Core to FR-7, FR-12 |
-| 2 | Handwritten OCR (TrOCR/VLM fallback) | 🔴 | Explicit PS requirement |
-| 3 | Image super-resolution (Real-ESRGAN) | 🟡 | Improves OCR accuracy on poor scans |
-| 4 | Denoise/deskew/binarize (OpenCV) | 🔴 | Cheap, always run before OCR |
-| 5 | Layout & table extraction (LayoutLMv3) | 🟡 | Structures inspection report tables |
-| 6 | P&ID symbol/connection extraction (Qwen2.5-VL) | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
-| 62 | Chart image description (Qwen2.5-VL) | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
-| 63 | Knowledge graph explorer (UI) | 🟡 | Full-page force-directed viewer over the real Neo4j graph — drag, zoom, filter by label, search, and click a node to see every property stored on it and every relationship attached. Shows the edge TYPE explicitly, because GRAPH_SPEC.md §8's REFERENCES (merely mentioned) vs APPLIES_TO (explicitly in scope) distinction is exactly what a reviewer needs to see and cannot infer from an anonymous line. Fills the `/graph` route already reserved in FRONTEND.md §2. Owner: Aryan (implementation)/Netal (route + polish) |
-| 64 | Knowledge base inspector (UI) | 🟡 | What the retriever actually holds, at `/sources`: every chunk with its metadata and nearest neighbours in embedding space, and every image with each distinct understanding produced for it — OCR text (what really entered the corpus), the CARD 13 chart reading, and ground truth where the chart was generated for testing. Chart readings are labelled ESTIMATE and invented values are called out by name, because measurement showed the model stating figures for charts with no printed numbers at all (CLAUDE.md hard constraint #3). Owner: Aryan |
-| 65 | Agent tool registry | 🔴 | The list the orchestrator reads. Derives each tool's JSON schema from its own type hints and docstring (a hand-maintained schema drifts silently the first time a parameter is renamed), dispatches by name with validation so a hallucinated tool name is correctable rather than fatal, and enforces the safety properties centrally: `requires_approval` (hard constraint #4) is checked by the DISPATCHER, so the next person to add a file-writing tool cannot forget the gate. `is_estimate` and `computes_numbers` let a caller tell a model's guess from an executed calculation without reading each tool. Owner: Aryan |
-| 66 | Trend analysis and threshold projection (NumPy) | 🔴 | Row 28's numerical tier. Fits a least-squares trend to readings (WABT creep, PSA purity drift, sulphur against spec) and projects to a threshold, returning the assumption the projection rests on — "end-of-run in 47 days" read without that caveat is a maintenance decision made on an unstated assumption. Calls "flat" when the fit is unreliable rather than reporting the sign of a line fitted through noise. Owner: Aryan |
-| 67 | Human approval gate (implementation) | 🔴 | NFR-6 / hard constraint #4, made real. Approval is bound to a HASH OF THE EXACT ARGUMENTS (approving one file write must not authorise the next), is SINGLE-USE (or one approval silently authorises a retry loop), EXPIRES after 15 minutes (a decision made in a context that is gone should not still act), and shows the person a plain-language EFFECT rather than a function call — being shown `draft_docx({...})` is not informed consent. There is deliberately no auto-approve flag and no trusted-tools list. Owner: Aryan |
-| 68 | Append-only audit log | 🔴 | Every approval requested, granted, refused and executed, with who and when, in UTC. No update or delete path exists by construction — an audit log that can be edited is not evidence; a correction is a NEW entry referencing the earlier one. fsync per line, because a log entry lost to a crash during the action it describes implies the action never happened. Owner: Aryan |
-| 69 | Task planner (implementation) | 🔴 | FR-5 / AGENTS_SPEC §3-§4, the judge-facing plan graph. Prompt is §4 VERBATIM. The value is the validation around it: local models emit dependency graphs with dangling references, self-dependencies, duplicate step_ids and cycles, and every one of those produces a plan that LOOKS fine and then hangs at dispatch — indistinguishable from slow inference, the worst failure mode available. Each is repaired rather than dropped (the step is usually sound, only its stated ordering is wrong), so `validate_plan` always returns something that can actually start. Owner: Aryan |
-| 70 | Sub-agent dispatch + §6 contracts (implementation) | 🔴 | AGENTS_SPEC §6's allowed/forbidden table as CODE, not prose: each sub-agent gets a closed tool set and the dispatcher refuses anything outside it, so `vision_agent` cannot write a file because `draft_docx` is not reachable — not because it is trusted not to try. `dispatch` releases ALL ready steps at once (the point of depends_on) and marks them running so the same step is never handed out twice. `code_agent` refuses loudly pending Aditya's sandbox rather than reporting a step done without running it. Owner: Aryan |
-| 71 | Self-verification agent (implementation) | 🟡 | AGENTS_SPEC §5, prompt verbatim. Fails CLOSED: any unreadable verdict is treated as unverified, because defaulting to satisfied means a malformed response silently becomes a pass — the one direction this node must never fail in. After 2 re-plan cycles it produces a THIRD state, UNCONFIRMED, not a pass or a fail: an output that failed verification and is presented identically to one that passed makes verification actively harmful, since it creates confidence it did not earn. Owner: Aryan |
-| 15 | Contradiction detection across documents | 🟡 | **IMPLEMENTED** — `backend/retrieval/contradiction.py`. The hard part is false positives, not detection: a detector that flags legitimate variation gets switched off within a day and then catches nothing. Four non-contradictions are excluded by construction — same limit in different units (compared through Pint, so 10 ppm vs 0.001% does not fire), readings vs limits, dated time-series values, and different equipment sharing a word. Comparison is fully deterministic; no model decides whether two values disagree. Extraction is injectable (LLM for recall) but defaults to patterns, because a safety artifact whose contents change between runs on identical input is not one anybody can act on. Owner: Aryan |
-| 7 | Defect/anomaly detection (YOLOv8) | 🟡 | Public dataset fine-tune |
-| 8 | Photo-to-report matching | ⚪ | Registry-listed |
-| 9 | Document type classifier | 🔴 | Routes scans to correct pipeline |
-| 10 | Image diffing/change detection | ⚪ | Registry-listed |
-| 11 | Signature/stamp detection | ⚪ | Nice MRPL-approval-workflow touch, low priority |
-| 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
-| 61 | Voice note transcription (local speech-to-text) | 🟡 | **Team addition — not traceable to a PS26117 line.** Extends FR-7's document-modality handling to audio input (depot/HQ voice notes, shift handovers). Fully offline (faster-whisper, fetch-once/offline-forever pattern per `model_cache.py`). VIBECODING_SPEC.md CARD 12, Owner: Aryan. See REQUIREMENTS.md §6 for how this is kept honestly separate from PS-derived scope. |
+
+> **Owner and Status columns added.** The table previously had neither,
+> despite `CLAUDE.md` instructing every new tool to "Add a row to
+> TOOLS.md with owner and priority tier". The consequence was that rows
+> 38-41 — DOCX/XLSX/PPTX generation, the headline demo output under
+> FR-9 and FR-12 — were owned by nobody, and the only place ownership
+> was discussed was a slash in another person's assignment file
+> ("Aditya/Aryan trigger it").
+>
+> **Status is what is true today**, verified against the live tool
+> registry (17 tools registered via `backend/tools/catalog.py`) and the
+> running API, not against intent. A row marked `built` has a
+> registered implementation you can call through `POST /api/tools/call`
+> right now. See `docs/OWNERSHIP.md` for the full matrix and for the
+> layer split on file generation.
+
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 1 | Printed OCR (PaddleOCR) | Aryan | built | 🔴 | Core to FR-7, FR-12 |
+| 2 | Handwritten OCR (TrOCR/VLM fallback) | Aryan | built | 🔴 | Explicit PS requirement |
+| 3 | Image super-resolution (Real-ESRGAN) | Aryan | built | 🟡 | Improves OCR accuracy on poor scans |
+| 4 | Denoise/deskew/binarize (OpenCV) | Aryan | built | 🔴 | Cheap, always run before OCR |
+| 5 | Layout & table extraction (LayoutLMv3) | Aryan | built | 🟡 | Structures inspection report tables |
+| 6 | P&ID symbol/connection extraction (Qwen2.5-VL) | Aryan | not started | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
+| 62 | Chart image description (Qwen2.5-VL) | Aryan | built | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
+| 63 | Knowledge graph explorer (UI) | Aryan | built | 🟡 | Full-page force-directed viewer over the real Neo4j graph — drag, zoom, filter by label, search, and click a node to see every property stored on it and every relationship attached. Shows the edge TYPE explicitly, because GRAPH_SPEC.md §8's REFERENCES (merely mentioned) vs APPLIES_TO (explicitly in scope) distinction is exactly what a reviewer needs to see and cannot infer from an anonymous line. Fills the `/graph` route already reserved in FRONTEND.md §2. Owner: Aryan (implementation)/Netal (route + polish) |
+| 64 | Knowledge base inspector (UI) | Aryan | built | 🟡 | What the retriever actually holds, at `/sources`: every chunk with its metadata and nearest neighbours in embedding space, and every image with each distinct understanding produced for it — OCR text (what really entered the corpus), the CARD 13 chart reading, and ground truth where the chart was generated for testing. Chart readings are labelled ESTIMATE and invented values are called out by name, because measurement showed the model stating figures for charts with no printed numbers at all (CLAUDE.md hard constraint #3). Owner: Aryan |
+| 65 | Agent tool registry | Aryan | built | 🔴 | The list the orchestrator reads. Derives each tool's JSON schema from its own type hints and docstring (a hand-maintained schema drifts silently the first time a parameter is renamed), dispatches by name with validation so a hallucinated tool name is correctable rather than fatal, and enforces the safety properties centrally: `requires_approval` (hard constraint #4) is checked by the DISPATCHER, so the next person to add a file-writing tool cannot forget the gate. `is_estimate` and `computes_numbers` let a caller tell a model's guess from an executed calculation without reading each tool. Owner: Aryan |
+| 66 | Trend analysis and threshold projection (NumPy) | Aryan | built | 🔴 | Row 28's numerical tier. Fits a least-squares trend to readings (WABT creep, PSA purity drift, sulphur against spec) and projects to a threshold, returning the assumption the projection rests on — "end-of-run in 47 days" read without that caveat is a maintenance decision made on an unstated assumption. Calls "flat" when the fit is unreliable rather than reporting the sign of a line fitted through noise. Owner: Aryan |
+| 67 | Human approval gate (implementation) | Aditya | built | 🔴 | NFR-6 / hard constraint #4, made real. Approval is bound to a HASH OF THE EXACT ARGUMENTS (approving one file write must not authorise the next), is SINGLE-USE (or one approval silently authorises a retry loop), EXPIRES after 15 minutes (a decision made in a context that is gone should not still act), and shows the person a plain-language EFFECT rather than a function call — being shown `draft_docx({...})` is not informed consent. There is deliberately no auto-approve flag and no trusted-tools list. Owner: Aryan |
+| 68 | Append-only audit log | Aditya | built | 🔴 | Every approval requested, granted, refused and executed, with who and when, in UTC. No update or delete path exists by construction — an audit log that can be edited is not evidence; a correction is a NEW entry referencing the earlier one. fsync per line, because a log entry lost to a crash during the action it describes implies the action never happened. Owner: Aryan |
+| 69 | Task planner (implementation) | Aryan | built | 🔴 | FR-5 / AGENTS_SPEC §3-§4, the judge-facing plan graph. Prompt is §4 VERBATIM. The value is the validation around it: local models emit dependency graphs with dangling references, self-dependencies, duplicate step_ids and cycles, and every one of those produces a plan that LOOKS fine and then hangs at dispatch — indistinguishable from slow inference, the worst failure mode available. Each is repaired rather than dropped (the step is usually sound, only its stated ordering is wrong), so `validate_plan` always returns something that can actually start. Owner: Aryan |
+| 70 | Sub-agent dispatch + §6 contracts (implementation) | Aryan | built | 🔴 | AGENTS_SPEC §6's allowed/forbidden table as CODE, not prose: each sub-agent gets a closed tool set and the dispatcher refuses anything outside it, so `vision_agent` cannot write a file because `draft_docx` is not reachable — not because it is trusted not to try. `dispatch` releases ALL ready steps at once (the point of depends_on) and marks them running so the same step is never handed out twice. `code_agent` refuses loudly pending Aditya's sandbox rather than reporting a step done without running it. Owner: Aryan |
+| 71 | Self-verification agent (implementation) | Aryan | built | 🟡 | AGENTS_SPEC §5, prompt verbatim. Fails CLOSED: any unreadable verdict is treated as unverified, because defaulting to satisfied means a malformed response silently becomes a pass — the one direction this node must never fail in. After 2 re-plan cycles it produces a THIRD state, UNCONFIRMED, not a pass or a fail: an output that failed verification and is presented identically to one that passed makes verification actively harmful, since it creates confidence it did not earn. Owner: Aryan |
+| 15 | Contradiction detection across documents | Aryan | built | 🟡 | **IMPLEMENTED** — `backend/retrieval/contradiction.py`. The hard part is false positives, not detection: a detector that flags legitimate variation gets switched off within a day and then catches nothing. Four non-contradictions are excluded by construction — same limit in different units (compared through Pint, so 10 ppm vs 0.001% does not fire), readings vs limits, dated time-series values, and different equipment sharing a word. Comparison is fully deterministic; no model decides whether two values disagree. Extraction is injectable (LLM for recall) but defaults to patterns, because a safety artifact whose contents change between runs on identical input is not one anybody can act on. Owner: Aryan |
+| 7 | Defect/anomaly detection (YOLOv8) | Aryan | not started | 🟡 | Public dataset fine-tune |
+| 8 | Photo-to-report matching | Aryan | not started | ⚪ | Registry-listed |
+| 9 | Document type classifier | Aryan | not started | 🔴 | Routes scans to correct pipeline |
+| 10 | Image diffing/change detection | Aryan | not started | ⚪ | Registry-listed |
+| 11 | Signature/stamp detection | Aryan | not started | ⚪ | Nice MRPL-approval-workflow touch, low priority |
+| 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | Aryan | not started | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
+| 61 | Voice note transcription (local speech-to-text) | Aryan | built | 🟡 | **Team addition — not traceable to a PS26117 line.** Extends FR-7's document-modality handling to audio input (depot/HQ voice notes, shift handovers). Fully offline (faster-whisper, fetch-once/offline-forever pattern per `model_cache.py`). VIBECODING_SPEC.md CARD 12, Owner: Aryan. See REQUIREMENTS.md §6 for how this is kept honestly separate from PS-derived scope. |
 
 ## B. Knowledge & Retrieval (RAG/GraphRAG) — Owner: Aryan (core), Netal (UI)
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 12 | Hybrid dense+sparse retrieval | 🔴 | Core to FR-10 |
-| 13 | Entity/relationship extraction for graph | 🔴 | Needed for the signature graph query |
-| 14 | Knowledge graph store + query (Neo4j) | 🔴 | Pipeline-segment / valve-reference query, demoed against real segment names Mangalore–Hassan–Neriya–Devangonthi |
-| 15 | Contradiction detection across documents | 🟡 | Strong safety-relevant differentiator |
-| 16 | Version/revision tracking | 🟡 | SOP-currency checking |
-| 17 | Source-grounded citation on every claim | 🔴 | Non-negotiable per NFR-4 |
-| 18 | Correspondence/email summarization | 🟡 | Generic depot-to-HQ use case |
-| 19 | Cross-reference resolver | ⚪ | Registry-listed |
-| 57 | Aromatic Complex ↔ refinery cross-document reconciliation | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
-| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 12 | Hybrid dense+sparse retrieval | Aryan | built | 🔴 | Core to FR-10 |
+| 13 | Entity/relationship extraction for graph | Aryan | built | 🔴 | Needed for the signature graph query |
+| 14 | Knowledge graph store + query (Neo4j) | Aryan | built | 🔴 | Pipeline-segment / valve-reference query, demoed against real segment names Mangalore–Hassan–Neriya–Devangonthi |
+| 15 | Contradiction detection across documents | Aryan | built | 🟡 | Strong safety-relevant differentiator |
+| 16 | Version/revision tracking | Netal | not started | 🟡 | SOP-currency checking |
+| 17 | Source-grounded citation on every claim | Aryan | built | 🔴 | Non-negotiable per NFR-4 |
+| 18 | Correspondence/email summarization | Netal | not started | 🟡 | Generic depot-to-HQ use case |
+| 19 | Cross-reference resolver | Aryan | not started | ⚪ | Registry-listed |
+| 57 | Aromatic Complex ↔ refinery cross-document reconciliation | Aryan | not started | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
+| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | Netal | not started | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
 
 ## C. Reasoning, Planning & Orchestration — Owner: Aryan (logic), Aditya (infra)
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 20 | Task planner with visible plan graph | 🔴 | FR-5, judge-facing visual |
-| 21 | Multi-model router | 🔴 | FR-3, FR-11 |
-| 22 | Sub-agent spawning per modality | 🔴 | Core architecture |
-| 23 | Self-verification agent | 🟡 | Quality/trust booster |
-| 24 | Human approval gate | 🔴 | NFR-6, safety-critical |
-| 25 | Long-running task checkpointing | ⚪ | Registry-listed |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 20 | Task planner with visible plan graph | Aryan | built | 🔴 | FR-5, judge-facing visual |
+| 21 | Multi-model router | Aryan | built | 🔴 | FR-3, FR-11 |
+| 22 | Sub-agent spawning per modality | Aryan | built | 🔴 | Core architecture |
+| 23 | Self-verification agent | Aryan | not started | 🟡 | Quality/trust booster |
+| 24 | Human approval gate | Aryan | not started | 🔴 | NFR-6, safety-critical |
+| 25 | Long-running task checkpointing | Aryan | not started | ⚪ | Registry-listed |
 
 ## D. Computation — Owner: Aryan (tool wiring), Sahil (trace UI)
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 26 | SymPy symbolic engine | 🔴 | No Wolfram Alpha — fully local |
-| 27 | Maxima CAS | 🟡 | Heavier symbolic ops |
-| 28 | NumPy/SciPy numerical + stats | 🔴 | Trend analysis, curve fitting |
-| 29 | Pint unit-aware calculations | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
-| 30 | CoolProp thermophysical properties | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
-| 31 | Matplotlib plotting | 🔴 | Embedded charts in outputs |
-| 32 | NetworkX graph math | 🟡 | Pipeline dependency graphs |
-| 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
-| 52 | Hydrogen balance calculator (CCR ↔ hydrotreating units) | 🟡 | MRPL-specific — Pint-based unit-aware mass balance, prevents unit-conversion errors on H2 byproduct tracking. Owner: Aryan |
-| 53 | PSA hydrogen purity trend dashboard | 🟡 | MRPL-specific — ingests PSA purity logs, plots against the 99.9% target (tool 31), flags drift. Owner: Aryan (data)/Kanishka (chart UI) |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 26 | SymPy symbolic engine | Aryan | not started | 🔴 | No Wolfram Alpha — fully local |
+| 27 | Maxima CAS | Aryan | not started | 🟡 | Heavier symbolic ops |
+| 28 | NumPy/SciPy numerical + stats | Aryan | built | 🔴 | Trend analysis, curve fitting |
+| 29 | Pint unit-aware calculations | Aryan | not started | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
+| 30 | CoolProp thermophysical properties | Aryan | not started | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
+| 31 | Matplotlib plotting | Aryan | built | 🔴 | Embedded charts in outputs |
+| 32 | NetworkX graph math | Netal | not started | 🟡 | Pipeline dependency graphs |
+| 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | Aryan | built | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
+| 52 | Hydrogen balance calculator (CCR ↔ hydrotreating units) | Aryan | built | 🟡 | MRPL-specific — Pint-based unit-aware mass balance, prevents unit-conversion errors on H2 byproduct tracking. Owner: Aryan |
+| 53 | PSA hydrogen purity trend dashboard | Aryan | built | 🟡 | MRPL-specific — ingests PSA purity logs, plots against the 99.9% target (tool 31), flags drift. Owner: Aryan (data)/Kanishka (chart UI) |
 
 ## E. Code & Sandbox — Owner: Aditya
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 33 | Code generation (routed) | 🔴 | FR-13 |
-| 34 | Sandboxed execution (Docker, no network) | 🔴 | FR-13, NFR core |
-| 35 | Automated test generation + run | 🟡 | Strengthens the verification story |
-| 36 | Static analysis/linting pass | ⚪ | Registry-listed |
-| 37 | Internal tool scaffolding | ⚪ | Registry-listed |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 33 | Code generation (routed) | Aditya | built | 🔴 | FR-13 |
+| 34 | Sandboxed execution (Docker, no network) | Aditya | not started | 🔴 | FR-13, NFR core |
+| 35 | Automated test generation + run | Aditya | not started | 🟡 | Strengthens the verification story |
+| 36 | Static analysis/linting pass | Aditya | not started | ⚪ | Registry-listed |
+| 37 | Internal tool scaffolding | Aditya | not started | ⚪ | Registry-listed |
 
 ## F. Output Generation — Owner: Kanishka
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 38 | DOCX generation (python-docx) | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
-| 39 | XLSX generation with live formulas | 🔴 | FR-9 |
-| 40 | PPTX generation | 🟡 | FR-9 |
-| 41 | Calculation trace documents | 🔴 | NFR-5 |
-| 42 | Audio briefing (Piper TTS) | ⚪ | Polish item |
-| 43 | Redaction tool | 🟡 | Confidentiality-relevant differentiator |
-| 54 | Novolen grade-changeover checklist generator | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
-| 55 | Novolen batch quality report generator | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
-| 56 | Merox sulphur-spec compliance checker | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
-| 58 | Aromatic Complex benzene safety-note drafting | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 38 | DOCX generation (python-docx) | Aryan | built | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
+| 39 | XLSX generation with live formulas | Kanishka | not started | 🔴 | FR-9 |
+| 40 | PPTX generation | Kanishka | not started | 🟡 | FR-9 |
+| 41 | Calculation trace documents | Aryan | built | 🔴 | NFR-5 |
+| 42 | Audio briefing (Piper TTS) | Kanishka | not started | ⚪ | Polish item |
+| 43 | Redaction tool | Kanishka | not started | 🟡 | Confidentiality-relevant differentiator |
+| 54 | Novolen grade-changeover checklist generator | Kanishka | not started | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
+| 55 | Novolen batch quality report generator | Kanishka | not started | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
+| 56 | Merox sulphur-spec compliance checker | Aryan | not started | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
+| 58 | Aromatic Complex benzene safety-note drafting | Kanishka | not started | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
 
 ## G. Governance, Audit & Trust — Owner: Aditya (backend), Kanishka (UI)
 
-| # | Tool | Priority | Notes |
-|---|---|---|---|
-| 44 | Live network monitor panel | 🔴 | FR-1, FR-15 — single most important judge-facing proof |
-| 45 | Full audit log | 🔴 | NFR-7 |
-| 46 | RBAC on knowledge base | 🟡 | Basic tiers sufficient for demo |
-| 47 | Model provenance tracking | ⚪ | Registry-listed |
-| 48 | Encrypted-at-rest storage | 🔴 | NFR-3 |
-| 49 | SAP read-only connector | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
-| 50 | Portable/air-gapped packaging | 🔴 | NFR-2 |
+| # | Tool | Owner | Status | Priority | Notes |
+|---|---|---|---|---|---|
+| 44 | Live network monitor panel | Aditya | built | 🔴 | FR-1, FR-15 — single most important judge-facing proof |
+| 45 | Full audit log | Aditya | built | 🔴 | NFR-7 |
+| 46 | RBAC on knowledge base | Sahil | not started | 🟡 | Basic tiers sufficient for demo |
+| 47 | Model provenance tracking | Sahil | not started | ⚪ | Registry-listed |
+| 48 | Encrypted-at-rest storage | Sahil | not started | 🔴 | NFR-3 |
+| 49 | SAP read-only connector | Aditya | not started | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
+| 50 | Portable/air-gapped packaging | Aditya | not started | 🔴 | NFR-2 |
 
 ---
 
