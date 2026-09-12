@@ -88,6 +88,15 @@ def extract_arithmetic_expression(msg: str) -> str | None:
     return _balance_parentheses(match.group(0).strip(), msg, match.start())
 
 
+# Equipment tags, instrument tags, document numbers and named pipeline
+# segments. Anchored on shape, so ordinary prose cannot match one.
+_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z]{2,5}-\d{1,4}(?:-[A-Za-z0-9]{1,6})?"
+    r"|SOP-\d{2,4}(?:-Rev\d+)?"
+    r"|[A-Z][a-z]+(?:-[A-Z][a-z]+){1,3}\s+(?:segment|pipeline|line))\b"
+)
+
+
 # ACTIONS THAT REQUIRE A HUMAN (hard constraint #4).
 #
 # This used to be one regex for the words "feed rate". A request to
@@ -204,6 +213,7 @@ def _computed_answer(request: str) -> dict[str, Any] | None:
                 f"I do not compute numbers myself, so there is no answer to "
                 f"give here."
             ),
+            "route": "arithmetic",
             "plan": [
                 PlanStep(
                     step_id="calculate",
@@ -256,6 +266,7 @@ def _computed_answer(request: str) -> dict[str, Any] | None:
 
     return {
         "draft_output": reply,
+        "route": "arithmetic",
         "plan": [
             PlanStep(
                 step_id="calculate",
@@ -318,6 +329,7 @@ def router_node(state: AgentState) -> dict[str, Any]:
             "draft_output": reply,
             "awaiting_human_approval": True,
             "final_output_path": app_req.request_id,
+            "route": "approval",
         }
 
     # WHAT KIND OF REQUEST IS THIS, asked before any expensive machinery.
@@ -357,6 +369,7 @@ def router_node(state: AgentState) -> dict[str, Any]:
         }[intent.kind]
         return {
             "draft_output": reply_for() if callable(reply_for) else reply_for,
+            "route": intent.kind,
             "plan": [
                 PlanStep(
                     step_id=intent.kind,
@@ -689,48 +702,15 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     if is_corpus_question(state.original_request):
         return {"draft_output": answer_corpus_question(state.original_request)}
 
-    # Conversation memory: resolve the follow-up for RETRIEVAL, and hand
-    # the model prior turns as labelled context. Wrapped because a
-    # memory failure must degrade to a stateless (but correct) answer
-    # rather than break the turn -- memory is an improvement, not a
-    # dependency.
+    # Memory was loaded HERE, inside synthesis, which meant a turn that
+    # never reached synthesis -- a greeting, an approval interception --
+    # was never recorded, and the streaming endpoint had no memory at
+    # all because it does not use this node. It is now opened once at
+    # the entry point (run_agent_turn) and simply read here.
     from backend.observability import turn_log as T
 
-    search_query = None
-    conversation_context = ""
-    try:
-        from backend.memory import resolver, working
-
-        memory = working.load(state.session_id)
-        if not memory.is_empty:
-            resolved = resolver.resolve(state.original_request, memory)
-            if resolved.changed:
-                search_query = resolved.search_query
-                T.kv("memory", f"resolved follow-up: +{resolved.added_terms}")
-            conversation_context = memory.context_block()
-            if memory.focus_documents:
-                T.kv("focus documents", memory.focus_documents[:3])
-
-        # Durable preferences and identity, across all sessions. Appended
-        # after the conversation block and labelled the same way: these
-        # shape HOW the answer is written, never WHAT it claims.
-        from backend.memory.long_term import get_long_term
-
-        durable = get_long_term().context_block()
-        if durable:
-            conversation_context += durable
-            T.kv("long-term facts", "applied")
-
-        # Offer the user's own message for durable storage. Most are not
-        # facts and are rejected; nothing is inferred or guessed.
-        try:
-            get_long_term().remember(
-                state.original_request, source_session=state.session_id
-            )
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception as exc:  # noqa: BLE001
-        T.warn(f"memory unavailable ({type(exc).__name__}); answering statelessly")
+    search_query = state.search_query
+    conversation_context = state.memory_context
 
     try:
         store, _ = get_state().ensure_corpus()
@@ -753,6 +733,9 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
         }
 
     if not answer.found:
+        # RECORDED AS A REFUSAL, not as an answer. A later turn reading
+        # "I could not find that" as an ordinary reply would treat the
+        # subject as covered.
         # A refusal that only says "no" is indistinguishable from a broken
         # product when the corpus visibly contains the topic. Report the
         # margin and name what came closest, so the user can tell a real
@@ -794,7 +777,7 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
             "This is a refusal, not a failure. Answering without a source is the "
             "one thing this workbench will not do.",
         ]
-        return {"draft_output": "\n".join(lines)}
+        return {"draft_output": "\n".join(lines), "route": "refusal"}
 
     reply = answer.answer_text
     if answer.invalid_citations_stripped:
@@ -1005,6 +988,25 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
     T.kv("message", repr(message))
     _t0 = _time.perf_counter()
 
+    # MEMORY IS OPENED HERE, around the whole turn, not inside the node
+    # that reads it. Every path -- greeting, approval interception,
+    # refusal, full synthesis -- therefore records itself, and the
+    # streaming endpoint uses the same two functions. See
+    # backend/memory/turn.py for why that is one pair of functions and
+    # not two implementations.
+    from backend.memory.turn import close_turn, open_turn
+
+    memory = open_turn(session_id, message)
+    if memory.degraded:
+        T.warn(f"memory unavailable ({memory.degraded}); answering statelessly")
+    else:
+        if memory.added_terms:
+            T.kv("resolved follow-up", f"+{memory.added_terms}")
+        if memory.focus_documents:
+            T.kv("focus documents", memory.focus_documents[:3])
+        if memory.focus_entities:
+            T.kv("focus entities", memory.focus_entities[:4])
+
     graph = get_orchestrator_graph()
     initial_state = AgentState(
         session_id=session_id,
@@ -1012,6 +1014,8 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
         plan=[],
         tool_call_log=[],
         retrieved_context=[],
+        memory_context=memory.context_block,
+        search_query=memory.search_query,
     )
     result_dict = graph.invoke(initial_state)
     final = AgentState.model_validate(result_dict)
@@ -1035,4 +1039,46 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
     T.rule("", "=")
     T._emit()
 
+    close_turn(
+        session_id,
+        final.draft_output or "",
+        route=final.route or ("approval" if final.awaiting_human_approval else "direct"),
+        citations=[
+            {
+                "text": c.get("text", ""),
+                "source_document": c.get("source_document"),
+                "page_number": c.get("page_number"),
+            }
+            for c in final.retrieved_context
+        ][:20],
+        documents=sorted({
+            c.get("source_document")
+            for c in final.retrieved_context
+            if c.get("source_document")
+        }),
+        tool_calls=[
+            {"tool_name": e.tool_name, "status": e.status} for e in final.tool_call_log
+        ],
+        entities=_entities_in(final.retrieved_context),
+    )
+
     return final
+
+
+def _entities_in(chunks: list[dict]) -> list[str]:
+    """Equipment and document tags present in the retrieved passages.
+
+    Deterministic: an entity recorded here steers the NEXT turn's
+    retrieval, so a model's guess would silently bias a later answer.
+    Tags of this shape (HCU-2, FFC-201, SOP-114-Rev3) do not need
+    inference to spot.
+    """
+    found: list[str] = []
+    for chunk in chunks or []:
+        for match in _ENTITY_RE.finditer(chunk.get("text") or ""):
+            token = match.group(0).strip()
+            if token and token not in found:
+                found.append(token)
+            if len(found) >= 12:
+                return found
+    return found
