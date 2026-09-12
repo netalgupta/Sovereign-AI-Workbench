@@ -436,3 +436,196 @@ def test_a_database_from_an_earlier_build_gains_the_new_columns(tmp_path):
     # And the new columns are writable.
     store.append("s", "assistant", "new turn", entities=["HCU-2"])
     assert store.all_messages("s")[-1].entities == ["HCU-2"]
+
+
+# ---------------------------------------------------------------------
+# (d) Facts that never expire and never conflict.
+# ---------------------------------------------------------------------
+
+
+def test_a_new_statement_on_the_same_subject_replaces_the_old_one(tmp_path):
+    """Dedup was exact-string only, which catches a repetition and
+    misses every actual change. "I work on HCU" and "I moved to CCR"
+    both persisted and both got injected, handing the model a
+    contradiction about the user with no way to tell which is current."""
+    from backend.memory import long_term as L
+
+    memory = L.reset_for_tests(tmp_path / "lt.db")
+    old = memory.remember("I work on the hydrocracker unit")
+    new = memory.remember("I work in CCR now")
+
+    active = [f.content for f in memory.all_facts()]
+    assert new.content in active
+    assert old.content not in active, "both sides of a contradiction are live"
+
+    # Marked, not deleted: "I used to work on HCU" is part of the record,
+    # and a memory that quietly rewrites itself cannot be audited.
+    archived = {f.content: f for f in memory.all_facts(include_superseded=True)}
+    assert archived[old.content].superseded_by == new.fact_id
+    assert archived[old.content].superseded_at is not None
+
+
+def test_facts_on_different_subjects_both_stand(tmp_path):
+    """Two statements conflict when they answer the same question about
+    the same thing. A unit and an output preference do not."""
+    from backend.memory import long_term as L
+
+    memory = L.reset_for_tests(tmp_path / "lt.db")
+    memory.remember("I work on the hydrocracker unit")
+    memory.remember("always answer in bullet points")
+
+    contents = [f.content for f in memory.all_facts()]
+    assert len(contents) == 2, contents
+
+
+def test_an_unrecognised_statement_supersedes_nothing(tmp_path):
+    """None means "cannot supersede and cannot be superseded", which is
+    the safe direction: an unrecognised statement sits alongside what
+    came before rather than silently replacing it."""
+    from backend.memory.long_term import subject_of
+
+    assert subject_of("I work on the hydrocracker") == "unit"
+    assert subject_of("my name is Aryan") == "name"
+    assert subject_of("please use metric units") is None
+
+
+def test_a_fact_nothing_has_used_for_a_long_time_is_retired(tmp_path):
+    """Never expiring means a stale preference shapes every answer
+    forever with no signal that it is doing so."""
+    import time
+
+    from backend.memory import long_term as L
+
+    memory = L.reset_for_tests(tmp_path / "lt.db")
+    fact = memory.remember("always answer in bullet points")
+
+    # Backdate it beyond the TTL.
+    old_ts = time.time() - (L.DEFAULT_TTL_DAYS + 1) * 86400
+    memory._conn.execute(
+        "UPDATE facts SET created_at = ?, last_used = NULL WHERE fact_id = ?",
+        (old_ts, fact.fact_id),
+    )
+    memory._conn.commit()
+
+    retired = memory.expire_stale()
+    assert [f.fact_id for f in retired] == [fact.fact_id]
+    assert memory.all_facts() == []
+    # Retired, not erased.
+    assert len(memory.all_facts(include_superseded=True)) == 1
+
+
+def test_staleness_is_measured_from_last_use_not_from_creation(tmp_path):
+    """A preference that keeps being applied is evidently still wanted."""
+    import time
+
+    from backend.memory import long_term as L
+
+    memory = L.reset_for_tests(tmp_path / "lt.db")
+    fact = memory.remember("always answer in bullet points")
+    memory._conn.execute(
+        "UPDATE facts SET created_at = ?, last_used = ? WHERE fact_id = ?",
+        (time.time() - 400 * 86400, time.time() - 86400, fact.fact_id),
+    )
+    memory._conn.commit()
+
+    assert memory.expire_stale() == [], "a fact in active use was retired"
+
+
+# ---------------------------------------------------------------------
+# (e) The same question, asked again.
+# ---------------------------------------------------------------------
+
+
+def test_the_episodic_key_covers_every_input_that_changes_the_answer():
+    """A cache is dangerous when the INPUTS changed, not when it is
+    reused. This repo has five recorded instances of a cached view of
+    something that had moved."""
+    from backend.memory import episodic
+
+    def key(**kwargs):
+        base = dict(
+            corpus_generation=1, top_k=5, model_id="m", active_documents=None
+        )
+        base.update(kwargs)
+        return episodic.key_for(base.pop("query", "what is the MFI"), **base)
+
+    same = key()
+    assert key(query="What  is   the MFI") == same, "wording is normalised"
+    assert key(corpus_generation=2) != same, "a re-ingest must invalidate"
+    assert key(top_k=8) != same
+    assert key(model_id="other") != same
+    assert key(conversation_context="prior turn") != same
+    # None (no filter) and [] (everything switched off) are different
+    # instructions and must not collide.
+    assert key(active_documents=[]) != same
+    assert key(active_documents=["a.pdf"]) != key(active_documents=[])
+
+
+def test_a_refusal_is_never_stored():
+    """"Not found" is the answer most likely to change for reasons the
+    key cannot see -- the user adds the missing document. A cached
+    refusal keeps saying no after the gap is fixed."""
+    from backend.memory import episodic
+
+    episodic.clear()
+
+    class Refusal:
+        found = False
+
+    class Answer:
+        found = True
+
+    episodic.remember("k-refusal", Refusal())
+    episodic.remember("k-answer", Answer())
+
+    assert episodic.recall("k-refusal") is None
+    assert episodic.recall("k-answer") is not None
+
+
+def test_the_episodic_store_is_bounded():
+    from backend.memory import episodic
+
+    episodic.clear()
+
+    class Answer:
+        found = True
+
+    for i in range(episodic.MAX_ENTRIES + 20):
+        episodic.remember(f"k{i}", Answer())
+    assert episodic.stats()["entries"] == episodic.MAX_ENTRIES
+
+
+def test_the_corpus_read_is_cached_and_invalidated_by_ingestion():
+    """all_chunk_texts is a full read of the corpus and runs three times
+    per query. At 52 documents that is invisible; at the 1000-page PDFs
+    this is for, it is the dominant cost of a sub-second search."""
+    import numpy as np
+
+    from backend.ingestion.document_ingestion import ChunkMetadata, IngestedChunk
+    from backend.retrieval.vector_store import VectorStore
+
+    def chunks(n, offset=0):
+        made = [
+            IngestedChunk(
+                text=f"chunk {i + offset}",
+                metadata=ChunkMetadata(
+                    source_document="d.pdf",
+                    document_type="pdf",
+                    page_number=1,
+                    chunk_index=i + offset,
+                    ingestion_date="2026-01-01",
+                ),
+            )
+            for i in range(n)
+        ]
+        return made, np.random.rand(n, 8).astype("float32")
+
+    store = VectorStore(dim=8)
+    store.add_chunks(*chunks(10))
+    first = store.all_chunk_texts()
+    assert store.all_chunk_texts() is first, "the corpus was re-read unchanged"
+
+    generation = store.generation
+    store.add_chunks(*chunks(3, offset=10))
+    assert store.generation > generation, "ingestion did not move the generation"
+    assert len(store.all_chunk_texts()) == 13, "a stale corpus view survived ingest"

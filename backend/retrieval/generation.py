@@ -317,11 +317,38 @@ def generate_grounded_answer(
     prompt path by which an LLM can "helpfully" fill the gap from
     general knowledge when the corpus doesn't support an answer.
     """
+    from backend.memory import episodic
     from backend.observability import turn_log as T
 
     T.section("RETRIEVAL")
     T.kv("request", repr(user_request))
     T.kv("top_k", top_k)
+
+    # ALREADY ANSWERED, IN THIS PROCESS, AGAINST THIS CORPUS?
+    #
+    # Generation runs at temperature 0, so the same question against the
+    # same corpus with the same context produces the same answer. The
+    # stored one is not an approximation of the work, it is the work.
+    #
+    # The danger in any cache is reuse after the INPUTS changed, which
+    # is why the key covers the corpus generation, the source filter,
+    # the conversation context, top_k and the model -- see
+    # backend/memory/episodic.py. Refusals are never stored: "not found"
+    # is the answer most likely to change for reasons the key cannot
+    # see (the user adds the missing document), and it is cheap anyway
+    # because it never reaches the model.
+    cache_key = episodic.key_for(
+        search_query or user_request,
+        corpus_generation=getattr(store, "generation", 0),
+        top_k=top_k,
+        model_id=model_id,
+        active_documents=active_documents,
+        conversation_context=conversation_context,
+    )
+    cached = episodic.recall(cache_key)
+    if cached is not None:
+        T.kv("episodic memory", T.GREEN("HIT - answered before, corpus unchanged"))
+        return cached
     if active_documents is not None:
         T.kv("active sources", f"{len(active_documents)} enabled (filter ON)")
     try:
@@ -439,10 +466,15 @@ def generate_grounded_answer(
                "likely cited in prose instead of [n]")
     T.block("ANSWER", validation.cleaned_text)
 
-    return GeneratedAnswer(
+    answer = GeneratedAnswer(
         answer_text=validation.cleaned_text,
         found=True,
         sources=grounding.chunks,
         invalid_citations_stripped=validation.invalid_citation_numbers,
         unresolved_placeholders_stripped=validation.unresolved_placeholder_count,
     )
+    # Stored only once the answer is complete and validated. Caching an
+    # answer whose citations had not yet been checked would preserve the
+    # unchecked version for every later asking of the question.
+    episodic.remember(cache_key, answer)
+    return answer

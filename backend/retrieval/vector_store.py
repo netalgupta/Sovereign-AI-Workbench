@@ -71,6 +71,10 @@ class VectorStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute(_CREATE_TABLE_SQL)
         self._conn.commit()
+        # Moves only when the corpus changes; see `generation`.
+        self._generation = 0
+        self._texts_cache: list | None = None
+        self._texts_cache_gen = -1
 
     def add_chunks(self, chunks: list[IngestedChunk], embeddings: np.ndarray) -> None:
         if len(chunks) != embeddings.shape[0]:
@@ -100,6 +104,9 @@ class VectorStore:
             "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)", rows
         )
         self._conn.commit()
+        # The corpus changed. Anything holding a view of it is now stale
+        # and must rebuild rather than answer from what it remembers.
+        self._generation += 1
 
     def get_by_faiss_id(self, faiss_id: int) -> StoredChunk | None:
         cursor = self._conn.execute(
@@ -181,14 +188,44 @@ class VectorStore:
             for row in rows
         ]
 
+    @property
+    def generation(self) -> int:
+        """Bumped whenever the corpus changes.
+
+        Anything caching a view of the corpus must key on this. A cache
+        that outlives the data it was built from is the single most
+        repeated bug in this repository -- a committed JSON artifact
+        with stale numbers, a resume path serving a cached score instead
+        of the model's output, hash embeddings that satisfied every
+        shape assertion. A counter that only the write path can touch is
+        the cheap version of checking provenance.
+        """
+        return self._generation
+
     def all_chunk_texts(self) -> list[tuple[int, str]]:
         """[(faiss_id, text), ...] for every stored chunk, ordered by
         faiss_id. Needed by CARD 09's BM25 sparse index, which must be
         built over exactly the same corpus as the dense index — not a
         separately-maintained copy that could drift out of sync.
+
+        CACHED, because this is a full read of the corpus and it runs
+        THREE TIMES PER QUERY -- hybrid_search builds the sparse index
+        from it, grounded_retrieval reads it again for lexical evidence,
+        and generation reads it a third time to explain the query. At 52
+        documents that is invisible. At the 1000-page PDFs this is meant
+        for it is the dominant cost of a search that should be
+        sub-second.
+
+        Invalidated by `generation`, which only add_chunks can move, so
+        a re-ingest cannot be served from a stale list.
         """
+        if self._texts_cache is not None and self._texts_cache_gen == self._generation:
+            return self._texts_cache
         cursor = self._conn.execute("SELECT faiss_id, text FROM chunks ORDER BY faiss_id")
-        return cursor.fetchall()
+        rows = cursor.fetchall()
+        self._texts_cache = rows
+        self._texts_cache_gen = self._generation
+        return rows
 
     def __len__(self) -> int:
         return self.index.ntotal
