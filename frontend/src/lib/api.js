@@ -252,11 +252,48 @@ export async function getNetworkStatus() {
   return null
 }
 
+// A full agent turn on this hardware is retrieval + a 14B reasoning
+// generation + a verification pass, all CPU-bound. Measured end to end
+// on the dev box: 69 seconds for a short question, and longer once
+// generation is genuinely grounded rather than templated.
+//
+// This was 60000. The backend took 69s. So the abort ALWAYS fired
+// before the reply arrived, every live answer was discarded unread, and
+// every message silently became the offline simulation below - which
+// renders identically to a real answer. The product appeared to work
+// perfectly while never once showing backend output.
+//
+// A timeout shorter than the operation it guards does not protect
+// anything; it just guarantees the fallback path.
+const LIVE_TURN_TIMEOUT_MS = 300000 // 5 min
+
+/**
+ * Is the backend process actually there?
+ *
+ * This distinction decides whether falling back to a simulation is
+ * honest. Backend absent (dev machine, frontend-only work) -> a clearly
+ * labelled simulation is useful. Backend PRESENT but slow or erroring ->
+ * a simulation is a lie about a system that is right there and
+ * answering, so the failure is reported instead.
+ */
+async function backendIsReachable() {
+  try {
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), 2500)
+    const res = await fetch('/api/health', { signal: ctl.signal })
+    clearTimeout(t)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 export async function sendMessage(message, sessionId) {
   // 1. Attempt live agent turn via backend orchestrator (/api/chat)
+  let liveError = null
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 60000) // 60s max for deep multi-agent turns
+    const timeout = setTimeout(() => controller.abort(), LIVE_TURN_TIMEOUT_MS)
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -279,19 +316,50 @@ export async function sendMessage(message, sessionId) {
           live: true,
         }
       }
+      liveError = 'The backend returned an empty response.'
+    } else {
+      liveError = `The backend returned HTTP ${res.status}.`
     }
   } catch (err) {
-    console.warn('[API] Live /api/chat unavailable or timed out, using fallback simulation:', err)
+    liveError =
+      err?.name === 'AbortError'
+        ? `The agent turn exceeded ${LIVE_TURN_TIMEOUT_MS / 1000}s and was cancelled.`
+        : `Could not reach /api/chat: ${err?.message || err}`
+    console.warn('[API] Live /api/chat failed:', err)
   }
 
-  // 2. Offline fallback simulation
+  // 2. The backend is running and it failed. Say so.
+  //
+  // Falling through to the simulation here is what hid every real
+  // backend error behind a polished fake answer - including, for weeks,
+  // the fact that the live path was never reached at all.
+  if (await backendIsReachable()) {
+    return {
+      reply:
+        `**The backend could not complete this turn.**\n\n` +
+        `${liveError}\n\n` +
+        `No simulated answer is being shown in its place: the backend is ` +
+        `running, so anything displayed here would be mistaken for its output. ` +
+        `Check the server log for the failing step.`,
+      citations: [],
+      plan: [],
+      session_id: sessionId,
+      awaiting_human_approval: false,
+      approval_action: null,
+      tool_call_events: [],
+      live: true,
+      error: true,
+    }
+  }
+
+  // 3. Backend genuinely absent - offline simulation, labelled as such.
   await new Promise((r) => setTimeout(r, MOCK_LATENCY_MS))
 
   const isApprovalNeeded = isActionApprovalRequest(message)
 
   if (isApprovalNeeded) {
     return {
-      reply: `**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_
+      reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_
 
 > 🛑 **Safety Interlock Gate [FR-15 / §3.12]:** Changing reactor feed rate from **100% (1,450 m³/h)** to **115% (1,667 m³/h)** exceeds the continuous design basis and requires manual human operator authorization before DCS controller FFC-201 can accept the parameter update.
 >
@@ -306,7 +374,7 @@ export async function sendMessage(message, sessionId) {
   }
 
   return {
-    reply: buildMockReply(message),
+    reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n` + buildMockReply(message),
     citations: MOCK_CITATIONS,
     plan: MOCK_PLAN_STEPS,
     session_id: sessionId,

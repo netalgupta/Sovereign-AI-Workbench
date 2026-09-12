@@ -19,275 +19,41 @@ import { showToast } from '../../store/toastStore'
 import { SourceFileTree } from './SourceFileTree'
 import { AddSourceDirectoryModal } from './AddSourceDirectoryModal'
 
-const INITIAL_SOURCES = [
-  {
-    id: '01_SOPs_and_Procedures_SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
-    name: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
-    type: 'DOCX',
-    size: '37.7 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'sops',
-    badge: 'SOP & Safety',
-    color: '#2563EB',
-    bg: 'rgba(37, 99, 235, 0.12)',
-    border: 'rgba(37, 99, 235, 0.28)',
-    iconText: 'DOCX',
-    enabled: true,
-  },
-  {
-    id: '01_SOPs_and_Procedures_Aromatic_Complex_Benzene_Safety_Circular.docx',
-    name: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
-    type: 'DOCX',
-    size: '37.0 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'sops',
-    badge: 'SOP & Safety',
-    color: '#2563EB',
-    bg: 'rgba(37, 99, 235, 0.12)',
-    border: 'rgba(37, 99, 235, 0.28)',
-    iconText: 'DOCX',
-    enabled: true,
-  },
-  {
-    id: '02_Inspection_and_Maintenance_Inspection_Report_CCR1_Regeneration_Cycle.pdf',
-    name: 'Inspection_Report_CCR1_Regeneration_Cycle.pdf',
-    type: 'PDF',
-    size: '38.2 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'inspection',
-    badge: 'Inspection & Maintenance',
-    color: '#D93829',
-    bg: 'rgba(217, 56, 41, 0.12)',
-    border: 'rgba(217, 56, 41, 0.28)',
-    iconText: 'PDF',
-    enabled: true,
-  },
-  {
-    id: '02_Inspection_and_Maintenance_Maintenance_Log_Q3_2026.xlsx',
-    name: 'Maintenance_Log_Q3_2026.xlsx',
-    type: 'XLSX',
-    size: '11.4 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'data',
-    subcategory: 'inspection',
-    badge: 'Inspection & Maintenance',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    border: 'rgba(5, 150, 105, 0.28)',
-    iconText: 'XLSX',
-    enabled: true,
-  },
-  {
-    id: '02_Inspection_and_Maintenance_Pipeline_Incident_Report_Hassan_Segment.pdf',
-    name: 'Pipeline_Incident_Report_Hassan_Segment.pdf',
-    type: 'PDF',
-    size: '36.3 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'inspection',
-    badge: 'Inspection & Maintenance',
-    color: '#D93829',
-    bg: 'rgba(217, 56, 41, 0.12)',
-    border: 'rgba(217, 56, 41, 0.28)',
-    iconText: 'PDF',
-    enabled: true,
-  },
-  {
-    id: '03_Quality_and_Process_Data_Novolen_Batch_QA_Report_Aug2026.pdf',
-    name: 'Novolen_Batch_QA_Report_Aug2026.pdf',
-    type: 'PDF',
-    size: '42.1 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'quality',
-    badge: 'QA & Process Data',
-    color: '#D93829',
-    bg: 'rgba(217, 56, 41, 0.12)',
-    border: 'rgba(217, 56, 41, 0.28)',
-    iconText: 'PDF',
-    enabled: true,
-  },
-  {
-    id: '03_Quality_and_Process_Data_PSA_Hydrogen_Purity_Trend_Log.xlsx',
-    name: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
-    type: 'XLSX',
-    size: '11.4 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'data',
-    subcategory: 'quality',
-    badge: 'QA & Process Data',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    border: 'rgba(5, 150, 105, 0.28)',
-    iconText: 'XLSX',
-    enabled: true,
-  },
-  {
-    id: '03_Quality_and_Process_Data_Sulphur_Spec_Compliance_LabSheet.xlsx',
-    name: 'Sulphur_Spec_Compliance_LabSheet.xlsx',
-    type: 'XLSX',
-    size: '9.8 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'data',
-    subcategory: 'quality',
-    badge: 'QA & Process Data',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    border: 'rgba(5, 150, 105, 0.28)',
-    iconText: 'XLSX',
-    enabled: true,
-  },
-  {
-    id: '04_SAP_Mock_Exports_SAP_Mock_Materials_Master_Export.xlsx',
-    name: 'SAP_Mock_Materials_Master_Export.xlsx',
-    type: 'XLSX',
-    size: '11.8 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'data',
-    subcategory: 'sap_mock',
-    badge: 'SAP ERP Export',
-    color: '#059669',
-    bg: 'rgba(5, 150, 105, 0.12)',
-    border: 'rgba(5, 150, 105, 0.28)',
-    iconText: 'XLSX',
-    enabled: true,
-  },
-  {
-    id: '05_Correspondence_Correspondence_Depot_HQ_Thread_Kasargod.docx',
-    name: 'Correspondence_Depot_HQ_Thread_Kasargod.docx',
-    type: 'DOCX',
-    size: '36.6 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'correspondence',
-    badge: 'Depot Operations',
-    color: '#2563EB',
-    bg: 'rgba(37, 99, 235, 0.12)',
-    border: 'rgba(37, 99, 235, 0.28)',
-    iconText: 'DOCX',
-    enabled: true,
-  },
-  {
-    id: '06_Diagrams_and_Scans_Hydrocracker_PID_Schematic.png',
-    name: 'Hydrocracker_PID_Schematic.png',
-    type: 'P&ID',
-    size: '93.8 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'diagrams',
-    badge: 'Schematics & Scans',
-    color: '#0D9488',
-    bg: 'rgba(13, 148, 136, 0.12)',
-    border: 'rgba(13, 148, 136, 0.28)',
-    iconText: 'P&ID',
-    enabled: true,
-  },
-  {
-    id: '06_Diagrams_and_Scans_Pipeline_Segment_Map_Mangalore_Hassan.png',
-    name: 'Pipeline_Segment_Map_Mangalore_Hassan.png',
-    type: 'P&ID',
-    size: '59.0 KB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'diagrams',
-    badge: 'Schematics & Scans',
-    color: '#0D9488',
-    bg: 'rgba(13, 148, 136, 0.12)',
-    border: 'rgba(13, 148, 136, 0.28)',
-    iconText: 'P&ID',
-    enabled: true,
-  },
-  {
-    id: '06_Diagrams_and_Scans_Scanned_Inspection_Checklist_CCR1.png',
-    name: 'Scanned_Inspection_Checklist_CCR1.png',
-    type: 'SCAN',
-    size: '1.96 MB',
-    addedAgo: 'Ingested on-prem',
-    category: 'documents',
-    subcategory: 'diagrams',
-    badge: 'Schematics & Scans',
-    color: '#0D9488',
-    bg: 'rgba(13, 148, 136, 0.12)',
-    border: 'rgba(13, 148, 136, 0.28)',
-    iconText: 'SCAN',
-    enabled: true,
-  },
-  {
-    id: 'sap-plant-sensors-api',
-    name: 'SAP_Plant_Sensors_API',
-    label: 'SAP ERP Local Connector (RFC/BAPI Mock)',
-    type: 'API',
-    size: 'Live Data Source',
-    addedAgo: 'Online (Loopback)',
-    category: 'apis',
-    subcategory: 'apis',
-    badge: 'SAP ERP RFC/BAPI',
-    color: 'var(--color-accent)',
-    bg: 'var(--color-accent-tint)',
-    border: 'var(--color-accent-border)',
-    iconType: 'api',
-    isLive: true,
-    enabled: true,
-  },
-  {
-    id: 'dcs-scada-telemetry-feed',
-    name: 'DCS_SCADA_Telemetry_Feed',
-    label: 'DCS / SCADA Telemetry Stream (OPC-UA)',
-    type: 'API',
-    size: 'Live Data Source',
-    addedAgo: 'Online (Loopback)',
-    category: 'apis',
-    subcategory: 'apis',
-    badge: 'OPC-UA Real-Time',
-    color: 'var(--color-accent)',
-    bg: 'var(--color-accent-tint)',
-    border: 'var(--color-accent-border)',
-    iconType: 'api',
-    isLive: true,
-    enabled: true,
-  },
-]
+// The sidebar starts with NOTHING and shows what the backend reports.
+//
+// This used to be a 230-line literal describing thirteen specific files
+// -- SOP-114-Rev3, Novolen_Batch_QA_Report_Aug2026.pdf, a P&ID, a
+// scanned checklist -- each with a hand-written size, badge and colour,
+// rendered as the initial state before /api/corpus resolved.
+//
+// Two problems. It was the corpus of one developer's machine on one
+// day, so it named files a given user may not have, at sizes that were
+// no longer true. And because it rendered first, the sidebar was
+// populated and confident during the window when nothing had been
+// loaded -- an empty or failed corpus fetch left the fabricated
+// thirteen on screen indefinitely, with no way to tell them from real
+// entries. A source list is a claim about what the system can retrieve
+// from; being wrong about it is not a cosmetic default.
+//
+// Empty is the honest initial state: the list is unknown until the
+// backend answers.
+const INITIAL_SOURCES = []
 
-const MOCK_CHATS = [
-  {
-    id: 'session-1',
-    title: 'Refinery Turnaround Analysis',
-    relativeTime: '2h ago',
-    active: true,
-    tags: ['Hydrocracker', 'Unit-2'],
-  },
-  {
-    id: 'session-2',
-    title: 'CDU-II Column Maintenance Review',
-    relativeTime: 'Yesterday',
-    active: false,
-    tags: ['Crude Unit', 'Distillation'],
-  },
-  {
-    id: 'session-3',
-    title: 'Hydrocracker Catalyst Life Estimation',
-    relativeTime: '3d ago',
-    active: false,
-    tags: ['Reactor', 'Catalyst'],
-  },
-  {
-    id: 'session-4',
-    title: 'Steam Methane Reformer Efficiency',
-    relativeTime: 'Sep 4',
-    active: false,
-    tags: ['Hydrogen', 'SMR'],
-  },
-  {
-    id: 'session-5',
-    title: 'Flare Stack Emission Compliance Audit',
-    relativeTime: 'Aug 28',
-    active: false,
-    tags: ['Environmental', 'EPA-1910'],
-  },
-]
+// Chat history starts empty for the same reason.
+//
+// This was five fabricated conversations -- "Refinery Turnaround
+// Analysis", "CDU-II Column Maintenance Review", "Hydrocracker Catalyst
+// Life Estimation" and two more -- with relative timestamps ("2h ago",
+// "Yesterday", "Sep 4") that were fixed strings and so aged into
+// obvious nonsense. They were not retrievable: clicking one loaded no
+// messages, because no session with that id had ever existed.
+//
+// There is no session-history endpoint on the backend yet, so this list
+// is genuinely local and genuinely empty until the user starts a
+// conversation. Showing five invented ones does not fill that gap, it
+// hides it -- and a user who opens the app expecting to find yesterday's
+// analysis has been told it is there.
+const MOCK_CHATS = []
 
 export function Sidebar() {
   const { theme, toggleTheme } = useThemeStore()
@@ -817,7 +583,12 @@ export function Sidebar() {
         >
           <div
             className="flex items-center gap-2.5 min-w-0 cursor-pointer select-none"
-            onClick={() => showToast('Authenticated session: Advay Chavan (Lead Plant Engineer)', 'info')}
+            onClick={() =>
+              showToast(
+                'No authentication is configured. This is a local session on this machine.',
+                'info'
+              )
+            }
             title="User Profile"
           >
             {/* Initials Badge */}
@@ -829,7 +600,14 @@ export function Sidebar() {
                 color: 'var(--color-accent)',
               }}
             >
-              AC
+              {/* Was "AC" for a hardcoded "Advay Chavan / Plant
+                  Operations Lead". No sign-in exists, so the app was
+                  naming a specific real person as the authenticated
+                  operator -- on a product whose audit log records who
+                  approved each gated action. An audit trail attributing
+                  approvals to a fabricated identity is worse than one
+                  with no name in it. */}
+              LO
             </div>
 
             {/* Name + Role */}
@@ -838,13 +616,13 @@ export function Sidebar() {
                 className="text-xs font-semibold truncate leading-tight"
                 style={{ color: 'var(--color-text)' }}
               >
-                Advay Chavan
+                Local Operator
               </span>
               <span
                 className="text-[10px] truncate leading-tight mt-0.5"
                 style={{ color: 'var(--color-text-muted)' }}
               >
-                Plant Operations Lead
+                No sign-in configured
               </span>
             </div>
           </div>

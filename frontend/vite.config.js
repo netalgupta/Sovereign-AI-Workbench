@@ -10,6 +10,66 @@ import { execSync } from 'node:child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Is the FastAPI backend actually running?
+//
+// WHY THIS GATE EXISTS. This plugin intercepts nine /api routes inside
+// the dev server. Five of them -- /api/corpus, /api/sources (GET, POST,
+// DELETE), /api/sources/scan and /api/sources/upload -- are ALSO
+// implemented by the real backend, and the interception won, silently.
+// A `proxy` to 127.0.0.1:8000 is configured below and was never reached
+// for those paths.
+//
+// Two consequences, both bad:
+//
+//   1. Everyone has been developing against the dev server's own
+//      filesystem scan rather than the backend's corpus. The two can
+//      disagree about what is indexed -- the dev server lists files on
+//      disk, the backend lists what is actually in FAISS -- and the UI
+//      showed the reassuring one.
+//
+//   2. `vite build` produces no dev server. In a packaged build all
+//      nine routes go to the backend, so the shipped app takes code
+//      paths nobody has ever exercised. "Works in dev" was not evidence
+//      about the product.
+//
+// So: when the backend answers, it wins, and this plugin steps aside.
+// When it does not, these handlers remain as a frontend-only fallback,
+// which is what they are legitimately good for.
+//
+// Probed once per process and cached, with a short negative TTL so
+// starting the backend does not require restarting Vite.
+let __backendUp = null
+let __backendCheckedAt = 0
+const BACKEND_RECHECK_MS = 5000
+
+async function backendIsUp() {
+  const now = Date.now()
+  if (__backendUp === true) return true
+  if (__backendUp === false && now - __backendCheckedAt < BACKEND_RECHECK_MS) return false
+  __backendCheckedAt = now
+  try {
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), 1500)
+    const res = await fetch('http://127.0.0.1:8000/api/health', { signal: ctl.signal })
+    clearTimeout(t)
+    __backendUp = res.ok
+  } catch {
+    __backendUp = false
+  }
+  return __backendUp
+}
+
+// Routes the real backend implements. Anything here must reach it when
+// it is up, so the dev server and the packaged build behave the same.
+const BACKEND_OWNED_ROUTES = new Set([
+  '/api/corpus',
+  '/api/sources',
+  '/api/sources/scan',
+  '/api/sources/upload',
+  '/api/models',
+  '/api/system-info',
+])
+
 function systemAndModelsPlugin() {
   return {
     name: 'system-and-models-api',
@@ -17,6 +77,11 @@ function systemAndModelsPlugin() {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url?.split('?')[0]
         const cwd = path.resolve(__dirname, '..')
+
+        // Real backend wins. next() hands the request to the proxy.
+        if (BACKEND_OWNED_ROUTES.has(url) && (await backendIsUp())) {
+          return next()
+        }
 
         if (url === '/api/system-info' && req.method === 'GET') {
           try {
@@ -848,62 +913,51 @@ function systemAndModelsPlugin() {
               tree.push(dirNode)
             }
 
-            // Attached live connected plant APIs
-            const apis = [
-              {
-                id: 'sap-plant-sensors-api',
-                name: 'SAP_Plant_Sensors_API',
-                label: 'SAP ERP Local Connector (RFC/BAPI Mock)',
-                type: 'API',
-                extension: 'api',
-                size: 'Live Stream',
-                sizeBytes: 0,
-                addedAgo: 'Online (Loopback)',
-                category: 'apis',
-                subcategory: 'apis',
-                badge: 'SAP ERP RFC/BAPI',
-                color: 'var(--color-accent)',
-                bg: 'var(--color-accent-tint)',
-                border: 'var(--color-accent-border)',
-                iconType: 'api',
-                corpus: 'Live Plant Connectors',
-                isLive: true,
-                enabled: true,
-              },
-              {
-                id: 'dcs-scada-telemetry-feed',
-                name: 'DCS_SCADA_Telemetry_Feed',
-                label: 'DCS / SCADA Telemetry Stream (OPC-UA)',
-                type: 'API',
-                extension: 'api',
-                size: 'Live Stream',
-                sizeBytes: 0,
-                addedAgo: 'Online (Loopback)',
-                category: 'apis',
-                subcategory: 'apis',
-                badge: 'OPC-UA Real-Time',
-                color: 'var(--color-accent)',
-                bg: 'var(--color-accent-tint)',
-                border: 'var(--color-accent-border)',
-                iconType: 'api',
-                corpus: 'Live Plant Connectors',
-                isLive: true,
-                enabled: true,
-              },
-            ]
+            // THE FABRICATED PLANT CONNECTORS WERE REMOVED HERE.
+            //
+            // This block injected two entries into the source list:
+            // "SAP_Plant_Sensors_API" (labelled "SAP ERP Local
+            // Connector (RFC/BAPI Mock)") and "DCS_SCADA_Telemetry_Feed"
+            // ("DCS / SCADA Telemetry Stream (OPC-UA)"), each marked
+            // isLive: true, size "Live Stream", status "Online
+            // (Loopback)", grouped under a virtual folder called "Live
+            // Plant APIs & Connectors".
+            //
+            // None of it existed. There is no SAP connector, no OPC-UA
+            // client, and nothing was streaming. The word "Mock" was in
+            // a `label` field the sidebar does not render, so what a
+            // viewer saw was a refinery workbench reporting two live
+            // connections to plant control systems.
+            //
+            // That is not a placeholder, it is a claimed capability, and
+            // it was the only thing on screen asserting the product
+            // talks to plant infrastructure. It also inflated the source
+            // count by two (50 real files displayed as 52) and put two
+            // non-documents into a list whose every other entry is
+            // retrievable, so "52 / 52 active" in the Knowledge Base
+            // panel counted things that can never be retrieved.
+            //
+            // When a real connector exists it belongs in the backend's
+            // corpus response, reporting its real connection state --
+            // not hardcoded into the dev server, where it cannot fail.
+            const apis = []
 
-            // Virtual tree node for APIs
-            tree.push({
-              id: 'live_plant_apis',
-              name: 'Live Plant APIs & Connectors',
-              type: 'directory',
-              isRoot: true,
-              isPreset: true,
-              fileCount: apis.length,
-              totalSizeBytes: 0,
-              sizeDisplay: 'Live Data',
-              children: apis.map((a) => ({ ...a, type: 'api' })),
-            })
+            // Only render the connector group if there is a real
+            // connector to put in it. An empty "Live Plant APIs" folder
+            // still asserts the category exists and is merely idle.
+            if (apis.length > 0) {
+              tree.push({
+                id: 'live_plant_apis',
+                name: 'Live Plant APIs & Connectors',
+                type: 'directory',
+                isRoot: true,
+                isPreset: true,
+                fileCount: apis.length,
+                totalSizeBytes: 0,
+                sizeDisplay: 'Live Data',
+                children: apis.map((a) => ({ ...a, type: 'api' })),
+              })
+            }
 
             const totalBytes = allItems.reduce((acc, i) => acc + i.sizeBytes, 0)
             const totalSizeMB = Number((totalBytes / 1e6).toFixed(2))
