@@ -300,9 +300,10 @@ async function backendIsReachable() {
  *
  * Falls back to labelled offline simulation only if the backend is genuinely unreachable.
  */
-export async function sendMessageStream(message, sessionId, callbacks = {}) {
+export async function sendMessageStream(message, sessionId, callbacks = {}, options = {}) {
   const {
     onStart,
+    onPlan,
     onRoute,
     onToolCall,
     onToolResult,
@@ -311,6 +312,8 @@ export async function sendMessageStream(message, sessionId, callbacks = {}) {
     onDone,
     onError,
   } = callbacks
+
+  const { activeDocuments = [] } = options
 
   let liveError = null
   let receivedAnyEvent = false
@@ -322,7 +325,11 @@ export async function sendMessageStream(message, sessionId, callbacks = {}) {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId || 'default' }),
+      body: JSON.stringify({
+        message,
+        session_id: sessionId || 'default',
+        active_documents: activeDocuments,
+      }),
       signal: controller.signal,
     })
 
@@ -353,6 +360,9 @@ export async function sendMessageStream(message, sessionId, callbacks = {}) {
                 switch (event.type) {
                   case 'start':
                     onStart?.(event)
+                    break
+                  case 'plan':
+                    onPlan?.(event)
                     break
                   case 'route':
                     onRoute?.(event)
@@ -440,7 +450,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}) {
     onDone?.({
       reply: mockReply,
       citations: MOCK_CITATIONS.slice(0, 2),
-      plan: MOCK_PLAN_STEPS,
+      plan: [],
       awaiting_approval: true,
       approval_action: MOCK_FEED_RATE_APPROVAL_ACTION,
       simulated: true,
@@ -476,7 +486,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}) {
   onDone?.({
     reply: mockReply,
     citations: MOCK_CITATIONS,
-    plan: MOCK_PLAN_STEPS,
+    plan: [],
     awaiting_approval: false,
     simulated: true,
   })

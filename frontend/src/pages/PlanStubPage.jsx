@@ -10,14 +10,13 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
-import { MOCK_PLAN_STEPS } from '../lib/api'
 import { PlanGraphView } from '../components/plan/PlanGraphView'
 
 export function PlanStubPage() {
   const { sessionId } = useParams()
-  const storePlan = useChatStore((s) => s.plan)
-  const plan = storePlan && storePlan.length > 0 ? storePlan : MOCK_PLAN_STEPS
+  const plan = useChatStore((s) => s.plan) || []
 
+  const hasLivePlan = plan.length > 0
   const doneCount = plan.filter((s) => s.status === 'done').length
   const totalCount = plan.length
   const runningStep = plan.find((s) => s.status === 'running')
@@ -179,9 +178,27 @@ export function PlanStubPage() {
         </div>
       </div>
 
-      {/* ── Main Canvas (React Flow + Dagre) ─────────────────────────── */}
+      {/* ── Main Canvas (React Flow + Dagre) ───────────────────────── */}
       <main className="flex-1 w-full h-full relative overflow-hidden">
-        <PlanGraphView plan={plan} />
+        {hasLivePlan ? (
+          <PlanGraphView plan={plan} />
+        ) : (
+          <div
+            className="flex flex-col items-center justify-center h-full gap-4 select-none"
+            style={{ color: 'var(--color-text-faint)' }}
+          >
+            <GitBranch size={40} strokeWidth={1.2} style={{ opacity: 0.3 }} />
+            <div className="text-center max-w-xs">
+              <p className="text-sm font-semibold" style={{ color: 'var(--color-text-muted)' }}>
+                No multi-step execution plan for this turn
+              </p>
+              <p className="text-xs mt-1.5 leading-relaxed" style={{ color: 'var(--color-text-faint)' }}>
+                This turn used the direct response path — one retrieval, one answer.
+                A DAG will appear here on the next multi-step agentic query.
+              </p>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

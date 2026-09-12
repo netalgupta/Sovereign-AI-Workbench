@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
+import { useChatStore } from '../../store/chatStore'
 import { SourceFileTree } from './SourceFileTree'
 import { AddSourceDirectoryModal } from './AddSourceDirectoryModal'
 
@@ -57,6 +58,7 @@ const MOCK_CHATS = []
 
 export function Sidebar() {
   const { theme, toggleTheme } = useThemeStore()
+  const setActiveDocuments = useChatStore((s) => s.setActiveDocuments)
 
   // Two-tab accordion switcher: 'sources' | 'chats' (mutually exclusive)
   const [activeTab, setActiveTab] = useState('sources')
@@ -98,6 +100,12 @@ export function Sidebar() {
       .then((data) => {
         if (data?.sources && Array.isArray(data.sources)) {
           setSources(data.sources)
+          // Push active source names to chatStore on initial load
+          const enabled = data.sources
+            .filter((s) => s.enabled !== false)
+            .map((s) => s.name || s.corpus || s.id || '')
+            .filter(Boolean)
+          setActiveDocuments(enabled)
         }
         if (data?.tree && Array.isArray(data.tree)) {
           setTree(data.tree)
@@ -234,6 +242,28 @@ export function Sidebar() {
       })
     }
     setTree((prev) => updateTreeNodes(prev))
+
+    // Sync enabled source names into chatStore so ChatPane can pass them
+    // as active_documents on the next /api/chat/stream call.
+    setSources((latestSources) => {
+      const enabled = latestSources
+        .map((s) => {
+          const isMatch =
+            s.id === id ||
+            (targetName && s.name === targetName) ||
+            (targetFullPath && s.fullPath === targetFullPath)
+          if (isMatch) {
+            const next = explicitEnabled !== undefined ? explicitEnabled : !s.enabled
+            return { ...s, enabled: next }
+          }
+          return s
+        })
+        .filter((s) => s.enabled !== false)
+        .map((s) => s.name || s.corpus || s.id || '')
+        .filter(Boolean)
+      setActiveDocuments(enabled)
+      return latestSources // don't mutate here; setSources above already did it
+    })
 
     const isNowEnabled = explicitEnabled !== undefined ? explicitEnabled : true
     showToast(

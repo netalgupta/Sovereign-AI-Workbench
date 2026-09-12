@@ -53,3 +53,8 @@
   # plausible-looking name that was never actually pulled.
   model: phi3.5
   task_tags: [classification, routing]
+
+- id: verify-coder-7b
+  backend: ollama
+  model: qwen2.5:7b
+  task_tags: [code]

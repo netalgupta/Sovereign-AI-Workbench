@@ -56,6 +56,8 @@ export function ChatPane() {
   const sessionId = useChatStore((s) => s.sessionId)
   const plan = useChatStore((s) => s.plan) || []
   const setPlan = useChatStore((s) => s.setPlan)
+  const updatePlanStepStatus = useChatStore((s) => s.updatePlanStepStatus)
+  const activeDocuments = useChatStore((s) => s.activeDocuments)
   const awaitingHumanApproval = useChatStore((s) => s.awaitingHumanApproval)
   const setAwaitingApproval = useChatStore((s) => s.setAwaitingApproval)
   const openApprovalModal = useChatStore((s) => s.openApprovalModal)
@@ -234,10 +236,29 @@ export function ChatPane() {
 
     try {
       await sendMessageStream(text, sessionId, {
+        onPlan: (planEv) => {
+          // Receive the plan DAG emitted before any tool work starts.
+          // Normalise the step_id field (backend uses step_id, not id).
+          const steps = (planEv.steps || []).map((s) => ({
+            ...s,
+            id: s.step_id || s.id,
+            step_id: s.step_id || s.id,
+          }))
+          setPlan(steps)
+          updateMessage(msgId, { plan: steps, planPath: planEv.path || '' })
+        },
         onRoute: (routeEv) => {
           updateMessage(msgId, { route: routeEv })
         },
         onToolCall: (call) => {
+          // Mark the plan step for this tool as running when the call starts.
+          // We match by tool name → assigned_agent heuristic: any step
+          // whose step_id contains the tool name prefix, or the first pending
+          // step if we cannot match exactly.
+          updatePlanStepStatus(
+            call.id?.split('-')[0] || call.name,
+            'running'
+          )
           addToolCallEvent(msgId, {
             id: call.id,
             name: call.name,
@@ -248,6 +269,11 @@ export function ChatPane() {
           })
         },
         onToolResult: (resEv) => {
+          // Mark the corresponding plan step done or failed.
+          updatePlanStepStatus(
+            resEv.id?.split('-')[0] || resEv.name,
+            resEv.status === 'failed' ? 'failed' : 'done'
+          )
           addToolCallEvent(msgId, {
             id: resEv.id,
             name: resEv.name,
@@ -310,7 +336,7 @@ export function ChatPane() {
           appendStreamChunk(msgId, `\n\n> ⚠️ **Error:** ${errMsg}`)
           finishStreaming(msgId)
         },
-      })
+      }, { activeDocuments })
     } catch (err) {
       appendStreamChunk(msgId, `\n\n> ⚠️ **Turn Error:** ${err?.message || err}`)
       finishStreaming(msgId)
@@ -318,6 +344,11 @@ export function ChatPane() {
       setIsPending(false)
     }
   }
+
+  // Pass active_documents from the sources panel to every stream call.
+  // Sidebar writes enabled source names into chatStore.activeDocuments.
+  const _sendMessageStreamWithDocs = (text, sessionId, callbacks) =>
+    sendMessageStream(text, sessionId, callbacks, { activeDocuments })
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {

@@ -1492,7 +1492,7 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
     from backend.audit.audit_log import AuditLog
 
     log = AuditLog()
-    entries = log.for_request(request_id) if request_id else log.entries(limit=limit)
+    entries = log.for_request(request_id) if request_id else log.all()[-limit:]
     return {"entries": [e.model_dump() for e in entries]}
 
 

@@ -14,7 +14,6 @@
 
 import { create } from 'zustand'
 import { now } from '../lib/formatTime'
-import { MOCK_PLAN_STEPS, resolveApproval as apiResolveApproval } from '../lib/api'
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -30,7 +29,7 @@ export const useChatStore = create((set, get) => ({
   messages: [],
   sessionId: generateSessionId(),
   draft: '',
-  plan: MOCK_PLAN_STEPS,
+  plan: [],
 
   // ── Approval Gate State (§3.12 / FR-15) ────────────────────────────────────
   awaitingHumanApproval: false,
@@ -39,7 +38,12 @@ export const useChatStore = create((set, get) => ({
   approvalError: null,
   isResolvingApproval: false,
 
-  // ── Actions ────────────────────────────────────────────────────────────────
+  // ── Active Documents (Source Filtering) ───────────────────────────────────
+  // Built from the Sources panel — names of files currently toggled ON.
+  // Passed as active_documents to every /api/chat/stream call.
+  activeDocuments: [],
+  setActiveDocuments: (docs) => set({ activeDocuments: docs }),
+
   setDraft: (draft) => set({ draft }),
   setPlan: (plan) => set({ plan }),
   updatePlanStepStatus: (stepId, status) =>
@@ -80,10 +84,19 @@ export const useChatStore = create((set, get) => ({
     const actionDesc = action?.description || 'Critical parameter modification'
     set({ approvalError: null, isResolvingApproval: true })
 
+    // ── REFUSE path ──────────────────────────────────────────────────────────
     if (!confirmed) {
       if (action?.id) {
         try {
-          await apiResolveApproval(action.id, false, 'operator')
+          await fetch('/api/approvals/refuse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              request_id: action.id,
+              decided_by: 'local-operator',
+              reason: 'Operator cancelled',
+            }),
+          })
         } catch {}
       }
       set({
@@ -100,28 +113,62 @@ export const useChatStore = create((set, get) => ({
       return { success: true }
     }
 
-    let result = null
-    if (action?.id) {
-      try {
-        result = await apiResolveApproval(action.id, true, 'operator')
-      } catch (err) {
-        result = { ok: false, error: err?.message || 'Network error' }
-      }
-    } else {
-      result = { ok: false, error: 'No active approval request ID' }
-    }
-
-    if (!result?.ok || result.status !== 'approved') {
-      const errMsg =
-        result?.error ||
-        'Authorization failed — action NOT confirmed by backend, please retry.'
-      set({
-        approvalError: errMsg,
-        isApprovalModalOpen: true, // Keep modal open!
-        isResolvingApproval: false,
-      })
+    // ── APPROVE path — two steps: approve then execute ────────────────────────
+    if (!action?.id) {
+      const errMsg = 'No active approval request ID'
+      set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
       return { success: false, error: errMsg }
     }
+
+    // Step 1: POST /api/approvals/approve
+    let approveResult = null
+    try {
+      const approveRes = await fetch('/api/approvals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request_id: action.id,
+          decided_by: 'local-operator',
+          reason: 'Operator confirmed via approval gate',
+        }),
+      })
+      if (approveRes.ok) {
+        approveResult = await approveRes.json()
+      } else {
+        const errData = await approveRes.json().catch(() => ({}))
+        const errMsg = errData.detail || errData.message || `Approval backend returned HTTP ${approveRes.status}`
+        set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
+        return { success: false, error: errMsg }
+      }
+    } catch (err) {
+      const errMsg = `Network error reaching /api/approvals/approve: ${err?.message || err}`
+      set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
+      return { success: false, error: errMsg }
+    }
+
+    // Step 2: POST /api/approvals/execute (with token from step 1)
+    const execToken = approveResult?.token || approveResult?.execution_token
+    if (execToken) {
+      try {
+        const execRes = await fetch('/api/approvals/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: execToken }),
+        })
+        if (!execRes.ok) {
+          const errData = await execRes.json().catch(() => ({}))
+          const errMsg = errData.detail || errData.message || `Execute backend returned HTTP ${execRes.status}`
+          set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
+          return { success: false, error: errMsg }
+        }
+      } catch (err) {
+        const errMsg = `Network error reaching /api/approvals/execute: ${err?.message || err}`
+        set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
+        return { success: false, error: errMsg }
+      }
+    }
+    // Note: if no execution token was returned (action is just recorded, not dispatched),
+    // the approve step alone is sufficient — this covers both action kinds.
 
     // Backend genuinely confirmed
     set({
@@ -132,8 +179,8 @@ export const useChatStore = create((set, get) => ({
       isResolvingApproval: false,
     })
 
-    const paramDetail = action?.proposed_value || '115% (1,667 m³/h)'
-    const controller = action?.target || 'DCS feed-forward controller FFC-201'
+    const paramDetail = action?.proposed_value || 'confirmed'
+    const controller = action?.target || 'requested action'
     get().addMessage(
       'assistant',
       `✅ **Action Authorized by Operator:** Safety gate passed. ${controller} accepted parameter update: **${paramDetail}**. Continuous interlock monitoring active.`
