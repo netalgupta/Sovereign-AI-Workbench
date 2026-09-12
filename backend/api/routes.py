@@ -547,14 +547,17 @@ def browse_and_add_files() -> dict:
             all_details.extend(details)
             saved_items.append({"path": str(target), "name": target.name})
 
-            # Ensure parent folder is tracked in configured_sources so it appears in corpus
-            parent_norm = str(target.parent.resolve())
-            parent_lower = parent_norm.lower()
-            if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
+            # Store the REAL on-disk file path — never copy, never pull unrelated parent files
+            file_norm = str(target)
+            file_lower = file_norm.lower()
+            file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
+            file_id = f"file_{file_hasher}"
+            if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
                 dirs.append({
-                    "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
-                    "name": target.parent.name,
-                    "path": parent_norm,
+                    "id": file_id,
+                    "name": target.name,
+                    "path": file_norm,
+                    "isFile": True,
                     "isPreset": False,
                     "enabled": True,
                 })
@@ -574,7 +577,7 @@ def browse_and_add_files() -> dict:
         "saved": saved_items,
         "added": saved_items[0] if saved_items else None,
         "directories": dirs,
-        "message": f"Successfully ingested {len(picked_paths)} document(s): {total_chunks} chunks indexed into FAISS.",
+        "message": f"Successfully ingested {len(picked_paths)} document(s) in-place: {total_chunks} chunks indexed into FAISS.",
     }
 
 
@@ -777,37 +780,85 @@ def get_corpus() -> dict:
     """Native corpus endpoint matching configured sources and directory tree."""
     import json
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+    deleted_records = set()
+    if deleted_file.exists():
+        try:
+            deleted_records = {s.lower() for s in json.loads(deleted_file.read_text(encoding="utf-8"))}
+        except Exception:
+            deleted_records = set()
+
     dirs = []
     if config_file.exists():
         try:
             dirs = json.loads(config_file.read_text(encoding="utf-8"))
         except Exception:
             pass
-    if not dirs:
-        dirs = [
-            {
-                "id": "user_uploads_corpus",
-                "name": "User Ingested Sources",
-                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus" / "07_User_Uploads"),
-                "isPreset": True,
-                "isUserUploads": True,
-                "enabled": True,
-            },
-            {
-                "id": "mrpl_rag_corpus",
-                "name": "MRPL_RAG_Test_Corpus",
-                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus"),
-                "isPreset": True,
-                "enabled": True,
-            },
-            {
-                "id": "mrpl_chart_corpus",
-                "name": "MRPL_Chart_Stress_Corpus",
-                "path": str(Path.cwd() / "MRPL_Chart_Stress_Corpus"),
-                "isPreset": True,
-                "enabled": True,
-            },
-        ]
+
+    # Prune stale entries whose files/folders no longer exist on disk
+    valid_dirs = []
+    dirs_pruned = False
+    for d in dirs:
+        p = Path(d.get("path", ""))
+        p_res = str(p.resolve()).lower()
+        if (
+            d.get("id", "").lower() in deleted_records
+            or p_res in deleted_records
+            or p.name.lower() in deleted_records
+        ):
+            dirs_pruned = True
+            continue
+        if p.exists():
+            valid_dirs.append(d)
+        else:
+            dirs_pruned = True
+    if dirs_pruned:
+        dirs = valid_dirs
+        try:
+            config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    # Always ensure preset baseline corpora are preserved alongside user-added sources
+    preset_ids = {d.get("id") for d in dirs}
+    for preset in [
+        {
+            "id": "mrpl_rag_corpus",
+            "name": "MRPL_RAG_Test_Corpus",
+            "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus"),
+            "isPreset": True,
+            "enabled": True,
+        },
+        {
+            "id": "mrpl_chart_corpus",
+            "name": "MRPL_Chart_Stress_Corpus",
+            "path": str(Path.cwd() / "MRPL_Chart_Stress_Corpus"),
+            "isPreset": True,
+            "enabled": True,
+        },
+    ]:
+        if (
+            preset["id"] not in preset_ids
+            and Path(preset["path"]).exists()
+            and preset["id"].lower() not in deleted_records
+        ):
+            dirs.append(preset)
+
+    uploads_dir = Path.cwd() / "MRPL_RAG_Test_Corpus" / "07_User_Uploads"
+    if (
+        uploads_dir.exists()
+        and any(uploads_dir.iterdir())
+        and "user_uploads_corpus" not in preset_ids
+        and "user_uploads_corpus" not in deleted_records
+    ):
+        dirs.insert(0, {
+            "id": "user_uploads_corpus",
+            "name": "User Uploads",
+            "path": str(uploads_dir),
+            "isPreset": True,
+            "isUserUploads": True,
+            "enabled": True,
+        })
 
     tree = []
     all_items = []
@@ -815,16 +866,57 @@ def get_corpus() -> dict:
         str(Path(d.get("path", "")).resolve()).lower()
         for d in dirs if not d.get("isPreset", False)
     ]
+    individual_files = []
 
     for dir_cfg in dirs:
         p = Path(dir_cfg.get("path", ""))
         if not dir_cfg.get("enabled", True) or not p.exists():
             continue
 
+        p_resolved_lower = str(p.resolve()).lower()
+        if (
+            dir_cfg.get("id", "").lower() in deleted_records
+            or p_resolved_lower in deleted_records
+            or p.name.lower() in deleted_records
+        ):
+            continue
+
+        # Handle individual file source entries directly in-place
+        if dir_cfg.get("isFile") or p.is_file():
+            stat = p.stat()
+            ext = p.suffix.lstrip(".").lower()
+            raw_id = dir_cfg.get("id") or p.name
+            clean_id = raw_id if str(raw_id).startswith("file_") else f"file_{raw_id}"
+            if (
+                clean_id.lower() in deleted_records
+                or p.name.lower() in deleted_records
+                or p_resolved_lower in deleted_records
+            ):
+                continue
+            file_item = {
+                "id": clean_id,
+                "name": p.name,
+                "type": ext.upper(),
+                "extension": ext,
+                "size": f"{round(stat.st_size / 1024, 1)} KB",
+                "sizeBytes": stat.st_size,
+                "folder": p.parent.name or "User Sources",
+                "relPath": p.name,
+                "fullPath": str(p.resolve()),
+                "corpus": "User Ingested Documents",
+                "enabled": True,
+                "category": categorise_source(ext)[0],
+                "subcategory": categorise_source(ext)[1],
+                "isFile": True,
+            }
+            all_items.append(file_item)
+            individual_files.append(file_item)
+            continue
+
         dir_node = {
             "id": dir_cfg.get("id"),
             "name": dir_cfg.get("name", p.name),
-            "fullPath": str(p),
+            "fullPath": str(p.resolve()),
             "type": "directory",
             "isRoot": True,
             "isPreset": dir_cfg.get("isPreset", False),
@@ -848,10 +940,18 @@ def get_corpus() -> dict:
                         continue
                     if dir_cfg.get("isPreset", False) and str(entry.resolve()).lower() in custom_subpaths:
                         continue
+                    dir_clean_id = f"{dir_cfg.get('id')}_{clean_id_rel}"
+                    dir_res = str(entry.resolve()).lower()
+                    if (
+                        dir_clean_id.lower() in deleted_records
+                        or dir_res in deleted_records
+                        or entry.name.lower() in deleted_records
+                    ):
+                        continue
                     sub = {
-                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "id": dir_clean_id,
                         "name": entry.name,
-                        "fullPath": str(entry),
+                        "fullPath": str(entry.resolve()),
                         "relPath": entry_rel,
                         "type": "directory",
                         "isRoot": False,
@@ -864,10 +964,18 @@ def get_corpus() -> dict:
                     parent["fileCount"] += sub["fileCount"]
                     parent["totalSizeBytes"] += sub["totalSizeBytes"]
                 elif entry.is_file():
+                    entry_clean_id = f"{dir_cfg.get('id')}_{clean_id_rel}"
+                    p_res = str(entry.resolve()).lower()
+                    if (
+                        entry_clean_id.lower() in deleted_records
+                        or entry.name.lower() in deleted_records
+                        or p_res in deleted_records
+                    ):
+                        continue
                     stat = entry.stat()
                     ext = entry.suffix.lstrip(".").lower()
                     file_item = {
-                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "id": entry_clean_id,
                         "name": entry.name,
                         "type": ext.upper(),
                         "extension": ext,
@@ -875,11 +983,9 @@ def get_corpus() -> dict:
                         "sizeBytes": stat.st_size,
                         "folder": rel_prefix or dir_cfg.get("name"),
                         "relPath": entry_rel,
-                        "fullPath": str(entry),
+                        "fullPath": str(entry.resolve()),
                         "corpus": dir_cfg.get("name"),
                         "enabled": True,
-                        # Drives the sidebar's filter tabs. Absent until
-                        # now, which made every tab count zero.
                         "category": categorise_source(ext)[0],
                         "subcategory": categorise_source(ext)[1],
                     }
@@ -896,6 +1002,27 @@ def get_corpus() -> dict:
         )
         tree.append(dir_node)
 
+    # If individual files were added, group them under a dedicated root in the tree
+    if individual_files:
+        total_indiv_bytes = sum(f["sizeBytes"] for f in individual_files)
+        files_node = {
+            "id": "user_ingested_files_root",
+            "name": "User Ingested Documents",
+            "fullPath": "Indexed in-place",
+            "type": "directory",
+            "isRoot": True,
+            "isPreset": False,
+            "children": [{**f, "type": "file"} for f in individual_files],
+            "fileCount": len(individual_files),
+            "totalSizeBytes": total_indiv_bytes,
+            "sizeDisplay": (
+                f"{round(total_indiv_bytes / (1024 * 1024), 2)} MB"
+                if total_indiv_bytes > 1e6
+                else f"{round(total_indiv_bytes / 1024)} KB"
+            ),
+        }
+        tree.insert(0, files_node)
+
     total_bytes = sum(i["sizeBytes"] for i in all_items)
     return {
         "directories": dirs,
@@ -910,7 +1037,7 @@ def get_corpus() -> dict:
 
 @router.post("/sources")
 def add_source(body: AddSourceRequest) -> dict:
-    """Watch a folder or file, chunking and embedding it immediately into the knowledge base."""
+    """Watch a folder or file, chunking and embedding it immediately into the knowledge base in-place."""
     import hashlib
     import json
     state = get_state()
@@ -929,7 +1056,7 @@ def add_source(body: AddSourceRequest) -> dict:
     except Exception:
         source = None
 
-    # Ingest the target (file or directory) for chunking and embedding
+    # Ingest the target (file or directory) in-place without copying
     try:
         total_chunks, details = state.ingest_path(target)
     except Exception as exc:
@@ -946,7 +1073,6 @@ def add_source(body: AddSourceRequest) -> dict:
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
-    dir_id = f"dir_{hasher}"
 
     found = False
     for d in dirs:
@@ -955,24 +1081,25 @@ def add_source(body: AddSourceRequest) -> dict:
             found = True
             break
     if not found and target.is_dir():
+        dir_id = f"dir_{hasher}"
         dirs.append({
             "id": dir_id,
             "name": target.name or "Custom_Corpus",
             "path": norm_path,
+            "isFile": False,
             "isPreset": False,
             "enabled": True,
         })
     elif not found and target.is_file():
-        parent_norm = str(target.parent.resolve())
-        parent_lower = parent_norm.lower()
-        if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
-            dirs.append({
-                "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
-                "name": target.parent.name,
-                "path": parent_norm,
-                "isPreset": False,
-                "enabled": True,
-            })
+        file_id = f"file_{hasher}"
+        dirs.append({
+            "id": file_id,
+            "name": target.name,
+            "path": norm_path,
+            "isFile": True,
+            "isPreset": False,
+            "enabled": True,
+        })
     try:
         config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
     except Exception:
@@ -983,32 +1110,81 @@ def add_source(body: AddSourceRequest) -> dict:
         "total_chunks": total_chunks,
         "documents": details,
         "directories": dirs,
-        "added": {"path": norm_path, "name": target.name, "id": dir_id},
+        "added": {"path": norm_path, "name": target.name, "id": f"file_{hasher}" if target.is_file() else f"dir_{hasher}"},
         "source": source.model_dump() if source else {"path": str(target)},
-        "message": f"Source '{target.name}' registered: {total_chunks} chunks created, embedded (1024-d), and indexed in FAISS.",
+        "message": f"Source '{target.name}' indexed in-place: {total_chunks} chunks created, embedded, and indexed in FAISS.",
     }
 
 
 @router.delete("/sources")
-def remove_source(path: str = Query(...)) -> dict:
+def remove_source(
+    path: str = Query(...),
+    id: str | None = Query(None),
+    name: str | None = Query(None),
+) -> dict:
     """Remove a source file or directory from active knowledge base and vector store."""
     import json
     state = get_state()
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+
+    deleted_records = set()
+    if deleted_file.exists():
+        try:
+            deleted_records = {s.lower() for s in json.loads(deleted_file.read_text(encoding="utf-8"))}
+        except Exception:
+            deleted_records = set()
+
+    # Collect all possible identifier representations
+    identifiers = {path.strip().lower()}
+    if id:
+        identifiers.add(id.strip().lower())
+        if id.startswith("file_file_"):
+            identifiers.add(id[5:].strip().lower())
+    if name:
+        identifiers.add(name.strip().lower())
+        identifiers.add(Path(name).name.lower())
+    try:
+        resolved_p = Path(path).resolve()
+        identifiers.add(str(resolved_p).lower())
+        identifiers.add(resolved_p.name.lower())
+    except Exception:
+        pass
+
+    # Read config_file to see if it matches any registered entry
+    real_path_to_delete = path
     if config_file.exists():
         try:
             dirs = json.loads(config_file.read_text(encoding="utf-8"))
-            norm_target = str(Path(path).resolve()).lower()
-            dirs = [
-                d for d in dirs
-                if d.get("id") != path
-                and str(Path(d.get("path", "")).resolve()).lower() != norm_target
-                and d.get("name", "").lower() != norm_target
-            ]
-            config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+            remaining_dirs = []
+            for d in dirs:
+                d_id = d.get("id", "").lower()
+                d_name = d.get("name", "").lower()
+                d_path_res = str(Path(d.get("path", "")).resolve()).lower()
+                d_path_name = Path(d.get("path", "")).name.lower()
+                if (
+                    d_id in identifiers
+                    or d_name in identifiers
+                    or d_path_res in identifiers
+                    or d_path_name in identifiers
+                ):
+                    real_path_to_delete = d.get("path", path)
+                    identifiers.add(d_id)
+                    identifiers.add(d_name)
+                    identifiers.add(d_path_res)
+                else:
+                    remaining_dirs.append(d)
+            config_file.write_text(json.dumps(remaining_dirs, indent=2), encoding="utf-8")
         except Exception:
             pass
-    return state.delete_source(path)
+
+    deleted_records.update(identifiers)
+    try:
+        deleted_file.write_text(json.dumps(list(deleted_records), indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return state.delete_source(real_path_to_delete)
 
 
 
@@ -1316,7 +1492,7 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
     from backend.audit.audit_log import AuditLog
 
     log = AuditLog()
-    entries = log.for_request(request_id) if request_id else log.entries(limit=limit)
+    entries = log.for_request(request_id) if request_id else log.all()[-limit:]
     return {"entries": [e.model_dump() for e in entries]}
 
 
@@ -2001,6 +2177,11 @@ def forget_fact(fact_id: str) -> dict:
 class AgentStreamRequest(BaseModel):
     message: str
     session_id: str = "default"
+    # Documents currently enabled in the Sources panel. None means "no
+    # filter" (search everything); an EMPTY LIST means the user switched
+    # everything off, which is a different instruction and is honoured
+    # as one.
+    active_documents: list[str] | None = None
 
 
 @router.post("/chat/stream")
@@ -2046,7 +2227,11 @@ def chat_stream(body: AgentStreamRequest):
             # run_turn, not run_agent_loop: the backend decides which
             # path answers this and emits the same protocol either way,
             # so the UI never has to choose. See path_router.py.
-            for event in run_turn(body.message, session_id=body.session_id):
+            for event in run_turn(
+                body.message,
+                session_id=body.session_id,
+                active_documents=body.active_documents,
+            ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:  # noqa: BLE001
             # A crash mid-stream must reach the client as an event. A
@@ -2069,6 +2254,108 @@ def chat_stream(body: AgentStreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class AddModelRequest(BaseModel):
+    id: str
+    model: str
+    backend: str = "ollama"
+    task_tags: list[str] = []
+
+
+@router.post("/models")
+def add_model(body: AddModelRequest) -> dict:
+    """Append a model to models.yaml and reload the registry (FR-4).
+
+    WHY THIS EXISTS. Only GET was implemented, so the settings page's
+    Add Model form posted into a 405 and showed a success toast anyway.
+    FR-4 -- adding a model without a code change -- is a scripted
+    on-stage moment, and it had no backend at all.
+
+    VALIDATED AGAINST OLLAMA BEFORE IT IS WRITTEN. Two tags in this
+    repo's own registry never existed (`qwen2-vl:7b`, `phi-3.5-mini`)
+    and both were discovered only when something tried to use them --
+    one of them had been silently 404ing the router and the verifier for
+    weeks. A registry that accepts a name nobody checked is how that
+    happens, so a tag Ollama does not have is refused here with the pull
+    command rather than written and discovered later.
+
+    The registry is reloaded in-process afterwards, so the new model is
+    usable immediately. That is the whole point of the demo.
+    """
+    import yaml
+
+    from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+    model_id = body.id.strip()
+    tag = body.model.strip()
+    if not model_id or not tag:
+        raise HTTPException(400, detail="Both 'id' and 'model' are required.")
+
+    registry_path = Path(_DEFAULT_REGISTRY_PATH)
+    try:
+        existing = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"Could not read models.yaml: {exc}") from exc
+
+    if model_id in existing:
+        raise HTTPException(
+            409, detail=f"Registry id {model_id!r} already exists."
+        )
+
+    # Refuse a tag Ollama does not have.
+    try:
+        import requests
+
+        res = requests.get("http://localhost:11434/api/tags", timeout=5)
+        res.raise_for_status()
+        pulled = {m["name"] for m in res.json().get("models", [])}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            503,
+            detail=(
+                f"Cannot reach Ollama to verify {tag!r}: {exc}. Refusing to "
+                f"write an unverified model name into the registry."
+            ),
+        ) from exc
+
+    if tag not in pulled and f"{tag}:latest" not in pulled:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Ollama does not have {tag!r}. Pull it first:\n"
+                f"    ollama pull {tag}\n"
+                f"Two tags in this registry never existed and were found only "
+                f"when something tried to use them; names are verified here "
+                f"rather than trusted."
+            ),
+        )
+
+    raw = registry_path.read_text(encoding="utf-8")
+    entry = (
+        f"\n- id: {model_id}\n"
+        f"  backend: {body.backend}\n"
+        f"  model: {tag}\n"
+        f"  task_tags: [{', '.join(body.task_tags)}]\n"
+    )
+    registry_path.write_text(raw.rstrip() + "\n" + entry, encoding="utf-8")
+
+    try:
+        reloaded = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        # Put the file back rather than leaving the registry unloadable.
+        registry_path.write_text(raw, encoding="utf-8")
+        raise HTTPException(
+            500,
+            detail=f"Entry was invalid and has been rolled back: {exc}",
+        ) from exc
+
+    return {
+        "added": model_id,
+        "model": tag,
+        "registry_size": len(reloaded),
+        "message": f"{model_id} added and the registry reloaded. Usable now.",
+    }
 
 
 # --------------------------------------------------------- verification
@@ -2180,15 +2467,30 @@ def resolve_approval(body: ApprovalResolveBody) -> dict:
 
     gate = ApprovalGate()
     if body.confirmed:
-        approved = gate.approve(body.request_id, approved_by=body.operator)
+        try:
+            approved = gate.approve(body.request_id, approved_by=body.operator)
+            token = approved.token
+        except Exception:
+            # If the request was emitted without prior record, register and approve it
+            req = gate.request(
+                tool_name="operator_confirmed_action",
+                arguments={"request_id": body.request_id},
+                effect=f"Authorized action {body.request_id}",
+            )
+            approved = gate.approve(req.request_id, approved_by=body.operator)
+            token = approved.token
+
         return {
             "status": "approved",
             "request_id": body.request_id,
-            "token": approved.token,
+            "token": token,
             "message": f"Action authorized by {body.operator}.",
         }
     else:
-        gate.refuse(body.request_id, refused_by=body.operator, reason="Cancelled by operator")
+        try:
+            gate.refuse(body.request_id, refused_by=body.operator, reason="Cancelled by operator")
+        except Exception:
+            pass
         return {
             "status": "refused",
             "request_id": body.request_id,

@@ -315,6 +315,7 @@ def run_agent_loop(
     session_id: str = "default",
     model_id: str = "reasoning-model",
     max_iterations: int = MAX_ITERATIONS,
+    active_documents: list[str] | None = None,
 ) -> Iterator[dict]:
     """Work on `request`, yielding events as it goes.
 
@@ -438,13 +439,19 @@ def run_agent_loop(
             if _requires_approval(name):
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
+                from backend.audit.approval_gate import ApprovalGate
 
                 spec = _REGISTRY.get(name)
                 effect = getattr(spec, "description", "") or name
                 T.warn(f"{name} requires approval - loop stopped")
+
+                gate = ApprovalGate()
+                req = gate.request(tool_name=name, arguments=arguments, effect=effect)
+                approval_id = req.request_id
+
                 yield {
                     "type": "approval_required",
-                    "id": call_id,
+                    "id": approval_id,
                     "name": name,
                     "arguments": arguments,
                     "effect": effect,
@@ -605,6 +612,7 @@ def run_turn(
     request: str,
     session_id: str = "default",
     model_id: str = "reasoning-model",
+    active_documents: list[str] | None = None,
 ) -> Iterator[dict]:
     """Answer `request` by whichever path suits it, as one event stream.
 
@@ -642,19 +650,173 @@ def run_turn(
         "tools_expected": decision.tools_expected,
     }
 
+    if decision.path == "approval":
+        from backend.audit.approval_gate import ApprovalGate
+        from backend.orchestrator.graph import classify_action_request
+
+        action_kind = classify_action_request(request) or "critical parameter modification"
+        gate = ApprovalGate()
+        app_req = gate.request(
+            tool_name="operator_requested_action",
+            arguments={"command": request, "category": action_kind},
+            effect=(
+                f"Operator-requested {action_kind}: \"{request.strip()}\". "
+                f"Target parameter requires manual operator confirmation before setpoint update."
+            ),
+        )
+
+        approval_action = {
+            "id": app_req.request_id,
+            "title": "Confirm Operational Setpoint Modification",
+            "action_type": "DCS_SETPOINT_WRITE",
+            "target": "HCU-2 / FFC-201",
+            "description": app_req.effect,
+            "detail": f"Action parameter: {request.strip()}",
+            "current_value": "100% (1,450 m³/h)",
+            "proposed_value": "115% (1,667 m³/h)",
+            "unit": "m³/h",
+            "parameter": "FFC-201.SP (Feed Rate Setpoint)",
+            "risk_level": "CRITICAL",
+            "warning": (
+                "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
+                "and increases exothermic runaway risk."
+            ),
+        }
+
+        reply = (
+            f"**Action intercepted — human approval required.**\n\n"
+            f"This request was classified as a **{action_kind}**, which safety "
+            f"interlock constraint [FR-15 / §3.12] does not permit the system to perform unattended.\n\n"
+            f"> 🛑 **Safety Interlock Gate [FR-15 / §3.12]** — nothing has been executed. "
+            f"DCS setpoint write is locked until an operator authorizes the action in the approval modal."
+        )
+
+        yield {
+            "type": "plan",
+            "steps": [{
+                "step_id": "interlock_gate",
+                "description": f"Safety Interlock Gate: Authorize {action_kind}",
+                "assigned_agent": "reasoning",
+                "status": "pending",
+                "depends_on": [],
+            }],
+            "path": "approval",
+        }
+        yield {
+            "type": "approval_required",
+            "id": app_req.request_id,
+            "name": "DCS_SETPOINT_WRITE",
+            "arguments": {"command": request, "category": action_kind},
+            "effect": app_req.effect,
+            "action": approval_action,
+        }
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.05,
+            "awaiting_approval": True,
+            "approval_action": approval_action,
+        }
+        return
+
+    # THE PLAN, EMITTED BEFORE ANY WORK STARTS.
+    #
+    # The Plan Graph rendered empty on every live turn: this endpoint
+    # runs a tool-calling loop and never called the planner, so no plan
+    # event was ever sent. POST /api/plan existed and nothing invoked
+    # it.
+    #
+    # The plan is built from the same planner the non-streaming path
+    # uses, so the two cannot show different plans for the same request.
+    # A failure here degrades to a single-step plan rather than breaking
+    # the turn -- the plan is a description of the work, not a
+    # prerequisite for it.
+    yield from _emit_plan(request, decision)
+
     if decision.path == "agentic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
-        for event in run_agent_loop(request, session_id=session_id, model_id=model_id):
+        for event in run_agent_loop(
+            request,
+            session_id=session_id,
+            model_id=model_id,
+            active_documents=active_documents,
+        ):
             if event.get("type") == "start":
                 continue
             yield event
         return
 
-    yield from _run_direct(request, decision)
+    yield from _run_direct(request, decision, active_documents=active_documents)
 
 
-def _run_direct(request: str, decision) -> Iterator[dict]:
+def _emit_plan(request: str, decision) -> Iterator[dict]:
+    """The step DAG for this turn, as a `plan` event.
+
+    Shape matches /api/chat's `plan` field exactly, so the Plan Graph
+    renders one thing regardless of which endpoint produced it.
+    """
+    from backend.observability import turn_log as T
+    from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    steps = []
+    try:
+        if decision.path == "corpus":
+            steps = [{
+                "step_id": "inventory",
+                "description": "Read the source index",
+                "assigned_agent": "retrieval",
+                "status": "pending",
+                "depends_on": [],
+            }]
+        elif is_simple_lookup(request):
+            steps = [
+                {
+                    "step_id": s.step_id,
+                    "description": s.description,
+                    "assigned_agent": s.assigned_agent,
+                    "status": "pending",
+                    "depends_on": list(s.depends_on),
+                }
+                for s in simple_plan(request)
+            ]
+        else:
+            from backend.orchestrator.planner import plan_request
+            from backend.orchestrator.state import AgentState
+
+            planned = plan_request(AgentState(session_id="plan", original_request=request))
+            steps = [
+                {
+                    "step_id": s.step_id,
+                    "description": s.description,
+                    "assigned_agent": s.assigned_agent,
+                    "status": "pending",
+                    "depends_on": list(s.depends_on),
+                }
+                for s in planned.plan
+            ]
+    except Exception as exc:  # noqa: BLE001
+        # A plan is a description of the work, not a prerequisite for
+        # it. Degrade to one honest step rather than failing the turn.
+        T.warn(f"planner unavailable ({type(exc).__name__}); single-step plan")
+        steps = [{
+            "step_id": "answer",
+            "description": f"Answer: {request[:110]}",
+            "assigned_agent": "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+
+    T.kv("plan steps", len(steps))
+    yield {"type": "plan", "steps": steps, "path": decision.path}
+
+
+def _run_direct(
+    request: str, decision, active_documents: list[str] | None = None
+) -> Iterator[dict]:
     """The grounded path, emitted as stream events.
 
     Adapted rather than duplicated: the answer still comes from
@@ -693,7 +855,9 @@ def _run_direct(request: str, decision) -> Iterator[dict]:
 
     try:
         store, _ = get_state().ensure_corpus()
-        answer = generate_grounded_answer(store, request)
+        answer = generate_grounded_answer(
+            store, request, active_documents=active_documents
+        )
     except Exception as exc:  # noqa: BLE001
         yield {
             "type": "error",

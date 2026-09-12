@@ -304,8 +304,8 @@ export function SettingsPage() {
       const modelsRes = await fetch('/api/models')
       if (modelsRes.ok) {
         const modelsData = await modelsRes.json()
-        if (modelsData.registry && modelsData.auxiliary) {
-          setModels([...modelsData.registry, ...modelsData.auxiliary])
+        if (Array.isArray(modelsData.models)) {
+          setModels(modelsData.models)
         } else if (Array.isArray(modelsData)) {
           setModels(modelsData)
         }
@@ -403,28 +403,35 @@ export function SettingsPage() {
       backend: formData.backend,
       model: formData.model.trim(),
       task_tags: tagsArray.length > 0 ? tagsArray : ['general_inference'],
-      vram_usage: `${estimatedVram} (Estimated)`,
-      status: 'active',
-      engine_type: 'ollama_registry',
     }
 
+    let backendError = null
     try {
-      await fetch('/api/models', {
+      const res = await fetch('/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newModel),
       })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        backendError = errData.detail || errData.message || `Backend returned HTTP ${res.status}`
+      }
     } catch (err) {
-      console.warn('Could not persist to models.yaml via API:', err)
+      backendError = `Network error: ${err?.message || err}`
     }
 
-    setModels((prev) => [...prev, newModel])
-    setFormData({ id: '', backend: 'ollama', model: '', task_tags: '' })
+    if (backendError) {
+      showToast(`Failed to register model: ${backendError}`, 'error')
+      return
+    }
 
+    // Re-fetch the live registry — get what the backend actually stored
+    setFormData({ id: '', backend: 'ollama', model: '', task_tags: '' })
     showToast(
-      `FR-4 Live Reload: Model '${newModel.model}' registered to models.yaml & loaded into memory`,
+      `FR-4 Live Reload: Model '${newModel.model}' registered to models.yaml and loaded into memory`,
       'success'
     )
+    await fetchSystemAndModels()
   }
 
   return (

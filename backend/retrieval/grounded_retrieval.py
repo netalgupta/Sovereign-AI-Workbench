@@ -163,7 +163,10 @@ class GroundedRetrievalResult(BaseModel):
 
 
 def retrieve_with_grounding_check(
-    store: VectorStore, query: str, top_k: int = 5
+    store: VectorStore,
+    query: str,
+    top_k: int = 5,
+    active_documents: list[str] | None = None,
 ) -> GroundedRetrievalResult:
     """hybrid_search, gated by RAG_SPEC.md §3's confidence threshold.
 
@@ -208,6 +211,37 @@ def retrieve_with_grounding_check(
     query_embedding = embed_texts([search_query])[0]
     dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
     best_similarity = max((score for _fid, score in dense_hits), default=0.0)
+
+    # EXCLUDED SOURCES ARE EXCLUDED, not merely hidden.
+    #
+    # Toggling a source off in the Sources panel was pure client-side
+    # React state: nothing reached retrieval, so an excluded document
+    # kept appearing in citations and kept grounding answers. The panel
+    # carries the line "This session is grounded only in the sources
+    # listed here", so the toggle was making a promise the pipeline had
+    # never been told about. That is a trust defect rather than a
+    # missing feature -- the panel exists to say what an answer rests
+    # on, and it was wrong.
+    #
+    # Applied before neighbour expansion and before anything reaches the
+    # prompt, so an excluded document cannot re-enter as the neighbour
+    # of an included one.
+    #
+    # None means "no filter supplied" and is NOT the same as an empty
+    # list, which means "the user switched everything off". Collapsing
+    # those two would turn a deliberate exclusion into a silent
+    # search-everything.
+    allowed = set(active_documents) if active_documents is not None else None
+
+    if allowed is not None and not allowed:
+        return GroundedRetrievalResult(
+            found=False,
+            chunks=[],
+            reason=(
+                "Every source is switched off in the Sources panel, so there "
+                "is nothing to search. Re-enable at least one document."
+            ),
+        )
 
     threshold = confidence_threshold()
 
@@ -292,11 +326,17 @@ def retrieve_with_grounding_check(
         stored = store.get_by_faiss_id(faiss_id)
         if stored is None:
             continue
+        if allowed is not None and stored.source_document not in allowed:
+            continue
         selected[faiss_id] = (stored.source_document, stored.chunk_index, fused[faiss_id])
         for neighbour in store.get_neighbours(
             stored.source_document, stored.chunk_index, window=NEIGHBOUR_WINDOW
         ):
             if neighbour.faiss_id in selected:
+                continue
+            # A neighbour of an included chunk is still a chunk, and an
+            # excluded document must not re-enter through it.
+            if allowed is not None and neighbour.source_document not in allowed:
                 continue
             # A neighbour inherits a fraction of its anchor's score so it
             # never outranks a chunk that actually matched the query --

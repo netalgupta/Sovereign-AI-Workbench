@@ -1,28 +1,24 @@
 import React from 'react'
-import { Shield, ShieldAlert, ArrowUpRight, Cpu, HardDrive, Wifi, Radio } from 'lucide-react'
+import { Shield, ShieldAlert, ShieldX, ArrowUpRight, Cpu, HardDrive, Wifi, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { CANONICAL_NETWORK_STATE } from './contract'
 
 /**
- * Placeholder for NetworkMonitor component.
+ * NetworkMonitor / Placeholder component.
  * Owner: Sahil (FRONTEND.md §3.9 / CARD 07)
  *
- * Designed as a professional inert placeholder with subtle diagonal hatching texture
- * and restrained, desaturated tones to clearly indicate an inactive/unwired state
- * without loud alert banners or watermark stamps.
+ * Provides persistent zero-egress hardware telemetry.
+ * If backend telemetry is unreachable or encounters a socket read/permission error,
+ * it strictly surfaces a grey/muted "Status unavailable" state — NEVER a fake "Air-Gap Secure" state.
  *
  * @param {import('./contract').NetworkMonitorProps} props
  */
 export default function Placeholder({
-  status = CANONICAL_NETWORK_STATE.status,
-  externalCount = CANONICAL_NETWORK_STATE.externalCount,
-  connections = CANONICAL_NETWORK_STATE.connections,
-  metrics = CANONICAL_NETWORK_STATE.metrics,
   mode = 'bar',
   onViewFullMonitor,
 }) {
   const navigate = useNavigate()
   const [liveData, setLiveData] = React.useState(null)
+  const [fetchFailed, setFetchFailed] = React.useState(false)
 
   React.useEffect(() => {
     let active = true
@@ -32,8 +28,13 @@ export default function Placeholder({
         if (res.ok && active) {
           const data = await res.json()
           setLiveData(data)
+          setFetchFailed(false)
+        } else if (active) {
+          setFetchFailed(true)
         }
-      } catch {}
+      } catch {
+        if (active) setFetchFailed(true)
+      }
     }
     poll()
     const interval = setInterval(poll, 3000)
@@ -43,12 +44,20 @@ export default function Placeholder({
     }
   }, [])
 
-  const effStatus = liveData ? (liveData.is_air_gapped ? 'secure' : (liveData.externalCount > 0 ? 'external_detected' : 'secure')) : status
-  const effExternalCount = liveData ? (liveData.externalCount ?? liveData.connections?.filter(c => c.is_external)?.length ?? 0) : externalCount
-  const effConnections = liveData?.connections || connections
-  const effMetrics = liveData?.metrics || metrics
+  // Telemetry is ONLY valid if backend actively answered without an error status
+  const isAvailable = Boolean(
+    liveData &&
+    !fetchFailed &&
+    liveData.status !== 'error' &&
+    liveData.status !== 'unknown'
+  )
 
-  const isSecure = effExternalCount === 0 && effStatus !== 'external_detected'
+  const isSecure = isAvailable && liveData.is_air_gapped && (liveData.externalCount === 0)
+  const isAlert = isAvailable && (!liveData.is_air_gapped || liveData.externalCount > 0)
+
+  const effExternalCount = isAvailable ? (liveData.externalCount ?? 0) : null
+  const effConnections = isAvailable && Array.isArray(liveData.connections) ? liveData.connections : []
+  const effMetrics = isAvailable ? liveData.metrics : null
 
   const handleOpenFull = () => {
     if (onViewFullMonitor) {
@@ -75,14 +84,28 @@ export default function Placeholder({
           <div className="flex items-center gap-1.5">
             <span
               className={`inline-block w-2 h-2 rounded-full ${
-                isSecure ? 'bg-emerald-500 animate-pulse' : 'bg-red-500 animate-ping'
+                !isAvailable
+                  ? 'bg-zinc-400 dark:bg-zinc-600'
+                  : isSecure
+                  ? 'bg-emerald-500 animate-pulse'
+                  : 'bg-red-500 animate-ping'
               }`}
             />
             <span
               className="font-medium font-sans text-[11px]"
-              style={{ color: isSecure ? 'var(--color-text)' : '#ef4444' }}
+              style={{
+                color: !isAvailable
+                  ? 'var(--color-text-muted)'
+                  : isSecure
+                  ? 'var(--color-text)'
+                  : '#ef4444',
+              }}
             >
-              {isSecure ? 'Air-Gap Secure' : 'ALERT: External Traffic'}
+              {!isAvailable
+                ? 'Status unavailable'
+                : isSecure
+                ? 'Air-Gap Secure'
+                : 'ALERT: External Traffic'}
             </span>
           </div>
 
@@ -90,19 +113,29 @@ export default function Placeholder({
 
           {/* External connections count */}
           <div className="flex items-center gap-1 text-[11px]">
-            <span style={{ color: isSecure ? 'var(--color-text-muted)' : '#ef4444' }}>
-              ● {effExternalCount} external connections
+            <span
+              style={{
+                color: !isAvailable
+                  ? 'var(--color-text-faint)'
+                  : isSecure
+                  ? 'var(--color-text-muted)'
+                  : '#ef4444',
+              }}
+            >
+              {!isAvailable ? '● Telemetry offline' : `● ${effExternalCount} external connections`}
             </span>
           </div>
 
           <span className="hidden sm:inline text-[10px] text-zinc-400 dark:text-zinc-600">|</span>
 
-          {/* Integration Handoff Pill */}
+          {/* Integration Status Pill */}
           <span
             className="hidden sm:inline text-[10px] font-mono"
-            style={{ color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}
+            style={{
+              color: isAvailable ? 'var(--color-success)' : 'var(--color-text-faint)',
+            }}
           >
-            {liveData ? 'Live Backend Zero-Egress Stream' : 'Live Hardware Polling'}
+            {isAvailable ? 'Live Backend Zero-Egress Stream' : 'Backend Disconnected'}
           </span>
         </div>
 
@@ -111,9 +144,9 @@ export default function Placeholder({
           type="button"
           onClick={handleOpenFull}
           className="flex items-center gap-1 text-[11px] font-sans font-medium hover:underline transition-colors cursor-pointer"
-          style={{ color: 'var(--color-accent)' }}
+          style={{ color: isAvailable ? 'var(--color-accent)' : 'var(--color-text-muted)' }}
         >
-          <span>Live Sockets ({effConnections.length})</span>
+          <span>Live Sockets ({isAvailable ? effConnections.length : '—'})</span>
           <ArrowUpRight size={12} />
         </button>
       </aside>
@@ -126,7 +159,7 @@ export default function Placeholder({
       className="flex-1 flex flex-col h-full overflow-hidden"
       style={{ background: 'var(--color-bg)' }}
     >
-      {/* ── Top Header & Integration Handoff Banner ─────────────────────── */}
+      {/* ── Top Header ─────────────────────── */}
       <div
         className="px-6 py-4 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3"
         style={{
@@ -138,36 +171,39 @@ export default function Placeholder({
           <div
             className="w-9 h-9 rounded-lg flex items-center justify-center"
             style={{
-              background: isSecure ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-              color: isSecure ? '#10b981' : '#ef4444',
+              background: !isAvailable
+                ? 'rgba(140, 140, 150, 0.1)'
+                : isSecure
+                ? 'rgba(16, 185, 129, 0.1)'
+                : 'rgba(239, 68, 68, 0.1)',
+              color: !isAvailable ? 'var(--color-text-muted)' : isSecure ? '#10b981' : '#ef4444',
             }}
           >
-            {isSecure ? <Shield size={18} /> : <ShieldAlert size={18} />}
+            {!isAvailable ? <ShieldX size={18} /> : isSecure ? <Shield size={18} /> : <ShieldAlert size={18} />}
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
                 Real-Time Air-Gap &amp; Network Monitor
               </h2>
-              {/* Clean, quiet header pill as originally specified */}
               <span
                 className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold uppercase tracking-wider"
                 style={{
                   background: 'var(--color-overlay)',
                   border: '1px solid var(--color-border)',
-                  color: 'var(--color-text-muted)',
+                  color: isAvailable ? 'var(--color-success)' : 'var(--color-text-muted)',
                 }}
               >
-                Integration pending — owned by Sahil
+                {isAvailable ? 'Live Hardware Poller Active' : 'Telemetry Offline'}
               </span>
             </div>
             <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              CARD 07 / FRONTEND.md §3.9 live WebSocket connection surveillance
+              CARD 07 / FRONTEND.md §3.9 process-scoped zero-egress surveillance
             </p>
           </div>
         </div>
 
-        {/* Anti-hallucination metric */}
+        {/* Status explanation */}
         <div
           className="px-3 py-1.5 rounded-lg border text-xs font-mono"
           style={{
@@ -176,14 +212,28 @@ export default function Placeholder({
             color: 'var(--color-text-muted)',
           }}
         >
-          Time since last external attempt:{' '}
-          <strong style={{ color: 'var(--color-success)' }}>N/A (none recorded this session)</strong>
+          Telemetry State:{' '}
+          <strong
+            style={{
+              color: !isAvailable
+                ? 'var(--color-text-muted)'
+                : isSecure
+                ? 'var(--color-success)'
+                : '#ef4444',
+            }}
+          >
+            {!isAvailable
+              ? 'Unavailable (Offline / Unreachable)'
+              : isSecure
+              ? 'Zero External Sockets Verified'
+              : `${effExternalCount} External Sockets Detected`}
+          </strong>
         </div>
       </div>
 
       {/* ── Scrollable Body Content ───────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-6 max-w-6xl w-full mx-auto">
-        {/* ── Live System Resource Metric Cards (restrained inert styling) ─── */}
+        {/* ── Live System Resource Metric Cards ─── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 opacity-90">
           <div
             className="p-4 rounded-xl border flex items-center justify-between shadow-xs"
@@ -196,12 +246,12 @@ export default function Placeholder({
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>CPU Utilization</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {effMetrics?.cpuPercent || 14}%
+                  {isAvailable && effMetrics?.cpuPercent != null ? `${effMetrics.cpuPercent}%` : '—'}
                 </span>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
-              {liveData ? 'live' : 'simulated'}
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: isAvailable ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+              {isAvailable ? 'live' : 'offline'}
             </span>
           </div>
 
@@ -216,12 +266,12 @@ export default function Placeholder({
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>Memory Footprint</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {effMetrics?.memoryGb || 3.8} GB
+                  {isAvailable && effMetrics?.memoryGb != null ? `${effMetrics.memoryGb} GB` : '—'}
                 </span>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: liveData ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
-              {liveData ? 'live' : 'simulated'}
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-overlay)', color: isAvailable ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+              {isAvailable ? 'live' : 'offline'}
             </span>
           </div>
 
@@ -230,23 +280,37 @@ export default function Placeholder({
             style={{ background: 'var(--color-card-bg)', borderColor: 'var(--color-card-border)' }}
           >
             <div className="flex items-center gap-2.5 text-xs">
-              <div className="p-2 rounded-lg" style={{ background: 'var(--color-surface)', color: isSecure ? 'var(--color-text-muted)' : '#ef4444' }}>
+              <div
+                className="p-2 rounded-lg"
+                style={{
+                  background: 'var(--color-surface)',
+                  color: !isAvailable ? 'var(--color-text-muted)' : isSecure ? 'var(--color-text-muted)' : '#ef4444',
+                }}
+              >
                 <Wifi size={16} />
               </div>
               <div>
                 <span className="block text-[11px]" style={{ color: 'var(--color-text-muted)' }}>External Sockets</span>
                 <span className="font-mono text-xs font-bold" style={{ color: 'var(--color-text)' }}>
-                  {effMetrics?.networkRate || '0.0 MB/s'} ({effExternalCount} ext)
+                  {!isAvailable ? 'Unavailable' : `${effExternalCount} external`}
                 </span>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-emerald-600 dark:text-emerald-400 bg-emerald-500/10">
-              air-gap safe
+            <span
+              className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                !isAvailable
+                  ? 'text-zinc-400 bg-zinc-500/10'
+                  : isSecure
+                  ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
+                  : 'text-red-500 bg-red-500/10'
+              }`}
+            >
+              {!isAvailable ? 'offline' : isSecure ? 'air-gap safe' : 'egress alert'}
             </span>
           </div>
         </div>
 
-        {/* ── Socket Table Container with Subtle Diagonal Hatching Texture ──── */}
+        {/* ── Socket Table Container ──── */}
         <div
           className="rounded-xl border shadow-xs overflow-hidden"
           style={{
@@ -254,38 +318,35 @@ export default function Placeholder({
             borderColor: 'var(--color-card-border)',
           }}
         >
-          {/* Subtle hatching background pattern behind table header to signal inactive placeholder state */}
           <div
             className="px-4 py-3 border-b flex items-center justify-between font-mono text-[11px]"
             style={{
               borderColor: 'var(--color-border)',
-              background:
-                'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(140, 140, 150, 0.05) 10px, rgba(140, 140, 150, 0.05) 20px)',
+              background: 'var(--color-surface)',
             }}
           >
             <div className="flex items-center gap-2">
               <span className="font-bold uppercase tracking-wider" style={{ color: 'var(--color-text)' }}>
-                Socket Surveillance Table
+                Active Socket Table (Application Process Tree)
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded text-zinc-400 dark:text-zinc-500 bg-zinc-500/10 border border-zinc-500/20">
-                Inert Mock Dataset
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                  isAvailable
+                    ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
+                    : 'text-zinc-400 bg-zinc-500/10 border-zinc-500/20'
+                }`}
+              >
+                {isAvailable ? 'Live Data' : 'Unavailable'}
               </span>
             </div>
 
             <span className="text-[10px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1.5 font-mono">
-              <Radio size={12} className="opacity-60" />
-              <span>Awaiting live WebSocket socket feed</span>
+              <Radio size={12} className={isAvailable ? 'text-emerald-500 animate-pulse' : 'opacity-60'} />
+              <span>{isAvailable ? 'Streaming from /api/network/status' : 'No connection to backend'}</span>
             </span>
           </div>
 
-          {/* Desaturated Table Content */}
-          <div
-            className="overflow-x-auto"
-            style={{
-              background:
-                'repeating-linear-gradient(45deg, transparent, transparent 12px, rgba(140, 140, 150, 0.025) 12px, rgba(140, 140, 150, 0.025) 24px)',
-            }}
-          >
+          <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr
@@ -304,37 +365,46 @@ export default function Placeholder({
                 </tr>
               </thead>
               <tbody className="divide-y font-mono text-[11px]" style={{ borderColor: 'var(--color-border)' }}>
-                {effConnections.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  >
-                    <td className="py-2.5 px-4" style={{ color: 'var(--color-text)' }}>
-                      {c.local_addr}
-                    </td>
-                    <td className="py-2.5 px-4" style={{ color: 'var(--color-text-muted)' }}>
-                      {c.remote_addr}
-                    </td>
-                    <td className="py-2.5 px-4 font-semibold text-zinc-500 dark:text-zinc-400">
-                      {c.status}
-                    </td>
-                    <td className="py-2.5 px-4 font-medium" style={{ color: 'var(--color-accent)' }}>
-                      {c.process || 'kernel'}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      {/* Desaturated, greyscale-leaning classification pill */}
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                          c.is_external
-                            ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                            : 'bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20'
-                        }`}
-                      >
-                        {c.is_external ? 'EXTERNAL' : 'LOOPBACK / LOCAL'}
-                      </span>
+                {!isAvailable || effConnections.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-zinc-400 dark:text-zinc-500 font-mono">
+                      {!isAvailable
+                        ? 'Status unavailable — cannot read active sockets from the backend.'
+                        : 'No active sockets in application process tree.'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  effConnections.map((c) => (
+                    <tr
+                      key={c.id}
+                      className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    >
+                      <td className="py-2.5 px-4" style={{ color: 'var(--color-text)' }}>
+                        {c.local_addr || c.local_address}
+                      </td>
+                      <td className="py-2.5 px-4" style={{ color: 'var(--color-text-muted)' }}>
+                        {c.remote_addr || c.remote_address || '—'}
+                      </td>
+                      <td className="py-2.5 px-4 font-semibold text-zinc-500 dark:text-zinc-400">
+                        {c.status}
+                      </td>
+                      <td className="py-2.5 px-4 font-medium" style={{ color: 'var(--color-accent)' }}>
+                        {c.process || 'python'}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            c.is_external
+                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                              : 'bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20'
+                          }`}
+                        >
+                          {c.is_external ? 'EXTERNAL' : 'LOOPBACK / LOCAL'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
