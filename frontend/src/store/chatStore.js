@@ -107,7 +107,16 @@ export const useChatStore = create((set, get) => ({
    * @param {Array}   [opts.citations] — citation objects from the API response
    */
   addMessage: (role, content, opts = {}) => {
-    const { streaming = false, citations = [] } = opts
+    // plan / toolCallEvents / verification carry the REAL execution
+    // trace for this turn, so the UI can show what ran instead of the
+    // hardcoded reasoning steps that used to be baked into ChatPane.
+    const {
+      streaming = false,
+      citations = [],
+      plan = [],
+      toolCallEvents = [],
+      verification = null,
+    } = opts
     const message = {
       id: generateSessionId(),
       role,
@@ -115,6 +124,9 @@ export const useChatStore = create((set, get) => ({
       displayedContent: streaming ? '' : content,
       streaming,
       citations,
+      plan,
+      toolCallEvents,
+      verification,
       timestamp: now(),
     }
     set((state) => ({ messages: [...state.messages, message] }))

@@ -11,7 +11,28 @@
 
 - id: reasoning-model
   backend: ollama
-  model: qwen2.5:14b
+  # Was qwen2.5:14b. Measured on the real corpus, warm, 5 questions with
+  # known answers (4 factual + 1 out-of-corpus that must be refused):
+  #
+  #     qwen2.5:7b    4/5   avg  4.6s
+  #     qwen2.5:3b    4/5   avg  3.4s
+  #     qwen2.5:14b   4/5   avg 32.5s
+  #
+  # Identical accuracy, 7x faster. The single shared failure is a
+  # retrieval miss (the chunk holding the ramp rate was not returned),
+  # not a model error -- all three correctly said the sources did not
+  # contain it rather than inventing a number.
+  #
+  # 7b over 3b despite 3b being faster still: 3b misread a table row in
+  # an earlier run, answering 11.2 g/10min (the H110F row) for a
+  # question about H030SG (3.4). On a refinery workbench a fast wrong
+  # number is worse than a slow right one, and a model that confuses
+  # adjacent rows of a spec table fails in exactly the way that matters.
+  #
+  # VRAM: 4.7 GB fits the 8 GB card outright -- confirmed "100% GPU" in
+  # ollama ps. 14b is 9.0 GB and needs num_gpu=99 to avoid a CPU split,
+  # leaving no room for any other model to be resident.
+  model: qwen2.5:7b
   task_tags: [summarization, drafting, approval_notes, planning]
 
 - id: vision-model

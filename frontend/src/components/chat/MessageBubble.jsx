@@ -14,7 +14,7 @@
  *     single-chunk mock AND real multi-chunk SSE streams
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
 import { useChatStore } from '../../store/chatStore'
@@ -128,6 +128,161 @@ function StreamCursor() {
 /**
  * @param {{ message: import('../../store/chatStore').Message }} props
  */
+
+/**
+ * The actual pipeline trace for THIS answer.
+ *
+ * The chat used to show a hardcoded "Retrieving sources · 21s" that
+ * counted forever with no request behind it, and 484 lines of invented
+ * reasoning steps with fabricated timestamps. All of that is deleted.
+ *
+ * What replaces it is the same information the backend console trace
+ * prints, taken from the response: the plan steps the planner actually
+ * produced, the tools that actually ran with their real returned
+ * output, and the self-verification verdict. Every value here came back
+ * from the server for this specific turn -- nothing is generated in the
+ * browser, so there is nothing here that can drift from what happened.
+ *
+ * Collapsed by default: an engineer wants the answer first and the
+ * machinery on demand.
+ */
+function TurnTrace({ message }) {
+  const [open, setOpen] = useState(false)
+
+  const steps = Array.isArray(message.plan) ? message.plan : []
+  const tools = Array.isArray(message.toolCallEvents) ? message.toolCallEvents : []
+  const verification = message.verification || null
+  const sources = Array.isArray(message.citations) ? message.citations : []
+
+  if (!steps.length && !tools.length && !verification) return null
+
+  const summary = [
+    steps.length ? `${steps.length} plan step${steps.length === 1 ? '' : 's'}` : null,
+    tools.length ? `${tools.length} tool call${tools.length === 1 ? '' : 's'}` : null,
+    sources.length ? `${sources.length} source${sources.length === 1 ? '' : 's'}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return (
+    <div className="mt-1.5 mb-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none w-fit"
+        style={{ background: 'transparent', border: 'none', color: 'var(--color-text-muted)' }}
+        title={open ? 'Hide pipeline trace' : 'Show what ran for this answer'}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            display: 'inline-block',
+            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+            transition: 'transform 150ms',
+          }}
+        >
+          ›
+        </span>
+        <span>{summary || 'pipeline trace'}</span>
+        {verification && !verification.passed && (
+          <span style={{ color: 'var(--color-accent)' }}>· unverified</span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className="mt-1.5 ml-1.5 pl-3 flex flex-col gap-2 text-xs"
+          style={{ borderLeft: '2px solid var(--color-border)' }}
+        >
+          {steps.length > 0 && (
+            <div>
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
+                style={{ color: 'var(--color-text-faint)' }}
+              >
+                Plan
+              </div>
+              {steps.map((st, i) => (
+                <div key={st.step_id || st.id || i} className="flex items-start gap-2 py-0.5">
+                  <span
+                    className="font-mono text-[10px] flex-shrink-0 mt-0.5"
+                    style={{ color: 'var(--color-text-faint)' }}
+                  >
+                    {st.assigned_agent || '—'}
+                  </span>
+                  <span className="flex-1" style={{ color: 'var(--color-text)' }}>
+                    {st.description || st.step_id}
+                  </span>
+                  <span
+                    className="text-[10px] flex-shrink-0 mt-0.5"
+                    style={{
+                      color:
+                        st.status === 'done'
+                          ? 'var(--color-text-muted)'
+                          : 'var(--color-accent)',
+                    }}
+                  >
+                    {st.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tools.length > 0 && (
+            <div>
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
+                style={{ color: 'var(--color-text-faint)' }}
+              >
+                Tools run
+              </div>
+              {tools.map((ev, i) => (
+                <div key={i} className="py-0.5">
+                  <span className="font-mono text-[11px]" style={{ color: 'var(--color-text)' }}>
+                    {ev.tool_name}
+                  </span>
+                  <span className="ml-1.5 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                    {ev.status}
+                  </span>
+                  {ev.output && (
+                    <div
+                      className="font-mono text-[10px] break-words mt-0.5"
+                      style={{ color: 'var(--color-text-muted)' }}
+                    >
+                      {/* The tool's REAL returned value, not a summary of
+                          it — a trace that paraphrases what a tool
+                          returned cannot be used to check the tool. */}
+                      {JSON.stringify(ev.output).slice(0, 240)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {verification && (
+            <div>
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
+                style={{ color: 'var(--color-text-faint)' }}
+              >
+                Self-check
+              </div>
+              <div style={{ color: 'var(--color-text)' }}>
+                <span style={{ color: verification.passed ? 'var(--color-text-muted)' : 'var(--color-accent)' }}>
+                  {verification.passed ? 'passed' : 'not confirmed'}
+                </span>
+                {verification.reason ? ` — ${verification.reason}` : ''}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   const isStreaming =
@@ -188,6 +343,11 @@ export function MessageBubble({ message }) {
         {/* Blinking cursor while draining */}
         {isStreaming && <StreamCursor />}
       </div>
+
+      {/* What actually ran for this answer. Real plan, real tool
+          output, real verdict — from the response, never invented in
+          the browser. */}
+      {!isStreaming && <TurnTrace message={message} />}
 
       <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>
         {formatTime(message.timestamp)}

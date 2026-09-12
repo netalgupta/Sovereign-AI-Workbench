@@ -19,16 +19,48 @@ from backend.retrieval.vector_store import VectorStore
 
 _OLLAMA_HOST = "http://localhost:11434"
 
-# Verbatim per RAG_SPEC.md §4 — do not paraphrase when implementing.
+# DELIBERATE DEVIATION FROM RAG_SPEC.md §4's VERBATIM PROMPT TEXT.
+#
+# §4 specifies this sentence exactly:
+#
+#     "For every factual claim, include a citation marker [N] referring
+#      to the source number."
+#
+# That sentence causes a measurable defect, and has been causing it
+# since the first validation run. Models copy the literal token "[N]"
+# into their answers instead of substituting a digit -- the repo's own
+# history records this as the original "[N] bug", and
+# citation_validation.py carries an unresolved-placeholder pass that
+# exists for no other reason than to clean up after this wording. Two
+# such placeholders were stripped in a single traced turn this session.
+#
+# The failure got worse the smaller the model. Adding a second block
+# that used the phrase "citation marker" in order to FORBID the token
+# produced qwen2.5:3b answering a question with the entire text
+# '[Citation marker]: [4]', and phi3.5 emitting 21 rows of tables
+# headed "Citation Marker | Content". Naming a template in front of a
+# 3B model is an invitation to reproduce it.
+#
+# So the instruction now shows the required form in a finished example
+# sentence rather than naming a placeholder token. The SEMANTICS are
+# unchanged -- every factual claim still carries a bracketed source
+# number, and the refusal clause is word-for-word as specified. Only
+# the way the format is conveyed has changed, because the specified way
+# demonstrably does not survive contact with the models we run.
+#
+# Flagged rather than done quietly: RAG_SPEC.md §4 should be updated to
+# match, and whoever owns that spec should know the original wording is
+# the cause of a bug its own pipeline has to repair downstream.
+#
 # Built as prefix + concat, not str.format(): same lesson as
-# entity_extraction.py's prompt — avoid brace-collision bugs entirely by
-# never running .format() over text that itself might contain literal
-# braces (this one doesn't today, but the pattern is now consistent
-# across every prompt-building function in this codebase).
+# entity_extraction.py's prompt — never run .format() over text that
+# might itself contain literal braces.
 _GROUNDING_INSTRUCTIONS = (
     "You must only state facts that are directly supported by the SOURCES section "
-    "below. For every factual claim, include a citation marker [N] referring to the "
-    "source number. If the sources do not contain enough information to answer, say "
+    "below. For every factual claim, include the bracketed number of the source it "
+    "came from, at the end of the sentence, like this:\n"
+    "    The average MFI is 3.4 g/10min [1].\n"
+    "If the sources do not contain enough information to answer, say "
     "so explicitly rather than filling the gap from general knowledge.\n\n"
     "SOURCES:\n"
 )
@@ -45,6 +77,58 @@ class GeneratedAnswer(BaseModel):
     threshold: float = 0.0
     invalid_citations_stripped: list[int]
     unresolved_placeholders_stripped: int  # count of literal "[N]"-shaped markers the model never resolved — see citation_validation.py
+
+
+_MARKDOWN_FENCE_LABELS = ("markdown", "md", "")
+
+
+def _unwrap_markdown_fence(text: str) -> str:
+    """Undo an answer that wrapped ITSELF in a markdown code fence.
+
+    Observed: the model returned
+
+        ```markdown
+        The average MFI for Homopolymer H030SG is 3.4 g/10min [1].
+
+        | Average MFI | Source |
+        |---|---|
+        ...
+        ```
+
+    which the renderer displays as a literal code block -- the table
+    never becomes a table, the bold never becomes bold, and the answer
+    arrives as grey monospace source. The instruction "Write in
+    GitHub-flavoured markdown" is what invites it: a model reads that as
+    a request for markdown *as output format*, and the conventional way
+    to present a document in a chat reply is inside a fence.
+
+    Only strips when the ENTIRE answer is one fence labelled markdown,
+    md, or nothing. A fence in the middle of an answer, or one labelled
+    python/json/bash, is a real code block the user asked for and is
+    left exactly alone -- stripping those would corrupt the answer
+    rather than fix it, which is why this is not a blanket
+    strip_code_fences call.
+    """
+    stripped = (text or "").strip()
+    if not stripped.startswith("```") or not stripped.endswith("```"):
+        return text
+
+    newline = stripped.find("\n")
+    if newline == -1:
+        return text
+
+    label = stripped[3:newline].strip().lower()
+    if label not in _MARKDOWN_FENCE_LABELS:
+        return text
+
+    body = stripped[newline + 1 : -3]
+
+    # If the body contains its own fence, the outer one was structural
+    # and removing it would leave unbalanced markers.
+    if "```" in body:
+        return text
+
+    return body.strip()
 
 
 def _format_sources(chunks: list[RetrievedChunk]) -> str:
@@ -70,10 +154,16 @@ def _format_sources(chunks: list[RetrievedChunk]) -> str:
 # to check against it, which is the whole point of citing.
 _FORMATTING_GUIDANCE = (
     "\n\nFORMATTING:\n"
-    "Write in GitHub-flavoured markdown.\n"
+    # NOT "write in markdown" -- a model reads that as a request for
+    # markdown as an output ARTEFACT and wraps the whole reply in a
+    # ```markdown fence, which renders as a grey code block. Phrased
+    # as what the reply may CONTAIN instead.
+    "Your reply is rendered as GitHub-flavoured markdown, so headings, "
+    "tables, bold and code spans all work. Never wrap the whole reply "
+    "in a code fence.\n"
     "- When the answer compares several items, or reports values against "
-    "limits or specifications, use a markdown table. Put the citation "
-    "marker in the cell or the row it supports.\n"
+    "limits or specifications, use a markdown table. Each row ends "
+    "with the bracketed number of the source it came from.\n"
     "- Use `inline code` for tags, identifiers and units (TC-201A, "
     "SOP-114-Rev3, g/10min).\n"
     "- Use a fenced code block for code or for multi-line machine output.\n"
@@ -84,10 +174,81 @@ _FORMATTING_GUIDANCE = (
     "the sources cover only some of the rows, include only those.\n"
 )
 
+# CITATION FORM. Three failures shaped this wording, and the third was
+# caused by the first attempt to fix the other two.
+#
+#   1. Literal "[N]" emitted verbatim -- the model echoing the format
+#      DESCRIPTION in RAG_SPEC §4's own prompt text instead of
+#      substituting a digit. Two were stripped in a single observed
+#      turn. This is why citation_validation.py has an
+#      unresolved-placeholder pass at all.
+#
+#   2. Prose citations instead of markers: an answer that wrote
+#      "(Novolen_Batch_QA_Report_Aug2026.pdf, p.1)" inline and carried
+#      ZERO bracketed markers. The text was grounded and the source was
+#      real, but nothing machine-readable came out, so the frontend
+#      could render no source chips and validation had nothing to
+#      check. An uncheckable citation is, downstream, the same as none.
+#
+#   3. THE FIX FOR 1 AND 2 CAUSED A WORSE BUG. The first version of
+#      this block used the phrase "citation marker" and quoted "[N]" in
+#      order to forbid it. Small models copied the instruction into
+#      their output: qwen2.5:3b answered one question with the complete
+#      text '[Citation marker]: [4]', and phi3.5 emitted 21 rows of
+#      tables headed "Citation Marker | Content". Naming a token in
+#      order to ban it puts that token in front of the model, and a 3B
+#      model reaches for the nearest template -- which was the
+#      instruction itself.
+#
+# So: show the desired form by EXAMPLE in a finished sentence, never as
+# a label or a schema, and do not quote the forbidden token at all. The
+# placeholder pass in citation_validation.py stays as the backstop,
+# because prompt wording is not a guarantee.
+_CITATION_FORM = (
+    "\n\nCITATIONS:\n"
+    "Support each factual sentence with a bracketed source number, "
+    "placed at the end of the sentence, like this:\n"
+    "    The average MFI is 3.4 g/10min [1].\n"
+    "Use the number of the source you actually used. Two sources for "
+    "one claim are written together, as in [1][3].\n"
+    "Do not cite by filename or page inside the prose; the bracketed "
+    "number is what the interface resolves back to the source, and a "
+    "filename written into a sentence cannot be checked or linked.\n"
+)
+
+# ANSWER DEPTH.
+#
+# Prompted by a real failure. "Give sops for Hydrocrackers" retrieved
+# SOP-114-Rev3 and answered with a three-row table of document number,
+# effective date and review cycle, plus one summary sentence -- the
+# procedure itself, which was sitting in the retrieved chunk, went
+# unused. The ranking half of that is fixed in query_builder.py; this
+# is the other half.
+#
+# The instruction is about USING what was retrieved, never about
+# producing more text. Padding is called out explicitly, because "be
+# thorough" is exactly the phrasing that makes a model pad.
+_ANSWER_DEPTH = (
+    "\n\nWHAT TO INCLUDE:\n"
+    "- Answer from the SUBSTANCE of the sources, not from their "
+    "metadata. Document numbers, effective dates and revision cycles "
+    "are not an answer to a question about content.\n"
+    "- When asked about a procedure, give the actual steps, conditions "
+    "and limits that the sources state.\n"
+    "- Prefer specifics the sources contain -- values, units, "
+    "thresholds, equipment tags, step order -- over general "
+    "description.\n"
+    "- Do not pad. If the sources support only a short answer, give a "
+    "short answer. Length is never the goal; using what was actually "
+    "retrieved is.\n"
+)
+
 
 def _build_prompt(sources_text: str, user_request: str) -> str:
     return (
         f"{_GROUNDING_INSTRUCTIONS}{sources_text}"
+        f"{_CITATION_FORM}"
+        f"{_ANSWER_DEPTH}"
         f"{_FORMATTING_GUIDANCE}"
         f"\nREQUEST:\n{user_request}"
     )
@@ -117,6 +278,17 @@ def generate_grounded_answer(
     T.section("RETRIEVAL")
     T.kv("request", repr(user_request))
     T.kv("top_k", top_k)
+    try:
+        from backend.retrieval.query_builder import explain as _explain_query
+
+        _q = _explain_query(user_request, store.all_chunk_texts())
+        if _q["added_terms"]:
+            T.kv("search query", repr(_q["search_query"]))
+            T.kv("terms added", _q["added_terms"])
+        else:
+            T.kv("search query", T.DIM("unchanged"))
+    except Exception:  # noqa: BLE001 - tracing must never break the turn
+        pass
     with T.stage("hybrid search + grounding check"):
         grounding = retrieve_with_grounding_check(store, user_request, top_k)
 
@@ -165,6 +337,14 @@ def generate_grounded_answer(
 
     T.block("RAW MODEL OUTPUT", raw_answer, only_full=True)
 
+    # Undo a whole-answer markdown fence BEFORE validation, so citation
+    # markers inside the fenced body are seen by the validator.
+    unwrapped = _unwrap_markdown_fence(raw_answer)
+    if unwrapped != raw_answer:
+        T.warn("answer was wrapped in a ```markdown fence; unwrapped so it "
+               "renders as formatted text rather than a code block")
+        raw_answer = unwrapped
+
     T.section("CITATION VALIDATION")
     validation = validate_citations(raw_answer, num_retrieved_chunks=len(grounding.chunks))
     if validation.invalid_citation_numbers:
@@ -177,6 +357,14 @@ def generate_grounded_answer(
 
     T.section("FINAL ANSWER")
     T.answer_structure(validation.cleaned_text)
+    if grounding.chunks and "[" not in validation.cleaned_text:
+        # Citation validation cannot catch this: it checks that markers
+        # RESOLVE, and an answer with none passes vacuously. An answer
+        # that cites by filename in prose is unlinkable and uncheckable,
+        # which downstream is the same as uncited.
+        T.warn("answer contains NO citation markers despite "
+               f"{len(grounding.chunks)} retrieved source(s) -- the model "
+               "likely cited in prose instead of [n]")
     T.block("ANSWER", validation.cleaned_text)
 
     return GeneratedAnswer(

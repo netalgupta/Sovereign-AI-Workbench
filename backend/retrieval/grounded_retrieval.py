@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from backend.ingestion.embeddings import embed_texts
 from backend.retrieval import lexical
+from backend.retrieval.query_builder import build_search_query
 from backend.retrieval.hybrid_search import RetrievedChunk, rrf_fuse
 from backend.retrieval.vector_store import VectorStore
 
@@ -160,7 +161,28 @@ def retrieve_with_grounding_check(
     drift with top_k itself, which isn't what "normalizing across the
     candidate set" in the spec means.
     """
-    fused = rrf_fuse(store, query, top_k)
+    # EXPAND THE SEARCH QUERY, NOT THE REQUEST.
+    #
+    # People type imperatives and abbreviations, and the retriever scores
+    # them literally. Measured: "Give sops for Hydrocrackers" ranked
+    # SOP-114-Rev3 FOURTH of five, while the written-out form ranked it
+    # first. The documents say "Standard Operating Procedure" and
+    # "SOP-114"; nothing in them says "sops", and "Give"/"for"
+    # contribute nothing while still occupying the embedding.
+    #
+    # Rank matters beyond ordering here: the top-k chunks become the
+    # SOURCES block in prompt order, so a document at rank 4 sits at the
+    # far end of ~5000 characters of context and the model answers from
+    # what is nearest. The thin metadata-only answer that prompted this
+    # -- document number, effective date, review cycle, no procedure --
+    # is what late-ranked context produces.
+    #
+    # Only the retrieval string is expanded. `query` as shown to the
+    # model stays verbatim, so the answer addresses what was asked.
+    rows = store.all_chunk_texts()
+    search_query = build_search_query(query, rows)
+
+    fused = rrf_fuse(store, search_query, top_k)
     if not fused:
         return GroundedRetrievalResult(
             found=False, chunks=[], reason="No documents in the corpus matched this query."
@@ -170,7 +192,7 @@ def retrieve_with_grounding_check(
     # score — see CONFIDENCE_THRESHOLD's comment for why no function of
     # RRF output can express "nothing here is relevant". bge vectors are
     # L2-normalized, so the stored inner product IS cosine similarity.
-    query_embedding = embed_texts([query])[0]
+    query_embedding = embed_texts([search_query])[0]
     dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
     best_similarity = max((score for _fid, score in dense_hits), default=0.0)
 
@@ -201,7 +223,7 @@ def retrieve_with_grounding_check(
     # Either signal may admit an answer; BOTH must fail to refuse. The
     # safety property is preserved because an out-of-domain question
     # fails both: its embedding is far, and its words are absent.
-    evidence = lexical.lexical_evidence(store.all_chunk_texts(), query)
+    evidence = lexical.lexical_evidence(rows, search_query)
     dense_ok = best_similarity >= threshold
     if not dense_ok and not evidence.strong:
         # Name the documents that came closest, so the refusal is

@@ -204,14 +204,34 @@ def planner_node(state: AgentState) -> dict[str, Any]:
     if state.awaiting_human_approval:
         return {}
 
+    from backend.observability import turn_log as T
+    from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    T.section("PLANNER")
+
+    # Skip the LLM planner for single-intent questions. Measured: the
+    # planner costs 10.9s against 4.3s to actually answer, and for a
+    # lookup it adds nothing but noise -- it emitted a `math` step to
+    # "calculate the average" for a value printed verbatim in the source
+    # table, and a `code` step to "create standard operating procedures"
+    # that dispatched to the sandbox and failed. See simple_intent.py.
+    if is_simple_lookup(state.original_request):
+        T.note(T.DIM("  single-intent lookup - skipping the LLM planner"))
+        return {"plan": simple_plan(state.original_request), "current_step_index": 0}
+
     try:
-        updated = plan_request(state)
+        with T.stage("plan_request (LLM)"):
+            updated = plan_request(state)
         # Ensure every step has an associated event id for the UI Plan DAG
         for s in updated.plan:
             if not getattr(s, "step_id", None):
                 s.step_id = f"step_{len(updated.plan)}"
+        for s in updated.plan:
+            T.note(f"    {s.step_id:<18} {s.assigned_agent:<10} {s.description[:52]}")
         return {"plan": updated.plan, "current_step_index": 0}
-    except Exception:
+    except Exception as _plan_exc:  # noqa: BLE001
+        T.warn(f"planner failed ({type(_plan_exc).__name__}); using the "
+               f"deterministic fallback plan")
         # Fallback to standard deterministic multi-step plan if offline/Ollama unavailable
         try:
             task_type = classify_task(state.original_request)
@@ -249,7 +269,9 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
         return {}
 
     from backend.api.state import get_state
+    from backend.observability import turn_log as T
 
+    T.section("DISPATCH")
     pipeline_state = get_state()
     tool_log = list(state.tool_call_log)
     retrieved = list(state.retrieved_context)
@@ -259,6 +281,8 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
     while ready:
         for step in ready:
             step.status = "running"
+            T.note(f"  > {step.step_id} [{step.assigned_agent}] "
+                   f"{step.description[:56]}")
             if step.assigned_agent == "retrieval":
                 try:
                     store, _ = pipeline_state.ensure_corpus()
@@ -573,8 +597,12 @@ def verify_node(state: AgentState) -> dict[str, Any]:
         verify_output,
     )
 
+    from backend.observability import turn_log as T
+
+    T.section("SELF-VERIFICATION")
     try:
-        verified, outcome = verify_output(state)
+        with T.stage("verify_output (LLM)"):
+            verified, outcome = verify_output(state)
     except Exception as exc:  # noqa: BLE001
         # Cannot verify is NOT verified. Says so, in those words.
         return {

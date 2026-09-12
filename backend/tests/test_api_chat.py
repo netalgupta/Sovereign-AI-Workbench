@@ -42,7 +42,27 @@ def test_api_chat_standard_query():
 
     assert "plan" in data
     assert isinstance(data["plan"], list)
-    assert len(data["plan"]) >= 2
+
+    # A PLAN EXISTS AND IS WELL FORMED -- not "has at least two steps".
+    #
+    # This asserted >= 2, which pinned the old behaviour where every
+    # question, however simple, went through the LLM planner and came
+    # back with a multi-step DAG. That was not a feature. Measured, the
+    # planner cost 10.9s against 4.3s to actually answer, and for a
+    # single lookup it invented work: a `math` step to "calculate the
+    # average" of a value printed verbatim in the source table, and a
+    # `code` step to "create standard operating procedures" that
+    # dispatched to the sandbox and failed.
+    #
+    # Simple lookups now get a one-step plan without an LLM call
+    # (simple_intent.py). Asserting >= 2 would forbid that improvement,
+    # which is the same trap as the earlier planner test that asserted a
+    # tangled plan must RAISE when the cycle-breaker repairs it.
+    assert len(data["plan"]) >= 1
+    for step in data["plan"]:
+        assert step.get("assigned_agent")
+        assert step.get("description")
+        assert isinstance(step.get("depends_on", []), list)
 
     # Check Plan DAG fields required by PlanGraphView.jsx
     first_step = data["plan"][0]
@@ -100,3 +120,22 @@ def test_api_network_status_telemetry():
     assert "metrics" in data
     assert "cpuPercent" in data["metrics"]
     assert "memoryGb" in data["metrics"]
+
+
+def test_multi_step_request_still_gets_a_multi_step_plan():
+    """The planner is skipped for lookups, NOT disabled.
+
+    Companion to the assertion above: relaxing it to >= 1 would pass
+    even if the planner had been removed entirely, so this pins the
+    other half -- a request carrying two distinct asks must still be
+    decomposed rather than collapsed into one retrieval.
+    """
+    from backend.orchestrator.simple_intent import is_simple_lookup
+
+    multi = "Summarise the inspection report and then calculate the deviation"
+    assert not is_simple_lookup(multi), (
+        "a request with two distinct asks must reach the real planner"
+    )
+
+    # And the shape that SHOULD bypass it.
+    assert is_simple_lookup("What is the average MFI for Homopolymer H030SG?")

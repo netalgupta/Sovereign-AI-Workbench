@@ -89,6 +89,80 @@ def _call_verifier_model(prompt: str, model_name: str) -> str:
     )
 
 
+def _first_json_object(text: str) -> dict | None:
+    """The first complete JSON object in `text`, or None.
+
+    WHY A WHOLE-STRING json.loads WAS NOT ENOUGH.
+
+    This node reported "the verifier did not return a readable verdict"
+    on EVERY answer, which made the self-check look permanently broken
+    and trained the reader to ignore its warning banner. The verifier
+    was in fact working perfectly. phi3.5 returns:
+
+        ```json
+        {
+          "satisfied": true,
+          "reason": "...",
+          "missing": []
+        }
+        ```
+
+        Instruction much more difficult by adding **at least {5} more
+        constraints**:
+
+    Valid JSON, correct verdict -- followed by a fragment of training
+    boilerplate the model appended unprompted. strip_code_fences removed
+    the fence, json.loads then choked on the trailing prose, and a
+    correct verdict became "unreadable".
+
+    Scanning for the first balanced object is the right repair rather
+    than a lenient one: it accepts a verdict the model genuinely gave
+    and still returns None when there is no object at all. The
+    fail-closed property is untouched -- None means NOT verified, as
+    before, and a `satisfied` key that is missing is still rejected
+    downstream. What changed is only that surrounding chatter no longer
+    destroys a verdict that was actually produced.
+
+    Deliberately NOT a regex. Brace counting respects nesting, so a
+    "reason" string containing braces cannot truncate the object -- the
+    same brace-collision hazard that prompted every prompt-builder in
+    this codebase to avoid str.format().
+    """
+    if not text:
+        return None
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        candidate = json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(candidate, dict):
+                        return candidate
+                    break
+        start = text.find("{", start + 1)
+    return None
+
+
 def parse_verification(raw: str) -> VerificationResult:
     """Read the verifier's JSON, failing CLOSED.
 
@@ -97,9 +171,8 @@ def parse_verification(raw: str) -> VerificationResult:
     is unintelligible — means a malformed response silently becomes a
     pass, which is the one direction this node must never fail in.
     """
-    try:
-        parsed = json.loads(strip_code_fences(raw))
-    except json.JSONDecodeError:
+    parsed = _first_json_object(strip_code_fences(raw))
+    if parsed is None:
         return VerificationResult(
             passed=False,
             reason="The verifier did not return a readable verdict, so this output is unverified.",

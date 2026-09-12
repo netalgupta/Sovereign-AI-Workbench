@@ -47,51 +47,42 @@ VRAM contention instead of the flag it named.
 
 ## OPEN
 
-### 25. Sandbox tries to PULL from Docker Hub — constraint #1 violation
-`containers.run()` auto-pulls when `mrpl-sandbox:combined` is absent, so
-a missing image becomes an **outbound network call** on a product whose
-first hard constraint is that it makes none. The 404 in the console is
-the symptom; the egress attempt is the actual defect. Image has never
-been built. Must fail loudly with the build command instead.
-
-### 26. Answers are thin — retrieval finds the right document, generation under-uses it
-"Give sops for Hydrocrackers" put `SOP-114-Rev3` at rank 4 and returned
-a 3-row metadata table (document number, effective date, review cycle)
-plus one summary sentence. The actual procedure content was in the
-chunk and went unused. Two suspected causes, both to be measured rather
-than assumed:
-  - the right document ranks 4th of 5, so its chunk sits late in the
-    sources block
-  - nothing in the prompt asks for procedural completeness
-
-### 27. Query builder / query understanding
-Raised directly by the user. Short, abbreviated, imperative queries
-("Give sops for Hydrocrackers", "Tell me abt inspection") retrieve worse
-than their written-out forms. Needs: normalisation, domain synonym
-expansion (SOP <-> standard operating procedure, HCU <-> hydrocracker),
-and plural/singular handling — applied to the retrieval query only,
-never to the text shown to the model as the user's request.
-
-### 28. Reasoning model too slow on this laptop
-`qwen2.5:14b` is 9.0 GB and takes 57s for one generation even at 100%
-GPU. User asked for a 3-4B model. `qwen2.5:3b` pulling. Must **measure
-answer quality before switching**, not just speed — a fast wrong answer
-is worse than a slow right one on this product.
-
-### 29. Citation contract is being broken by the model
-Trace evidence: 2 literal `[N]` placeholders stripped in one turn, and
-an answer that wrote `(Novolen_Batch_QA_Report_Aug2026.pdf, p.1)` inline
-instead of `[1]` — final answer had **zero** citation markers. The
-validator catches and strips, but the model should not be producing it.
-
-### 30. Retrieval stages not shown in the chat UI
-Backend returns `plan` and `tool_call_events`; they are attached to the
-message but `MessageBubble` does not render them. The console trace has
-this information and the UI does not.
-
 ### 31. `qwen2.5-coder:7b` not pulled
 CARD 04 / Aditya's `code_agent`. Out of scope here, listed so it is not
 mistaken for an oversight.
+
+### 32. Model swap thrash (partially mitigated)
+The planner and verifier ran on different models, 9.5 GB total on an
+8.2 GB card, so Ollama evicted and reloaded twice per turn. Skipping
+the planner for simple lookups removed one swap. The verifier still
+runs on `fast-router` while generation runs on `reasoning-model`, so
+one swap per turn remains. Keeping the two under 8 GB together, or
+shrinking the verifier's context, would remove it -- not yet measured.
+
+### 33. Planner still emits nonsense steps for complex requests
+Only simple lookups bypass it. For anything routed to the real planner,
+the `code` / `math` step selection is still weak ("create standard
+operating procedures" dispatched to the sandbox). Needs the §6 closed
+tool sets enforced at plan time, not just at dispatch.
+
+---
+
+## DONE this session (continued)
+
+| # | Problem | Evidence |
+|---|---|---|
+| 25 | Sandbox auto-PULLED from Docker Hub when the image was absent — an outbound call, constraint #1 | Presence checked locally; raises with the build command. Image built (first time ever): `python 3.11.15`, `numpy 1.26.4 sympy 1.12`, **egress blocked** |
+| 25a | Image could never build — `useradd -u 1000` exit 4, UID taken by the base image | Reuses the existing UID-1000 user |
+| 25b | `SESSIONS_HOST_DIR = "/tmp/..."` on Windows — Docker made an empty anonymous mount, so every script "did not exist" | `tempfile.gettempdir()` |
+| 26 | Thin answers: right document ranked 4th, buried at the end of the sources block | Query expansion put `SOP-114-Rev3` at **rank 1**; answers now carry real procedure steps |
+| 27 | Query builder | `query_builder.py` — additive domain expansion, retrieval-only, never rewrites the user's request |
+| 28 | Reasoning model too slow | Measured 5 known-answer questions: 7b **4/5 @ 4.6s avg**, 3b 4/5 @ 3.4s, 14b 4/5 @ 32.5s. Chose 7b — 3b misread a spec table row (11.2 for a 3.4 question) |
+| 29 | Citation contract broken — literal `[N]`, prose citations, zero markers | Root cause was **RAG_SPEC §4's own verbatim prompt text**. Deviation applied and documented |
+| 29a | My first fix made it worse — naming "citation marker" to ban it made 3b answer `'[Citation marker]: [4]'` | Form shown by example, forbidden token never quoted |
+| 30 | Pipeline trace absent from the chat UI | `TurnTrace` in MessageBubble — real plan, real tool output, real verdict, collapsed by default |
+| 34 | **Verifier reported "no readable verdict" on every answer** — phi3.5 returned valid JSON then appended training boilerplate; `json.loads` choked on the trailing prose | Brace-balanced object extraction. Verdicts now PASS; still fails closed on genuine garbage |
+| 35 | Turn took 127s | **17-20s steady state.** Planner skipped for single-intent lookups (it cost 10.9s vs 4.3s to answer, and invented a `code` step that failed) |
+| 36 | Model wrapped whole answers in a ` ```markdown ` fence, rendering them as grey code blocks | Unwrapped when the entire answer is one md fence; real code blocks untouched |
 
 ---
 
