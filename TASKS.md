@@ -51,19 +51,32 @@ VRAM contention instead of the flag it named.
 CARD 04 / Aditya's `code_agent`. Out of scope here, listed so it is not
 mistaken for an oversight.
 
-### 32. Model swap thrash (partially mitigated)
-The planner and verifier ran on different models, 9.5 GB total on an
-8.2 GB card, so Ollama evicted and reloaded twice per turn. Skipping
-the planner for simple lookups removed one swap. The verifier still
-runs on `fast-router` while generation runs on `reasoning-model`, so
-one swap per turn remains. Keeping the two under 8 GB together, or
-shrinking the verifier's context, would remove it -- not yet measured.
+### 32. A 7B model and a second model do not co-reside on 8 GB
+Not a bug -- a hardware limit, recorded so nobody re-investigates it as
+one. Generation (qwen2.5:7b, ~5.5 GB) plus the verifier (phi3.5,
+~3.1 GB) exceeds the 8.2 GB card, so `ollama ps` shows one evicted
+after every turn and reloaded on the next. Sizing both contexts to
+their real prompts removed the unpredictable spikes -- one turn had
+hit 127s -- and left a steady 17-22s, but did not make the pair fit.
+Removing the reload entirely needs a smaller generation model or a
+bigger card.
 
-### 33. Planner still emits nonsense steps for complex requests
-Only simple lookups bypass it. For anything routed to the real planner,
-the `code` / `math` step selection is still weak ("create standard
-operating procedures" dispatched to the sandbox). Needs the §6 closed
-tool sets enforced at plan time, not just at dispatch.
+### 33. The verifier cannot confirm values read from tables
+Measured, not suspected. With the sources now supplied it verifies
+prose lookups correctly ("Mangalore-Hassan segment" passes with an
+accurate reason) and still fails table lookups -- the 3.4 value sat at
+character 513 of a 675-character chunk it was shown in full, so this
+is not truncation. Aligning a row of an extracted PDF table is past a
+3.8B model.
+
+Both candidates score 3/4 with OPPOSITE failure directions: phi3.5
+false-negatives (fails a correct, cited answer), qwen2.5:7b
+false-positives (passes a pressure reported with no units at all). The
+small model is kept deliberately -- waving through a wrong number is
+worse on this product than over-flagging -- and the banner now reads
+"not confirmed" rather than asserting a fault was found. The real fix
+is a larger verifier that does not false-positive, which needs VRAM
+this machine does not have.
 
 ---
 
