@@ -127,33 +127,60 @@ from a slow one, so a silent truncation leaves the UI spinning forever
 
 ---
 
-## Known limitation — read before building against this
+## Routing — the backend chooses the path, not the UI
 
-**Answer quality on this endpoint is currently WORSE than `/api/chat`.**
+**`POST /api/chat/stream` is the only endpoint the UI needs.** It routes
+the request and emits the same event protocol whichever path answers, so
+the frontend renders one shape and never decides anything.
 
-The loop reliably retrieves (it calls `search_documents` first, every
-time, after the tool set was curated) and then frequently fails to
-extract the value from what it retrieved. On
-*"What is the average MFI for Homopolymer H030SG?"* the direct path
-answers `3.4 g/10min [1]` consistently; the agentic path retrieved the
-right documents and then said it could not find a specification limit.
+The `route` event, second in every stream, says which path ran and why:
 
-The cause is not the mechanism. `/api/chat` applies a tuned grounding
-prompt — citation form, answer depth, refusal wording — developed
-against measured failures. The loop hands raw passages to a 7B model
-with a general system prompt and no such scaffolding.
+```json
+{"type": "route", "path": "direct",
+ "reason": "Single-intent lookup — one retrieval and a grounded answer...",
+ "tools_expected": false}
+```
 
-**Therefore:**
-- `/api/chat` remains the default path for answering.
-- `/api/chat/stream` is the agentic path, and the surface Netal builds
-  the granular thinking UI against.
-- Closing the quality gap is Aryan's, tracked in `docs/STATUS.md`.
+| `path` | When | What happens |
+|---|---|---|
+| `corpus` | "what documents do you have", "summarise your data" | Answered from the source index. No model, no retrieval, nothing that can be fabricated |
+| `direct` | Single-intent lookup — "what is the MFI for H030SG?", "what is the SOP for catalyst changeout?" | One retrieval, one grounded answer with the tuned citation/refusal scaffolding. Emits a `search_documents` tool call so the UI shows the same detail as the agentic path |
+| `agentic` | Multi-step, comparison, computation, actions — "project when delta-P crosses the trigger", "compare these and draft a report" | The loop: model chooses tools, runs them, reads results, continues |
 
-This is written down rather than discovered later because building a
-beautiful UI over a path that gives worse answers would be a bad trade,
-and you should know which trade you are making.
+Routing is structural (`backend/orchestrator/path_router.py`) — it reuses
+`is_simple_lookup`, the same classifier that decides whether to skip the
+planner, so the two cannot disagree about the same property. It is not a
+model call: that would cost as much as a short answer and add a failure
+mode where the router itself is unreachable. **It fails towards
+`direct`**, the path with better answer quality and full grounding
+scaffolding.
 
----
+Measured 10/10 on the routing cases.
+
+**Why this matters for your UI:** `direct` and `corpus` answers arrive as
+one `text_delta`, not token by token, because those paths are not
+streamed. That is deliberate — faking a typewriter over an answer that
+already exists is inventing progress, which is the failure mode the
+deleted "Retrieving sources · 21s" indicator embodied. Render a single
+delta as a complete message; do not wait for more.
+
+### Consider showing the route
+
+The `reason` is written to be shown. A user who sees *"multi-step or
+needs computation — the agent will choose tools"* understands why this
+answer is taking 40 seconds when the last one took 8. A routing decision
+nobody can see is one nobody can question.
+
+### Answer quality, honestly
+
+The agentic loop under-extracts on plain lookups — it retrieves the
+right documents and then fails to pull the value out. **Routing largely
+removes this in practice**, because lookups now go to `direct`, which is
+where the grounding scaffolding lives.
+
+It still applies to genuinely multi-step requests, which have no
+alternative path. Closing that gap is Aryan's, tracked in
+`docs/STATUS.md`.
 
 ## Tool set offered in chat
 

@@ -114,3 +114,56 @@ def test_search_documents_finds_what_is_there():
     assert all(p.get("source_document") for p in result["passages"]), (
         "every passage must name the document it came from"
     )
+
+
+def test_the_grounded_prompt_fits_the_context_window_with_headroom():
+    """A built prompt must leave room for the answer.
+
+    THIS TEST EXISTS BECAUSE A COMMENT DID NOT WORK.
+
+    GENERATION_NUM_CTX was set to 3072 against a measured ~2000-token
+    prompt, with a comment warning that any change growing the prompt
+    must raise it deliberately. Two commits later neighbour expansion
+    doubled the retrieved chunks (5 -> 10) and the prompt reached 2986
+    tokens against that 3072 window.
+
+    It did not overflow, which is why nothing caught it. It left ~86
+    tokens for the answer, and when the window fills Ollama drops from
+    the START of the prompt -- where the grounding instructions and the
+    first sources live. The measured symptom was "The information
+    provided does not contain any data related to MFI for Homopolymer
+    H030SG" while the trace showed 10 passages retrieved with the value
+    present in them.
+
+    Retrieval was right. The prompt the model actually saw was not the
+    prompt that was built.
+
+    So this asserts headroom rather than mere fit: a prompt that exactly
+    fills the window is already broken.
+    """
+    from backend.api.state import get_state
+    from backend.models.ollama_client import GENERATION_NUM_CTX
+    from backend.retrieval.generation import _build_prompt, _format_sources
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+    store, _ = get_state().ensure_corpus()
+    question = "What is the SOP for Hydrocracker catalyst changeout?"
+
+    grounding = retrieve_with_grounding_check(store, question, 5)
+    assert grounding.found, "fixture question must retrieve, or this proves nothing"
+
+    prompt = _build_prompt(_format_sources(grounding.chunks), question)
+
+    # ~4 chars/token is rough, and deliberately so: being precise about
+    # the tokeniser would make this test fragile about the wrong thing.
+    # What matters is the order of magnitude of the headroom.
+    approx_tokens = len(prompt) / 4
+    reserved_for_answer = 1024
+
+    assert approx_tokens + reserved_for_answer < GENERATION_NUM_CTX, (
+        f"prompt is ~{approx_tokens:.0f} tokens and the window is "
+        f"{GENERATION_NUM_CTX}, leaving under {reserved_for_answer} for the "
+        f"answer. Ollama drops from the START when the window fills, which "
+        f"silently removes the grounding instructions and the first sources. "
+        f"Raise WORKBENCH_GEN_CTX or retrieve fewer chunks."
+    )

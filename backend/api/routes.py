@@ -1780,11 +1780,14 @@ def chat_stream(body: AgentStreamRequest):
     """
     from fastapi.responses import StreamingResponse
 
-    from backend.orchestrator.agent_loop import run_agent_loop
+    from backend.orchestrator.agent_loop import run_turn
 
     def event_source():
         try:
-            for event in run_agent_loop(body.message, session_id=body.session_id):
+            # run_turn, not run_agent_loop: the backend decides which
+            # path answers this and emits the same protocol either way,
+            # so the UI never has to choose. See path_router.py.
+            for event in run_turn(body.message, session_id=body.session_id):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:  # noqa: BLE001
             # A crash mid-stream must reach the client as an event. A

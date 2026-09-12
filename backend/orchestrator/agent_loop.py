@@ -463,3 +463,146 @@ def _jsonable(value: Any) -> Any:
         except Exception:  # noqa: BLE001
             pass
     return str(value)
+
+
+def run_turn(
+    request: str,
+    session_id: str = "default",
+    model_id: str = "reasoning-model",
+) -> Iterator[dict]:
+    """Answer `request` by whichever path suits it, as one event stream.
+
+    THIS IS THE ENTRY POINT. Callers should use this rather than
+    run_agent_loop directly, and the UI should never choose a path.
+
+    There are two answering paths with genuinely different strengths --
+    the direct grounded path has citation and refusal scaffolding tuned
+    against measured failures and gives better answers to lookups; the
+    agentic loop can call tools and iterate, which lookups do not need
+    and multi-step work cannot do without. Making the caller pick means
+    making the caller responsible for a judgement the backend is better
+    placed to make: a user asking "what is the average MFI for H030SG?"
+    wants the direct path and has no way to know that.
+
+    So the routing happens here (backend/orchestrator/path_router.py)
+    and EVERY path emits the same event protocol. The UI renders one
+    shape regardless, and a `route` event tells it which path ran and
+    why, so the decision is visible rather than mysterious.
+    """
+    from backend.observability import turn_log as T
+    from backend.orchestrator.path_router import decide_path
+
+    decision = decide_path(request)
+
+    T.section("ROUTE")
+    T.kv("path", decision.path)
+    T.kv("reason", decision.reason)
+
+    yield {"type": "start", "request": request}
+    yield {
+        "type": "route",
+        "path": decision.path,
+        "reason": decision.reason,
+        "tools_expected": decision.tools_expected,
+    }
+
+    if decision.path == "agentic":
+        # Drop the loop's own `start`; one has already been emitted, and
+        # two would make a UI clear its transcript mid-turn.
+        for event in run_agent_loop(request, session_id=session_id, model_id=model_id):
+            if event.get("type") == "start":
+                continue
+            yield event
+        return
+
+    yield from _run_direct(request, decision)
+
+
+def _run_direct(request: str, decision) -> Iterator[dict]:
+    """The grounded path, emitted as stream events.
+
+    Adapted rather than duplicated: the answer still comes from
+    generate_grounded_answer (or the corpus index), so there is exactly
+    one implementation of grounded answering and this cannot drift from
+    /api/chat.
+
+    The text arrives as a single `text_delta` rather than token by token.
+    That is honest -- the direct path is not streamed, and faking a
+    typewriter over an answer that already exists would be inventing
+    progress, which is the failure mode the deleted "Retrieving sources
+    - 21s" indicator embodied.
+    """
+    import time
+
+    started = time.perf_counter()
+
+    if decision.path == "corpus":
+        from backend.retrieval.corpus_questions import answer_corpus_question
+
+        reply = answer_corpus_question(request)
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": round(time.perf_counter() - started, 2),
+            "awaiting_approval": False,
+            "citations": [],
+        }
+        return
+
+    from backend.api.state import get_state
+    from backend.retrieval.generation import generate_grounded_answer
+
+    try:
+        store, _ = get_state().ensure_corpus()
+        answer = generate_grounded_answer(store, request)
+    except Exception as exc:  # noqa: BLE001
+        yield {
+            "type": "error",
+            "message": f"Grounded generation failed: {type(exc).__name__}: {exc}",
+        }
+        return
+
+    # Retrieval really happened, so it is reported as the tool call it
+    # is. The UI then shows the same "what did it do" detail on both
+    # paths instead of the direct path looking like magic.
+    yield {
+        "type": "tool_call",
+        "id": "direct-retrieval",
+        "name": "search_documents",
+        "arguments": {"query": request},
+    }
+    yield {
+        "type": "tool_result",
+        "id": "direct-retrieval",
+        "name": "search_documents",
+        "output": {
+            "found": answer.found,
+            "passages": len(answer.sources),
+            "documents": sorted({c.source_document for c in answer.sources}),
+        },
+        "status": "done",
+        "seconds": round(time.perf_counter() - started, 2),
+    }
+
+    reply = answer.answer_text
+    yield {"type": "text_delta", "text": reply}
+    yield {
+        "type": "done",
+        "reply": reply,
+        "tool_calls": 1,
+        "iterations": 1,
+        "seconds": round(time.perf_counter() - started, 2),
+        "awaiting_approval": False,
+        "citations": [
+            {
+                "text": c.text,
+                "source_document": c.source_document,
+                "page_number": c.page_number,
+                "score": c.score,
+            }
+            for c in answer.sources
+        ],
+    }

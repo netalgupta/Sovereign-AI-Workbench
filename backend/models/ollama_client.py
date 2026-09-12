@@ -104,7 +104,35 @@ DEFAULT_NUM_GPU = int(os.environ.get("WORKBENCH_NUM_GPU", "99"))
 # instructions), raise this deliberately and re-check residency with
 # `ollama ps` -- silently overflowing the window truncates the SOURCES
 # block, which would drop citations without any error.
-GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "3072"))
+# 6144, RAISED FROM 3072 AFTER A SELF-INFLICTED REGRESSION.
+#
+# 3072 was sized against a measured ~2000-token prompt. Then neighbour
+# expansion doubled the number of retrieved chunks (5 -> 10, by design:
+# it repairs procedures truncated at a chunk boundary), and the same
+# prompt became 2986 tokens against a 3072 window.
+#
+# It did not overflow, which is what made it hard to see. It left ~86
+# tokens for the answer. When the window fills, Ollama drops from the
+# START of the prompt -- and the retrieved value sat at token 57. The
+# model was answering from a prompt whose grounding instructions and
+# first sources had been silently cut.
+#
+# The symptom was a correct question getting "The information provided
+# does not contain any data related to MFI for Homopolymer H030SG" while
+# the trace showed 10 passages retrieved and the value present in them.
+# Retrieval was right; the prompt the model actually saw was not the
+# prompt that was built.
+#
+# This is exactly the failure the previous comment here warned about --
+# "if a future change grows the prompt, raise this deliberately" -- and
+# it was introduced two commits later by the person who wrote the
+# warning. A note is not a mechanism.
+#
+# 6144 holds the measured 2986-token prompt plus a long answer with
+# room to spare. The VRAM argument for a tight window is moot in any
+# case: a 7B generation model and the verifier do not co-reside on an
+# 8 GB card at any context size, so shaving the KV cache bought nothing.
+GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "6144"))
 
 DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 

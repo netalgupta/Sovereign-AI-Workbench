@@ -145,7 +145,16 @@ the model once called evaluate_expression("-381.95 - 400") for
 answer arrives with a real tool-call receipt attached. A human seeing
 the arguments is the ONLY thing that catches that.
 
-Read the "Known limitation" section first — answers on the streaming
+ONE ENDPOINT — /api/chat/stream ROUTES ITSELF. You never choose a path.
+It emits a  event saying which ran and why:
+  corpus  -> "what documents do you have" (from the index, no model)
+  direct  -> single lookups (grounded path, best answers)
+  agentic -> multi-step / computation (the tool loop)
+Same event protocol either way, so you render one shape. 10/10 on the
+routing cases. Consider showing the reason — it explains to the user why
+one answer took 8s and the next took 40s.
+
+Read the "Routing" and "Answer quality" sections first — answers on the streaming
 path are currently worse than /api/chat. Thats mine to fix, not yours.
 Build the surface; dont be surprised by the answers.
 

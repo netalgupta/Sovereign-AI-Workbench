@@ -5,7 +5,7 @@ from `docs/TOOLS.md` (Owner + Status columns); "built" means there is a
 registered implementation you can call through `POST /api/tools/call`
 today. Endpoint list enumerated from the running server.
 
-Branch: `aryan/rag-and-graphrag` · Suite: **357 passed, 1 skipped**
+Branch: `aryan/rag-and-graphrag` · Suite: **358 passed, 1 skipped**
 
 ---
 
@@ -17,7 +17,7 @@ Branch: `aryan/rag-and-graphrag` · Suite: **357 passed, 1 skipped**
 | Built | **35** |
 | Not started | **37** |
 | 🔴 demo-critical built | **23 of 33** |
-| Live API endpoints | **40** |
+| Live API endpoints | **41** |
 | Registered, callable tools | **19** |
 
 ---
@@ -38,12 +38,12 @@ ingestion pipeline + progress, source tracking, turn tracing, `draft_docx`.
 Pending: rows 54-60 MRPL-specific retrieval features (56, 57, 59, 60),
 semantic-chunking evaluation, retrieval at real corpus scale.
 
-**Known limitation, not yet fixed (1):** answer quality on
-`/api/chat/stream` is worse than `/api/chat`. The loop retrieves
-correctly and under-extracts — the direct path answers "3.4 g/10min
-[1]" consistently where the loop retrieved the right documents and
-said it could not find the value. Mechanism is sound; the grounding
-scaffolding is missing. `/api/chat` stays the default until this closes.
+**Known limitation, narrowed (1):** the agentic loop under-extracts on
+plain lookups. `POST /api/chat/stream` now ROUTES — lookups go to the
+direct grounded path, corpus questions to the source index, and only
+multi-step work to the loop (10/10 on the routing cases). So this no
+longer affects the common case. It still applies to genuinely
+multi-step requests, which have no alternative path. Mine to close.
 
 **Known limitation, not yet fixed (2):** `all_chunk_texts()` loads the whole
 corpus per query. Fine at 50 documents, will not hold at 1000-page PDFs.
@@ -132,6 +132,7 @@ trains everyone to ignore it.
 | Vite no longer intercepts API routes | The backend wins whenever it is running. **Start the backend first** |
 | `/api/graph/neighbourhood` added | Multi-hop traversal with per-node distance |
 | **Agentic tool-calling loop** + `POST /api/chat/stream` | The agent now CHOOSES tools and narrates while working. Netal renders it |
+| **`/api/chat/stream` routes automatically** | One endpoint, one event protocol. The backend picks direct / corpus / agentic and says why in a `route` event. The UI never chooses |
 | `search_documents` / `list_documents` registered | The registry had no search tool at all — the agent could not look anything up |
 
 ---
