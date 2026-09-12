@@ -125,30 +125,132 @@ export function SourcesPage() {
     return () => window.removeEventListener('corpus-updated', handleCorpusUpdated)
   }, [fetchCorpus])
 
+  const handleToggleSource = (id, explicitEnabled, node) => {
+    let targetName = node?.name
+    let targetFullPath = node?.fullPath
+
+    setCorpusData((prev) => {
+      if (!prev) return prev
+      const updatedSources = (prev.sources || []).map((s) => {
+        const isMatch =
+          s.id === id ||
+          (targetName && s.name === targetName) ||
+          (targetFullPath && s.fullPath === targetFullPath)
+        if (isMatch) {
+          const nextState = explicitEnabled !== undefined ? explicitEnabled : !s.enabled
+          if (!targetName) targetName = s.name
+          return { ...s, enabled: nextState }
+        }
+        return s
+      })
+
+      const updateTreeNodes = (nodes) => {
+        if (!Array.isArray(nodes)) return nodes
+        return nodes.map((n) => {
+          const isMatch =
+            n.id === id ||
+            (targetName && n.name === targetName) ||
+            (targetFullPath && n.fullPath === targetFullPath)
+          let updated = isMatch
+            ? {
+                ...n,
+                enabled:
+                  explicitEnabled !== undefined
+                    ? explicitEnabled
+                    : n.enabled === false
+                    ? true
+                    : false,
+              }
+            : n
+          if (updated.children && updated.children.length > 0) {
+            updated = { ...updated, children: updateTreeNodes(updated.children) }
+          }
+          return updated
+        })
+      }
+
+      return {
+        ...prev,
+        sources: updatedSources,
+        tree: updateTreeNodes(prev.tree || []),
+      }
+    })
+
+    const isNowEnabled = explicitEnabled !== undefined ? explicitEnabled : true
+    showToast(
+      isNowEnabled
+        ? `"${targetName || 'Source'}" included in retrieval scope`
+        : `"${targetName || 'Source'}" excluded from retrieval scope`,
+      isNowEnabled ? 'success' : 'info'
+    )
+  }
+
   const handleDeleteSource = async (source) => {
     if (!source) return
-    const name = source.name || 'item'
-    if (!window.confirm(`Are you sure you want to delete "${name}" from sources and FAISS index?`)) {
-      return
+    const name = source.name || 'document'
+    const targetId = source.id
+    const targetFullPath = source.fullPath || source.relPath || source.path || source.name
+
+    // 1. Optimistic removal
+    setCorpusData((prev) => {
+      if (!prev) return prev
+      const updatedSources = (prev.sources || []).filter(
+        (s) =>
+          s.id !== targetId &&
+          s.name !== name &&
+          (!targetFullPath || s.fullPath !== targetFullPath)
+      )
+
+      const removeNodeFromTree = (nodes) => {
+        if (!Array.isArray(nodes)) return []
+        return nodes
+          .filter(
+            (n) =>
+              n.id !== targetId &&
+              n.name !== name &&
+              (!targetFullPath || n.fullPath !== targetFullPath)
+          )
+          .map((n) => {
+            if (n.children && n.children.length > 0) {
+              const fc = removeNodeFromTree(n.children)
+              return {
+                ...n,
+                children: fc,
+                fileCount: fc.reduce(
+                  (acc, c) => acc + (c.type === 'directory' ? c.fileCount || 0 : 1),
+                  0
+                ),
+              }
+            }
+            return n
+          })
+          .filter((n) => n.type !== 'directory' || (n.isPreset || (n.children && n.children.length > 0)))
+      }
+
+      return {
+        ...prev,
+        sources: updatedSources,
+        tree: removeNodeFromTree(prev.tree || []),
+        corpusCount: updatedSources.length,
+      }
+    })
+
+    if (selectedFile?.id === targetId || selectedFile?.fullPath === targetFullPath) {
+      setSelectedFile(null)
     }
 
+    showToast(`Source "${name}" removed from knowledge base`, 'info')
+
     try {
-      const targetParam = source.fullPath || source.relPath || source.path || source.id || source.name
-      const res = await fetch(`/api/sources?path=${encodeURIComponent(targetParam)}`, {
+      const queryParam = encodeURIComponent(targetFullPath)
+      const idParam = encodeURIComponent(targetId || '')
+      const nameParam = encodeURIComponent(name)
+      await fetch(`/api/sources?path=${queryParam}&id=${idParam}&name=${nameParam}`, {
         method: 'DELETE',
       })
-      if (res.ok) {
-        showToast(`Source "${name}" removed from knowledge base`, 'info')
-        if (selectedFile?.id === source.id || selectedFile?.fullPath === source.fullPath) {
-          setSelectedFile(null)
-        }
-        await refreshAll()
-      } else {
-        const err = await res.json().catch(() => ({}))
-        showToast(err.error || `Failed to delete "${name}"`, 'error')
-      }
-    } catch {
-      showToast(`Failed to delete "${name}"`, 'error')
+      window.dispatchEvent(new CustomEvent('corpus-updated'))
+    } catch (err) {
+      console.warn('Failed to delete source on server:', err)
     }
   }
 
@@ -273,15 +375,6 @@ export function SourcesPage() {
   const currentImage = useMemo(() => {
     return (images || []).find((im) => im.filename === selectedImageFilename) || images?.[0]
   }, [images, selectedImageFilename])
-
-  // Toggle source in retrieval scope
-  const handleToggleSource = (id) => {
-    setCorpusData((prev) => ({
-      ...prev,
-      sources: prev.sources.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)),
-    }))
-    showToast('Document retrieval scope updated', 'info')
-  }
 
   return (
     <div
