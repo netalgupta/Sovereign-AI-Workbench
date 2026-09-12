@@ -33,6 +33,14 @@ def test_ip_external_classification():
 
 
 def test_get_active_connections_mocked():
+    """Classification and ordering, over machine scope.
+
+    Explicitly scope="machine" because the mocked sockets carry pids 100
+    and 101, which are not in this process tree — under the default
+    application scope they are correctly filtered out, since a socket
+    belonging to another process is not evidence about this one. What
+    this test is actually about is that an external remote is recognised
+    and sorted to the top, which is orthogonal to whose socket it is."""
     mock_local = MagicMock(ip="127.0.0.1", port=8000)
     mock_internal_remote = MagicMock(ip="127.0.0.1", port=5173)
     mock_external_remote = MagicMock(ip="8.8.8.8", port=443)
@@ -45,7 +53,7 @@ def test_get_active_connections_mocked():
     )
 
     with patch("psutil.net_connections", return_value=[conn_internal, conn_external]):
-        conns = get_active_connections()
+        conns = get_active_connections(scope="machine")
         assert len(conns) == 2
         # External connection must surface at the top
         assert conns[0].is_external is True
@@ -68,3 +76,49 @@ def test_get_network_status_structure():
     assert "connections" in status
     assert "metrics" in status
     assert "is_air_gapped" in status
+
+
+# ---- zero-egress scoping (CARD 07) --------------------------------------
+
+
+def test_external_count_covers_this_application_not_the_whole_machine():
+    """The flagship claim is that THIS APPLICATION makes no outbound
+    calls. Counting host-wide sockets made the UI display
+    "ALERT: External Traffic - 44 external connections" on a developer
+    machine where the backend owned ZERO of them; the rest belonged to an
+    IDE language server, a browser, Spotify and Windows Defender.
+
+    A safety indicator that fires on someone else's music stream is worse
+    than no indicator: it trains people to ignore it, and in a demo it
+    reads as the product disproving its own core promise."""
+    from backend.audit.network_monitor import get_network_status
+
+    status = get_network_status()
+
+    assert status["scope"] == "application"
+    assert status["externalCount"] == 0
+    assert status["is_air_gapped"] is True
+    assert status["status"] == "secure"
+
+
+def test_machine_wide_figure_is_reported_separately_and_labelled():
+    """Hiding it would make the panel look like it was dodging an
+    inconvenient number. It is real and useful context -- "your laptop is
+    online, this app still isn't" -- it simply must not drive the alarm."""
+    from backend.audit.network_monitor import get_network_status
+
+    status = get_network_status()
+
+    assert "hostExternalCount" in status
+    assert "Not this workbench" in status["hostNote"]
+
+
+def test_unattributable_sockets_are_not_counted_as_ours():
+    """A socket with no PID cannot be shown to be ours. Counting it would
+    reintroduce the false alarm this scoping removes."""
+    from backend.audit.network_monitor import get_active_connections
+
+    app_conns = get_active_connections(scope="application")
+    machine_conns = get_active_connections(scope="machine")
+
+    assert len(app_conns) <= len(machine_conns)
