@@ -12,7 +12,8 @@ working around it.
 |---|---|---|
 | Python 3.13 | `py -3 --version` | install |
 | Ollama running | `ollama list` | start Ollama |
-| Models pulled | `curl localhost:8000/api/models` | see §2 |
+| Models pulled (Ollama) | `curl localhost:8000/api/models` | see §2 |
+| **Embedding model on disk** | `curl localhost:8000/api/health` -> `embedding_backend` | **see §2b — gitignored, does not come with a pull** |
 | Node + npm | `node -v` | install |
 | Docker Desktop | `docker ps` | only needed for the sandbox and Neo4j |
 
@@ -37,6 +38,38 @@ for CARD 04 (Aditya's code agent).
 rather than assume: `qwen2-vl:7b` and `phi-3.5-mini` do not exist on
 Ollama. `ollama pull <tag>` fails instantly on a bad tag — that is the
 cheapest possible check.
+
+---
+
+## 2b. Fetch the local models — DO THIS FIRST ON A NEW MACHINE
+
+```bash
+py -3 -m backend.ingestion.fetch_models
+```
+
+Needs internet **once**. After that the system is fully offline — every
+model-backed tool loads only from `models/<category>/` and never checks
+a hub.
+
+**Why this is not optional, and why forgetting it is dangerous.**
+`models/embeddings/` is **gitignored** (1.3 GB), so it does NOT arrive
+with a `git pull`. Without it, embeddings fall back to hash vectors,
+which carry no semantic meaning — and nothing appears broken. Searches
+return results. Answers carry citations. The content is simply wrong.
+
+This happened on a teammate's machine. Asked for one person's
+assignments, retrieval returned two other people's files and the answer
+described a third person entirely. Adding a single backslash to the
+query changed the whole result set, because hash vectors have no notion
+of meaning for a typo to survive.
+
+**How to tell:**
+```bash
+curl -s localhost:8000/api/health
+```
+`embedding_backend` must read `bge-large-en-v1.5`. If it says
+`deterministic-hash`, retrieval is meaningless — the backend also logs a
+large warning at startup and on every affected turn.
 
 ---
 
@@ -134,7 +167,7 @@ download, because this system makes no outbound network calls.
 ```bash
 py -3 -m pytest backend/tests -q -p no:randomly
 ```
-Expect **350 passed, 1 skipped**. The skip is Neo4j when Docker is down.
+Expect **370 passed, 1 skipped**. The skip is Neo4j when Docker is down.
 
 ---
 
@@ -168,6 +201,7 @@ concurrently will be much slower than twice one chat.
 |---|---|
 | Answer is blank, "streaming…" forever | Hard-reload the browser |
 | "Not found in the loaded corpus" on a topic you can see in Sources | Read the trace: it prints the best similarity, the threshold, and the closest documents |
+| **Answers cite real documents but describe the wrong subject entirely** | **Embedding model missing — `/api/health` will say `deterministic-hash`. Run §2b.** |
 | Sources list shows files you do not have | You are on the dev server's fallback — the backend is not running |
 | Every answer says "not confirmed" | Expected for table values; the verifier is a 3.8B model and false-negatives on them |
 | `Could not start sandbox pool` | Build the image (§5) or ignore it |
