@@ -146,7 +146,7 @@ answer arrives with a real tool-call receipt attached. A human seeing
 the arguments is the ONLY thing that catches that.
 
 ONE ENDPOINT — /api/chat/stream ROUTES ITSELF. You never choose a path.
-It emits a  event saying which ran and why:
+It emits a route event saying which ran and why:
   corpus  -> "what documents do you have" (from the index, no model)
   direct  -> single lookups (grounded path, best answers)
   agentic -> multi-step / computation (the tool loop)
