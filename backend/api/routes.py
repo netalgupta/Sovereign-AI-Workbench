@@ -699,6 +699,61 @@ def ingestion_jobs(limit: int = Query(10, ge=1, le=20)) -> dict:
     return {"jobs": [j.summary() for j in get_tracker().recent(limit)]}
 
 
+# The sidebar's source filter tabs -- Docs / Data / Charts / APIs --
+# filter on `category`. The backend corpus response did not carry that
+# field at all, so against real backend data every tab counted zero and
+# clicking one emptied the list. It only ever worked against the Vite
+# dev server's own hardcoded source objects, which set `category` by
+# hand on a fixed list of thirteen files.
+#
+# Derived from the extension rather than stored, so a newly ingested
+# file is categorised the moment it appears -- there is no list to keep
+# in sync, which is what let the previous one drift.
+_CATEGORY_BY_EXTENSION = {
+    # Documents: prose a person reads.
+    "pdf": ("documents", "reports"),
+    "docx": ("documents", "reports"),
+    "doc": ("documents", "reports"),
+    "txt": ("documents", "notes"),
+    "md": ("documents", "notes"),
+    "eml": ("documents", "correspondence"),
+    "msg": ("documents", "correspondence"),
+    "html": ("documents", "notes"),
+    # Data: tabular, queryable.
+    "xlsx": ("data", "spreadsheets"),
+    "xls": ("data", "spreadsheets"),
+    "csv": ("data", "spreadsheets"),
+    "json": ("data", "structured"),
+    "xml": ("data", "structured"),
+    "yaml": ("data", "structured"),
+    "yml": ("data", "structured"),
+    # Charts and scans: pixels, reached through OCR or the vision model.
+    "png": ("charts", "diagrams"),
+    "jpg": ("charts", "diagrams"),
+    "jpeg": ("charts", "diagrams"),
+    "gif": ("charts", "diagrams"),
+    "bmp": ("charts", "diagrams"),
+    "tiff": ("charts", "diagrams"),
+    "svg": ("charts", "diagrams"),
+    # Audio: transcribed before it is retrievable.
+    "wav": ("data", "audio"),
+    "mp3": ("data", "audio"),
+    "m4a": ("data", "audio"),
+    "flac": ("data", "audio"),
+}
+
+
+def categorise_source(extension: str) -> tuple[str, str]:
+    """Map a file extension to (category, subcategory).
+
+    Unknown extensions fall to ("documents", "other") rather than to a
+    category of their own: an ingested file that matches no filter tab
+    is invisible in the sidebar, which is a worse failure than being
+    filed imprecisely.
+    """
+    return _CATEGORY_BY_EXTENSION.get(extension.lower(), ("documents", "other"))
+
+
 @router.get("/corpus")
 def get_corpus() -> dict:
     """Native corpus endpoint matching configured sources and directory tree."""
@@ -805,6 +860,10 @@ def get_corpus() -> dict:
                         "fullPath": str(entry),
                         "corpus": dir_cfg.get("name"),
                         "enabled": True,
+                        # Drives the sidebar's filter tabs. Absent until
+                        # now, which made every tab count zero.
+                        "category": categorise_source(ext)[0],
+                        "subcategory": categorise_source(ext)[1],
                     }
                     parent["children"].append({**file_item, "type": "file"})
                     parent["fileCount"] += 1
@@ -1415,6 +1474,141 @@ def chat(body: ChatRequestBody) -> dict:
         "awaiting_human_approval": state.awaiting_human_approval,
         "approval_action": approval_action,
     }
+
+
+# --------------------------------------------------------------- models
+
+@router.get("/models")
+def list_models() -> dict:
+    """The model registry, with each model's REAL availability.
+
+    WHY THIS EXISTS ON THE BACKEND. The frontend dev server was serving
+    this route itself, from a hand-rolled parse of models.yaml, and it
+    reported `status: "active"` for every entry unconditionally. Two of
+    the registered models are not pulled on this machine -- phi-3.5-mini
+    (the router AND the verifier) and qwen2.5-coder:7b -- so the model
+    picker offered models that do not exist, and the verification step
+    failed with a bare 404 that looked like a bug rather than a missing
+    download.
+
+    It also guessed VRAM by substring: "14b" in the tag meant "8.5 GB",
+    regardless of quantisation. Ollama reports the real on-disk size, so
+    there is no reason to guess.
+
+    A registry that cannot distinguish "configured" from "present" is
+    not a registry; it is a list of intentions. Both states are reported
+    here, separately and by name.
+    """
+    import requests
+
+    # _DEFAULT_REGISTRY_PATH, not load_registry's own default: CARD 01
+    # specifies "/models/models.yaml", an absolute container path that
+    # resolves to E:\models\models.yaml on a Windows dev box and does
+    # not exist. registry.py already resolves the real one relative to
+    # the repo; every caller in this repo must use that.
+    from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+    try:
+        registry = load_registry(_DEFAULT_REGISTRY_PATH)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"Could not read models.yaml: {exc}") from exc
+
+    # What Ollama actually has. Unreachable is reported as unknown, never
+    # as absent -- claiming a model is missing because the daemon is down
+    # sends someone to re-download models they already have.
+    pulled: dict[str, dict] | None = None
+    ollama_error = None
+    try:
+        res = requests.get("http://localhost:11434/api/tags", timeout=3)
+        res.raise_for_status()
+        pulled = {m["name"]: m for m in res.json().get("models", [])}
+    except Exception as exc:  # noqa: BLE001
+        ollama_error = f"{type(exc).__name__}: {exc}"
+
+    models = []
+    for model_id, cfg in registry.items():
+        tag = cfg.model
+        # Ollama normalises a bare name to name:latest.
+        entry = None
+        if pulled is not None:
+            entry = pulled.get(tag) or pulled.get(f"{tag}:latest")
+
+        if pulled is None:
+            status, detail = "unknown", f"Ollama unreachable ({ollama_error})"
+        elif entry is not None:
+            status, detail = "available", None
+        else:
+            status, detail = "not_pulled", f"Run: ollama pull {tag}"
+
+        models.append({
+            "id": model_id,
+            "backend": cfg.backend,
+            "model": tag,
+            "task_tags": list(cfg.task_tags),
+            "status": status,
+            "detail": detail,
+            # Real bytes from Ollama, or null. Never an estimate dressed
+            # up as a measurement.
+            "size_bytes": entry.get("size") if entry else None,
+            "size_display": (
+                f"{entry['size'] / 1e9:.1f} GB" if entry and entry.get("size") else None
+            ),
+            "parameter_size": (entry.get("details") or {}).get("parameter_size") if entry else None,
+            "quantization": (entry.get("details") or {}).get("quantization_level") if entry else None,
+        })
+
+    return {
+        "models": models,
+        "registry_path": "models/models.yaml",
+        "ollama_reachable": pulled is not None,
+        "ollama_error": ollama_error,
+        "available_count": sum(1 for m in models if m["status"] == "available"),
+        "missing": [m["model"] for m in models if m["status"] == "not_pulled"],
+    }
+
+
+@router.get("/system-info")
+def system_info() -> dict:
+    """Host facts the status bar reports, measured rather than assumed."""
+    import platform
+
+    import psutil
+
+    vm = psutil.virtual_memory()
+    info = {
+        "platform": platform.system(),
+        "platform_release": platform.release(),
+        "python_version": platform.python_version(),
+        "cpu_count": psutil.cpu_count(logical=True),
+        "cpu_percent": psutil.cpu_percent(interval=0.1),
+        "ram_total_gb": round(vm.total / 1e9, 1),
+        "ram_used_percent": vm.percent,
+        "gpu": None,
+    }
+
+    # nvidia-smi if present. Absent is reported as absent; the previous
+    # implementation had no GPU path at all and the UI showed "N/A"
+    # without ever saying whether that meant "no GPU" or "not checked".
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip().splitlines()
+        if out:
+            name, used, total, util = (x.strip() for x in out[0].split(","))
+            info["gpu"] = {
+                "name": name,
+                "memory_used_mb": int(used),
+                "memory_total_mb": int(total),
+                "utilization_percent": int(util),
+            }
+    except Exception:  # noqa: BLE001
+        info["gpu_detection"] = "nvidia-smi unavailable; no NVIDIA GPU detected or driver not installed"
+
+    return info
 
 
 # -------------------------------------------------------------- network
