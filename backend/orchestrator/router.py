@@ -22,7 +22,7 @@ import json
 
 import requests
 
-from backend.models.ollama_client import default_options
+from backend.models.ollama_client import short_prompt_options
 from backend.models.registry import resolve_model_name
 from backend.utils.llm_output import strip_code_fences
 
@@ -82,7 +82,7 @@ def _call_router_model(prompt: str, model_name: str) -> str:
             "model": model_name,
             "prompt": prompt,
             "stream": False,
-            "options": default_options(),
+            "options": short_prompt_options(),
         },
         timeout=120,
     )

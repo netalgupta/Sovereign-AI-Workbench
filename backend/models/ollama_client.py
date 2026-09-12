@@ -84,11 +84,59 @@ GENERATE_URL = f"{OLLAMA_HOST}/api/generate"
 # reproducing a CPU-only run.
 DEFAULT_NUM_GPU = int(os.environ.get("WORKBENCH_NUM_GPU", "99"))
 
+# Context for the GENERATION model, sized to the job rather than left at
+# Ollama's 4096 default.
+#
+# WHY IT IS A VRAM DECISION, NOT A QUALITY ONE. A measured grounded
+# prompt is ~6800 characters (5 chunks plus instructions), about 2000
+# tokens, and the answer adds a few hundred. 3072 covers that with
+# headroom. The remaining 1024 tokens of the default window were never
+# used -- but their KV cache was allocated and held resident.
+#
+# That mattered: with generation at 4096 (~5.5 GB) and the verifier at
+# 4096 (~4.0 GB), the pair needed ~9.5 GB on an 8.2 GB card, so
+# `ollama ps` after every turn showed only the verifier. Both models
+# reloaded from scratch on every turn, and one measured turn spiked to
+# 127s when the thrash collided with GPU pressure. Unpredictable is
+# worse than slow.
+#
+# If a future change grows the prompt (more chunks, longer
+# instructions), raise this deliberately and re-check residency with
+# `ollama ps` -- silently overflowing the window truncates the SOURCES
+# block, which would drop citations without any error.
+GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "3072"))
+
 DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 
 
+# Context window for the SHORT-PROMPT models (router, verifier). They
+# read one request plus one answer -- a few hundred tokens -- while
+# Ollama's 4096 default sizes a KV cache for the full window and keeps
+# it resident.
+#
+# Measured: with reasoning-model (qwen2.5:7b, ~5.5 GB resident) and
+# fast-router (phi3.5) both at 4096, the pair needs ~9.5 GB on an 8.2 GB
+# card, so `ollama ps` after every turn showed ONLY phi3.5 -- qwen had
+# been evicted and had to be reloaded on the next turn. Both models were
+# being loaded from scratch every single turn, which was the bulk of the
+# per-turn time, not the inference.
+# 2048 was sized for a verifier that saw only the request and the
+# draft. It now also receives the retrieved sources (truncated to 700
+# characters each) so it can check a cited value against the source it
+# is attributed to, which is the difference between verifying
+# grounding and verifying prose style. 3072 covers that; the router,
+# which really does send a short prompt, is unaffected by the extra
+# headroom because unused context is not allocated per request.
+SHORT_PROMPT_NUM_CTX = int(os.environ.get("WORKBENCH_SHORT_CTX", "3072"))
+
+
 def default_options() -> dict:
-    return {"num_gpu": DEFAULT_NUM_GPU}
+    return {"num_gpu": DEFAULT_NUM_GPU, "num_ctx": GENERATION_NUM_CTX}
+
+
+def short_prompt_options() -> dict:
+    """Options for models that only ever see a short prompt."""
+    return {"num_gpu": DEFAULT_NUM_GPU, "num_ctx": SHORT_PROMPT_NUM_CTX}
 
 
 def generate(

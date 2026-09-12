@@ -196,7 +196,15 @@ def test_a_plan_in_a_code_fence_is_parsed():
     state = plan_request(
         _state(),
         planner_fn=_fake_planner(
-            '```json\n[{"step_id": "a", "description": "x", '
+            # validate_plan now requires the assigned agent to be
+            # corroborated by the work -- the planner was assigning
+            # `code` to "create standard operating procedures" and
+            # `math` to a plain table lookup, both of which dispatched
+            # to a tool that could not do the job and failed. A
+            # placeholder description is correctly reassigned to
+            # reasoning, which would make this a test of agent-fitting
+            # rather than of the code-fence parsing it is named for.
+            '```json\n[{"step_id": "a", "description": "Calculate the mean of the batch values", '
             '"assigned_agent": "math", "depends_on": []}]\n```'
         ),
     )

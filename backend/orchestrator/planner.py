@@ -30,6 +30,8 @@ than trusting the output:
 """
 
 import json
+import logging
+import re
 
 from backend.models.ollama_client import generate as ollama_generate
 from backend.models.registry import resolve_model_name
@@ -61,6 +63,9 @@ VALID_AGENTS = {"vision", "code", "reasoning", "math", "retrieval"}
 MAX_PLAN_STEPS = 12
 
 
+logger = logging.getLogger("backend.orchestrator.planner")
+
+
 class PlanningError(Exception):
     """The model's output could not be made into an executable plan."""
 
@@ -76,6 +81,78 @@ def _call_planner_model(prompt: str, model_name: str) -> str:
         prompt,
         timeout=300,
     )
+
+
+# WORK THAT ACTUALLY REQUIRES EACH SPECIALIST AGENT.
+#
+# validate_plan checked that assigned_agent was a MEMBER of VALID_AGENTS
+# and nothing more, so any step could claim any agent as long as the
+# name was spelled right. Observed consequences, both real:
+#
+#   "Give sops for Hydrocrackers"
+#     -> step assigned_agent="code", description="Create standard
+#        operating procedures for hydrocrackers"
+#     -> dispatched to the sandbox, which cannot write an SOP, and the
+#        step failed in the trace.
+#
+#   "What is the average MFI for Homopolymer H030SG?"
+#     -> step assigned_agent="math", description="Calculate the average
+#        MFI value from the retrieved data"
+#     -> evaluate_expression ran and correctly reported "no arithmetic
+#        expression found in the request". There was nothing to
+#        calculate: the average is printed verbatim in the source table.
+#
+# Neither is harmless. A mis-assigned step runs a tool nobody needed,
+# fails, and puts a failure in a trace the user is being asked to trust
+# -- while the work the step described never happens.
+#
+# So the description has to corroborate the agent. When it does not, the
+# step is REASSIGNED rather than dropped: the work it describes is still
+# needed, it just needs a different worker. Dropping it would produce an
+# answer missing a piece nobody knows is missing, which is the failure
+# mode validate_plan's existing repair comment already warns about.
+_CODE_WORK = re.compile(
+    r"\b(code|script|program|execute|run|compile|debug|parse|regex|"
+    r"algorithm|function|api call|query the database|sql)\b",
+    re.I,
+)
+_MATH_WORK = re.compile(
+    r"\b(calculate|compute|sum|average|mean|median|integrate|"
+    r"differentiate|solve|convert|percentage|ratio|deviation|"
+    r"interpolat|extrapolat|regression|projection|forecast)\b",
+    re.I,
+)
+_VISION_WORK = re.compile(
+    r"\b(image|diagram|chart|photo|scan|p&id|schematic|figure|ocr|"
+    r"visual|picture|drawing)\b",
+    re.I,
+)
+
+
+def _agent_fits_description(agent: str, description: str) -> bool:
+    """Does the described work actually need this specialist?
+
+    Only the three specialist agents are gated. "retrieval" and
+    "reasoning" are the general cases and are always acceptable -- being
+    strict about those would reject correct plans for no benefit, and
+    the cost of a wrong specialist (a failed tool call) is much higher
+    than the cost of a step that reasons when it could have retrieved.
+    """
+    if agent == "code":
+        return bool(_CODE_WORK.search(description))
+    if agent == "math":
+        return bool(_MATH_WORK.search(description))
+    if agent == "vision":
+        return bool(_VISION_WORK.search(description))
+    return True
+
+
+def _fallback_agent(description: str) -> str:
+    """Where a mis-assigned step should go instead."""
+    if re.search(r"\b(retrieve|find|look up|search|gather|locate|"
+                 r"fetch|get|identify)\b", description, re.I):
+        return "retrieval"
+    return "reasoning"
 
 
 def validate_plan(raw_steps: list[dict]) -> list[PlanStep]:
@@ -120,6 +197,18 @@ def validate_plan(raw_steps: list[dict]) -> list[PlanStep]:
         description = str(raw.get("description", "")).strip()
         if not description:
             description = f"Step {index + 1}"
+
+        # The agent must be corroborated by the work, not just spelled
+        # correctly. See _agent_fits_description for the two real
+        # mis-assignments this catches.
+        if not _agent_fits_description(agent, description):
+            replacement = _fallback_agent(description)
+            logger.info(
+                "plan step %s: reassigned %r -> %r; the description %r does "
+                "not describe work that agent can do",
+                step_id, agent, replacement, description[:80],
+            )
+            agent = replacement
 
         raw_deps = raw.get("depends_on") or []
         deps = [str(d).strip() for d in raw_deps if isinstance(d, (str, int))]

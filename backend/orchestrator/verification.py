@@ -35,6 +35,7 @@ import json
 from enum import Enum
 
 from backend.models.ollama_client import generate as ollama_generate
+from backend.models.ollama_client import short_prompt_options
 from backend.models.registry import resolve_model_name
 from backend.orchestrator.state import AgentState, VerificationResult
 from backend.utils.llm_output import strip_code_fences
@@ -63,17 +64,68 @@ class VerificationOutcome(str, Enum):
     UNCONFIRMED = "unconfirmed"
 
 
-def build_verification_prompt(original_request: str, draft_output: str) -> str:
-    """§5's template with the two fields substituted.
+def build_verification_prompt(
+    original_request: str, draft_output: str, sources: list[dict] | None = None
+) -> str:
+    """§5's template with its fields substituted, plus the SOURCES.
+
+    THE VERIFIER COULD NOT SEE WHAT IT WAS VERIFYING.
+
+    §5's template supplies only the request and the draft. So the
+    verifier was asked whether an answer is complete and supported,
+    while being shown nothing to support it against. Its verdicts were
+    exactly what that permits -- judgements of style, not of grounding.
+    On a correct, correctly-cited answer it returned:
+
+        "The produced output provides the value of the average Melt Flow
+         Index (MFI) but lacks a clear statement about whether this
+         figure pertains specifically to Homopolymer H030SG and does not
+         include any supporting evidence or sources."
+
+    The answer was "The average MFI for Homopolymer H030SG is 3.4
+    g/10min [2]." It named the grade, gave the value, and cited. The
+    verifier called it unsupported because "[2]" is meaningless without
+    the source list, and it had never been given one.
+
+    That made the self-check fail on every real answer, which is the
+    same outcome as the hardcoded satisfied:true it replaced -- a
+    verdict uncorrelated with the answer's quality, just inverted. A
+    banner that is always on carries no information.
+
+    Passing the retrieved chunks makes the question answerable: the
+    verifier can now check that a cited number actually appears in the
+    source it is attributed to, which is what §5 is for.
+
+    `sources` is optional so every existing caller and test keeps
+    working; without it the behaviour is exactly as before.
 
     Done by replace() rather than .format() because the template's own
     JSON example contains braces that .format() would read as fields —
-    the same bug entity_extraction.py documents. Kept as one function so
-    the substitution is testable against the spec text.
+    the same bug entity_extraction.py documents.
     """
-    return _VERIFICATION_PROMPT_TEMPLATE.replace(
+    prompt = _VERIFICATION_PROMPT_TEMPLATE.replace(
         "{original_request}", original_request
     ).replace("{draft_output}", draft_output)
+
+    if not sources:
+        return prompt
+
+    lines = ["", "", "SOURCES THE ANSWER WAS DRAWN FROM:"]
+    for i, chunk in enumerate(sources, 1):
+        text = (chunk.get("text") or "").strip().replace("\n", " ")
+        doc = chunk.get("source_document", "?")
+        # Truncated per source: the verifier needs enough to confirm a
+        # cited value appears, not the whole chunk. Sending everything
+        # would push this prompt past the context window that keeps this
+        # model resident alongside the generation model.
+        lines.append(f"[{i}] ({doc}) {text[:700]}")
+    lines += [
+        "",
+        "A claim is supported if the cited source contains it. A bracketed "
+        "number refers to the source with that number above; an answer that "
+        "cites correctly is NOT missing its sources.",
+    ]
+    return prompt + "\n".join(lines)
 
 
 def _call_verifier_model(prompt: str, model_name: str) -> str:
@@ -85,6 +137,7 @@ def _call_verifier_model(prompt: str, model_name: str) -> str:
     return ollama_generate(
         model_name,
         prompt,
+        options=short_prompt_options(),
         timeout=180,
     )
 
@@ -222,7 +275,15 @@ def verify_output(
     caller = verifier_fn or _call_verifier_model
     model_name = resolve_model_name(model_id)
     raw = caller(
-        build_verification_prompt(state.original_request, state.draft_output), model_name
+        build_verification_prompt(
+            state.original_request,
+            state.draft_output,
+            # The chunks the answer was actually generated from. Without
+            # these the verifier can only judge style -- see the
+            # docstring above.
+            sources=state.retrieved_context,
+        ),
+        model_name,
     )
     result = parse_verification(raw)
     state.verification_result = result

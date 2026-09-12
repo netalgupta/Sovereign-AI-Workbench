@@ -636,13 +636,31 @@ def verify_node(state: AgentState) -> dict[str, Any]:
         # MFI unit, which is correct notation). An objection shown is
         # something a person can overrule; an objection dropped is a
         # disagreement the system resolved silently in its own favour.
+        # WORDING MATTERS, because the verifier's reliability is known,
+        # limited, and measured:
+        #
+        #   phi3.5 (fast-router)  false NEGATIVES -- failed a correct,
+        #     correctly-cited answer whose value sat plainly in the source
+        #     text it was shown. Aligning a row of an extracted PDF table
+        #     is past a 3.8B model.
+        #   qwen2.5:7b            false POSITIVES -- passed an answer that
+        #     reported a pressure with no units at all.
+        #
+        # The small model is kept deliberately: a verifier that waves
+        # through a wrong number is worse here than one that over-flags.
+        # But "flagged this answer" asserts a fault was FOUND, and most of
+        # these are the verifier being unable to confirm. Saying so
+        # wrongly and often is how a banner becomes wallpaper -- the same
+        # fate as the old always-true verdict, merely inverted.
         reason = (verified.verification_result.reason or "").strip()
         update["draft_output"] = (
             state.draft_output
-            + "\n\n> **Self-check flagged this answer.** "
-            + (reason or "The verifier did not confirm this output.")
-            + "\n>\n> The answer above is shown unchanged. Treat it as "
-            + "unconfirmed until checked against the cited source."
+            + "\n\n> **Not confirmed by the self-check.** "
+            + (reason or "The verifier could not confirm this output.")
+            + "\n>\n> The answer above is unchanged. The checker is a small "
+            + "model and cannot always confirm values read from tables, so "
+            + "this is a prompt to verify against the cited source rather "
+            + "than a finding that the answer is wrong."
         )
 
     return update
