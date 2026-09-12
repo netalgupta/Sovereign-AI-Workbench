@@ -117,14 +117,36 @@ export function ApprovalModal({
               className="text-sm font-bold tracking-tight leading-snug"
               style={{ color: 'var(--color-text)' }}
             >
-              {action.title || 'Confirm Critical Parameter Modification'}
+              {action.title || 'Confirm operator action'}
             </h2>
-            <div
-              className="text-[11px] font-mono mt-0.5"
-              style={{ color: 'var(--color-text-muted)' }}
-            >
-              Target: <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{action.target || 'HCU-2 / FFC-201'}</span>
-            </div>
+            {/* THE FALLBACKS IN THIS FILE WERE FABRICATIONS.
+                `action.target || 'HCU-2 / FFC-201'` meant the backend
+                could correctly send target: null and the modal would
+                still display a specific controller tag. Observed live:
+                a request to "Draft a DOCX report on the Hassan incident
+                and save it" rendered as a DCS setpoint change on
+                HCU-2 / FFC-201, 1,450 -> 1,667 m3/h, with a catalyst
+                residence-time warning.
+                An unresolved field must read as unresolved. A plausible
+                default reads as measured, and this is the one screen
+                where a human signs off -- consent recorded against
+                invented figures is a signed audit entry for something
+                nobody approved. */}
+            {action.target ? (
+              <div
+                className="text-[11px] font-mono mt-0.5"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Target: <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{action.target}</span>
+              </div>
+            ) : (
+              <div
+                className="text-[11px] mt-0.5"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Target not resolved by the system
+              </div>
+            )}
           </div>
         </div>
 
@@ -134,68 +156,79 @@ export function ApprovalModal({
             className="text-xs font-semibold leading-relaxed"
             style={{ color: 'var(--color-text)' }}
           >
-            {action.description || 'This will change HCU feed rate from 100% to 115%.'}
+            {action.description ||
+              'This action requires your authorisation before it can run.'}
           </p>
-          <p
-            className="text-[11px] leading-relaxed mt-1"
-            style={{ color: 'var(--color-text-muted)' }}
-          >
-            {action.detail ||
-              'This action will adjust the HCU-2 reactor feed rate setpoint from 100% (1,450 m³/h) to 115% (1,667 m³/h) via DCS feed-forward controller FFC-201.'}
-          </p>
+          {action.detail && (
+            <p
+              className="text-[11px] leading-relaxed mt-1 font-mono"
+              style={{ color: 'var(--color-text-muted)' }}
+            >
+              {/* The operator's own words, quoted. Not a paraphrase and
+                  not a substitute: this is what they are authorising. */}
+              Requested: &ldquo;{action.detail}&rdquo;
+            </p>
+          )}
         </div>
 
-        {/* Parameter Diff Card — Visual Before vs After */}
-        <div
-          className="mt-3.5 p-3 rounded-xl flex items-center justify-between gap-3 border"
-          style={{
-            background: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-          {/* Current Value */}
-          <div className="flex-1 text-left">
-            <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>
-              Current Setpoint
-            </div>
-            <div className="font-mono text-xs font-bold mt-0.5" style={{ color: 'var(--color-text)' }}>
-              {action.current_value || '100% (1,450 m³/h)'}
-            </div>
-            <span
-              className="inline-block text-[9px] px-1.5 py-0.2 rounded font-medium mt-1"
-              style={{ background: 'var(--color-overlay)', color: 'var(--color-text-muted)' }}
-            >
-              Baseline
-            </span>
-          </div>
-
-          {/* Arrow Divider */}
+        {/* Before/after values, ONLY when the system actually resolved
+            them. This card previously rendered
+            "100% (1,450 m3/h) -> 115% (1,667 m3/h)  +15.0% Excursion"
+            as hardcoded fallbacks, for every gated action regardless of
+            what was asked -- including file writes and audit-log
+            deletions. A diff with invented endpoints is worse than no
+            diff: it is the most convincing part of the screen. */}
+        {action.current_value && action.proposed_value ? (
           <div
-            className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+            className="mt-3.5 p-3 rounded-xl flex items-center justify-between gap-3 border"
             style={{
-              background: 'var(--color-accent-tint)',
-              color: 'var(--color-accent)',
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
             }}
           >
-            <ArrowRight size={14} strokeWidth={2.4} />
-          </div>
+            <div className="flex-1 text-left">
+              <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>
+                Current
+              </div>
+              <div className="font-mono text-xs font-bold mt-0.5" style={{ color: 'var(--color-text)' }}>
+                {action.current_value}
+              </div>
+            </div>
 
-          {/* Proposed Value */}
-          <div className="flex-1 text-right">
-            <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>
-              Proposed Target
-            </div>
-            <div className="font-mono text-xs font-bold mt-0.5" style={{ color: 'var(--color-accent)' }}>
-              {action.proposed_value || '115% (1,667 m³/h)'}
-            </div>
-            <span
-              className="inline-block text-[9px] px-1.5 py-0.2 rounded font-medium mt-1"
-              style={{ background: 'var(--color-error-tint)', color: 'var(--color-accent)' }}
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{
+                background: 'var(--color-accent-tint)',
+                color: 'var(--color-accent)',
+              }}
             >
-              +15.0% Excursion
-            </span>
+              <ArrowRight size={14} strokeWidth={2.4} />
+            </div>
+
+            <div className="flex-1 text-right">
+              <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>
+                Proposed
+              </div>
+              <div className="font-mono text-xs font-bold mt-0.5" style={{ color: 'var(--color-accent)' }}>
+                {action.proposed_value}
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div
+            className="mt-3.5 p-3 rounded-xl text-left border text-[11px] leading-relaxed"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text-muted)',
+            }}
+          >
+            The workbench has <span style={{ color: 'var(--color-text)' }}>not resolved</span> a
+            specific device, file path or value for this instruction. There is
+            nothing to show a before/after for. Confirm the specifics yourself
+            before authorising.
+          </div>
+        )}
 
         {/* Inline Warning Callout Box with Risk Statement */}
         <div
@@ -216,8 +249,14 @@ export function ApprovalModal({
               className="text-xs font-semibold leading-snug"
               style={{ color: 'var(--color-text)' }}
             >
+              {/* No invented risk assessment. The previous fallback
+                  asserted a catalyst residence-time hazard and a "34%
+                  fractionation flooding probability" for every gated
+                  action, including deleting an audit log. A fabricated
+                  risk number on an approval screen is a safety claim
+                  nobody computed. */}
               {action.warning ||
-                'Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) and increases exothermic runaway risk. Fractionation column flooding probability increases to 34%.'}
+                'Review this action before authorising it. Once authorised it will be executed and recorded in the audit log against your approval.'}
             </p>
             {action.mitigation_required && (
               <p

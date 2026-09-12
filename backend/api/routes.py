@@ -36,6 +36,16 @@ router = APIRouter(prefix="/api")
 
 # ---------------------------------------------------------------- health
 
+def _embedding_backend_status() -> tuple[str, str | None]:
+    """(backend name, degradation reason or None) without forcing a load."""
+    try:
+        from backend.ingestion.embeddings import active_backend, degraded_reason
+
+        return active_backend(), degraded_reason()
+    except Exception as exc:  # noqa: BLE001
+        return "unknown", f"could not read embedding status: {exc}"
+
+
 @router.get("/health")
 def health() -> dict:
     """Liveness plus what is actually available right now.
@@ -54,6 +64,12 @@ def health() -> dict:
         "corpus_loaded": state.corpus_is_loaded,
         "snapshot_available": state.snapshot() is not None,
         "snapshot_written_at": state.snapshot_age(),
+        # Whether retrieval is actually semantic. This silently fell
+        # back to hash vectors for a whole session after a transient
+        # load failure, and nothing in the API said so.
+        "embedding_backend": _embedding_backend_status()[0],
+        "embeddings_degraded": _embedding_backend_status()[1] is not None,
+        "embeddings_degraded_reason": _embedding_backend_status()[1],
         "graph_available": graph.get("available", False),
         "graph_error": graph.get("error"),
         "images_stored": len(state.image_store.all_records()),
@@ -1571,6 +1587,19 @@ class ChatRequestBody(BaseModel):
     session_id: str = "default"
 
 
+# Machine-readable action type per gate category. Mapped rather than
+# hardcoded, because the previous single literal "DCS_SETPOINT_WRITE"
+# labelled a request to write a Word document as a setpoint change --
+# and action_type is what an audit reader filters on.
+_ACTION_TYPES = {
+    "setpoint change": "SETPOINT_WRITE",
+    "SAP / ERP write": "SAP_WRITE",
+    "outbound send": "OUTBOUND_SEND",
+    "destructive change": "DESTRUCTIVE_CHANGE",
+    "file write": "FILE_WRITE",
+}
+
+
 @router.post("/chat")
 def chat(body: ChatRequestBody) -> dict:
     """Core agentic orchestration endpoint for the workbench chat interface.
@@ -1580,6 +1609,15 @@ def chat(body: ChatRequestBody) -> dict:
     """
     from backend.audit.approval_gate import ApprovalGate
     from backend.orchestrator.graph import run_agent_turn
+
+    # Persist the user turn BEFORE running, so the working memory a
+    # concurrent request loads is never missing the message that is
+    # currently being answered.
+    try:
+        from backend.memory.store import get_store
+        get_store().append(body.session_id, "user", body.message)
+    except Exception:  # noqa: BLE001 - memory must never break a turn
+        pass
 
     state = run_agent_turn(body.message, body.session_id)
 
@@ -1618,30 +1656,92 @@ def chat(body: ChatRequestBody) -> dict:
         gate = ApprovalGate()
         try:
             req = gate.get(state.final_output_path)
+            # THE PAYLOAD DESCRIBES THE ACTION THAT WAS ACTUALLY
+            # REQUESTED. IT USED TO DESCRIBE A DIFFERENT ONE.
+            #
+            # Every field below except `description` and `id` was a
+            # hardcoded literal about a feed-rate change. Asked to
+            # "Draft a DOCX report on the Hassan incident and save it",
+            # the modal rendered:
+            #
+            #     DCS_SETPOINT_WRITE
+            #     "Confirm Operational Setpoint Modification"
+            #     Target: HCU-2 / FFC-201
+            #     CURRENT 100% (1,450 m3/h) -> PROPOSED 115% (1,667 m3/h)
+            #     "+15.0% Excursion"
+            #     "Operating above 110% reduces catalyst residence time
+            #      (LHSV > 1.8 h-1) and increases exothermic runaway risk"
+            #
+            # for a request to write a Word document. The one honest
+            # line -- "Operator-requested file write" -- came from the
+            # gate itself and sat surrounded by invented flow rates.
+            #
+            # This is the single worst place in the product for that.
+            # It is the screen where a human signs off, and approval
+            # recorded against invented figures produces a signed audit
+            # entry for something nobody approved. Ask an operator
+            # "what did you authorise?" and the honest answer was a
+            # number the system made up. That is worse than having no
+            # gate: the gate is what makes the record trustworthy.
+            #
+            # Nothing here is invented now. Fields the system cannot
+            # know are ABSENT rather than filled with plausible
+            # placeholders -- an empty field reads as unknown, a
+            # plausible one reads as measured.
+            category = req.arguments.get("category") or "operator action"
+            command = req.arguments.get("command") or req.effect
+
             approval_action = {
                 "id": req.request_id,
-                "title": "Confirm Operational Setpoint Modification",
-                "action_type": "DCS_SETPOINT_WRITE",
-                "target": req.arguments.get("target", "HCU-2 / FFC-201"),
+                "title": f"Confirm {category}",
+                "action_type": _ACTION_TYPES.get(category, "OPERATOR_ACTION"),
+                # The operator's own words. The system has not resolved a
+                # device, a file path or a magnitude, and says so rather
+                # than guessing one.
+                "target": None,
                 "description": req.effect,
-                "detail": f"Action parameter: {req.arguments.get('command', req.effect)}",
-                "current_value": "100% (1,450 m³/h)",
-                "proposed_value": "115% (1,667 m³/h)",
-                "unit": "m³/h",
-                "parameter": "FFC-201.SP (Feed Rate Setpoint)",
-                "risk_level": "CRITICAL",
+                "detail": command,
+                "requested_by_operator": command,
+                "resolved_parameters": False,
+                "risk_level": "REQUIRES_REVIEW",
                 "warning": (
-                    "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
-                    "and increases exothermic runaway risk."
-                ),
-                "mitigation_required": (
-                    "Mandatory pre-condition: Quench flow controller (QFC-18) armed and "
-                    "H₂/HC ratio maintained > 1,000 Nm³/m³ before setpoint ramp."
+                    "The workbench has NOT resolved a target device, file "
+                    "path or value for this instruction. Approving records "
+                    "your authorisation for the action exactly as worded "
+                    "above — confirm the specifics yourself before "
+                    "authorising."
                 ),
                 "token": req.token,
             }
         except Exception:
             pass
+
+    # Record the assistant turn, with the documents it actually looked
+    # at. `documents` is stored separately from `citations` on purpose:
+    # a follow-up like "give all columns" refers to the TABLE the last
+    # turn read, which may live in a chunk the answer never explicitly
+    # cited. Citations alone would lose it.
+    try:
+        from backend.memory.store import get_store
+
+        get_store().append(
+            body.session_id,
+            "assistant",
+            state.draft_output or "",
+            route="direct",
+            citations=citations[:20],
+            documents=sorted({
+                c.get("source_document")
+                for c in state.retrieved_context
+                if c.get("source_document")
+            }),
+            tool_calls=[
+                {"tool_name": e.tool_name, "status": e.status}
+                for e in state.tool_call_log
+            ],
+        )
+    except Exception:  # noqa: BLE001 - memory must never break a turn
+        pass
 
     return {
         "reply": state.draft_output or "Analysis complete.",
@@ -1913,11 +2013,175 @@ def graph_neighbourhood(
     }
 
 
+# ---------------------------------------------------- memory / sessions
+
+@router.get("/sessions")
+def list_sessions(limit: int = Query(50, ge=1, le=200)) -> dict:
+    """Every conversation, newest first.
+
+    Sessions were previously not stored at all -- `session_id` was
+    threaded through every request and written nowhere, so each turn
+    began from nothing and the Chats list in the sidebar had to be
+    faked. It was, with five invented conversations.
+    """
+    from backend.memory.store import get_store
+
+    sessions = get_store().list_sessions(limit)
+    return {
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "turn_count": s.turn_count,
+            }
+            for s in sessions
+        ],
+        "count": len(sessions),
+    }
+
+
+@router.get("/sessions/{session_id}")
+def get_session(session_id: str) -> dict:
+    """One conversation with its full message history."""
+    from backend.memory.store import get_store
+
+    store = get_store()
+    session = store.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, detail=f"No session {session_id!r}")
+
+    messages = store.all_messages(session_id)
+    return {
+        "session_id": session.session_id,
+        "title": session.title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "turn_count": session.turn_count,
+        "messages": [
+            {
+                "message_id": m.message_id,
+                "turn_index": m.turn_index,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at,
+                "route": m.route,
+                "citations": m.citations,
+                "documents": m.documents,
+                "tool_calls": m.tool_calls,
+            }
+            for m in messages
+        ],
+    }
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: str) -> dict:
+    """Delete a conversation and everything in it."""
+    from backend.memory.store import get_store
+
+    get_store().delete_session(session_id)
+    return {"deleted": session_id}
+
+
+@router.get("/sessions/{session_id}/memory")
+def get_session_memory(session_id: str) -> dict:
+    """What the system currently remembers about this conversation.
+
+    Exposed because memory that cannot be inspected cannot be trusted or
+    debugged. When an answer refers to something unexpected, this is
+    where you look: the focus documents are what steer retrieval for
+    follow-ups.
+    """
+    from backend.memory import working
+
+    memory = working.load(session_id)
+    return {
+        "session_id": session_id,
+        "message_count": len(memory.messages),
+        "focus_documents": memory.focus_documents,
+        "last_user_request": memory.last_user_request,
+        "last_route": memory.last_route,
+        "context_block": memory.context_block(),
+    }
+
+
+class RememberRequest(BaseModel):
+    content: str
+    session_id: str | None = None
+
+
+@router.get("/memory/facts")
+def list_facts(limit: int = Query(100, ge=1, le=500)) -> dict:
+    """Durable facts about the user, across all conversations.
+
+    Every one is listed and deletable. A memory system that silently
+    decides what to remember about a person is one they cannot correct.
+    """
+    from backend.memory.long_term import get_long_term
+
+    facts = get_long_term().all_facts(limit)
+    return {
+        "facts": [
+            {
+                "fact_id": f.fact_id,
+                "kind": f.kind,
+                "content": f.content,
+                "source_session": f.source_session,
+                "created_at": f.created_at,
+                "use_count": f.use_count,
+            }
+            for f in facts
+        ],
+        "count": len(facts),
+    }
+
+
+@router.post("/memory/facts")
+def remember_fact(body: RememberRequest) -> dict:
+    """Store a durable preference or identity fact.
+
+    Returns stored=false when the statement does not qualify -- most
+    messages do not, and that is the normal case rather than an error.
+
+    Document FINDINGS are rejected here by design: storing "the average
+    MFI is 3.4" would create a second source of truth that is never
+    cited and never expires, so the first corpus revision leaves the
+    system answering confidently from a stale number.
+    """
+    from backend.memory.long_term import get_long_term
+
+    fact = get_long_term().remember(body.content, source_session=body.session_id)
+    if fact is None:
+        return {
+            "stored": False,
+            "reason": (
+                "Not a durable preference or identity statement, or it looks "
+                "like a finding from a document. Findings come from retrieval "
+                "with a citation, every time."
+            ),
+        }
+    return {"stored": True, "fact_id": fact.fact_id, "kind": fact.kind}
+
+
+@router.delete("/memory/facts/{fact_id}")
+def forget_fact(fact_id: str) -> dict:
+    from backend.memory.long_term import get_long_term
+
+    return {"deleted": get_long_term().forget(fact_id)}
+
+
 # ------------------------------------------------------ agentic stream
 
 class AgentStreamRequest(BaseModel):
     message: str
     session_id: str = "default"
+    # Documents currently enabled in the Sources panel. None means "no
+    # filter" (search everything); an EMPTY LIST means the user switched
+    # everything off, which is a different instruction and is honoured
+    # as one.
+    active_documents: list[str] | None = None
 
 
 @router.post("/chat/stream")
@@ -1963,7 +2227,11 @@ def chat_stream(body: AgentStreamRequest):
             # run_turn, not run_agent_loop: the backend decides which
             # path answers this and emits the same protocol either way,
             # so the UI never has to choose. See path_router.py.
-            for event in run_turn(body.message, session_id=body.session_id):
+            for event in run_turn(
+                body.message,
+                session_id=body.session_id,
+                active_documents=body.active_documents,
+            ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:  # noqa: BLE001
             # A crash mid-stream must reach the client as an event. A
@@ -1986,6 +2254,108 @@ def chat_stream(body: AgentStreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class AddModelRequest(BaseModel):
+    id: str
+    model: str
+    backend: str = "ollama"
+    task_tags: list[str] = []
+
+
+@router.post("/models")
+def add_model(body: AddModelRequest) -> dict:
+    """Append a model to models.yaml and reload the registry (FR-4).
+
+    WHY THIS EXISTS. Only GET was implemented, so the settings page's
+    Add Model form posted into a 405 and showed a success toast anyway.
+    FR-4 -- adding a model without a code change -- is a scripted
+    on-stage moment, and it had no backend at all.
+
+    VALIDATED AGAINST OLLAMA BEFORE IT IS WRITTEN. Two tags in this
+    repo's own registry never existed (`qwen2-vl:7b`, `phi-3.5-mini`)
+    and both were discovered only when something tried to use them --
+    one of them had been silently 404ing the router and the verifier for
+    weeks. A registry that accepts a name nobody checked is how that
+    happens, so a tag Ollama does not have is refused here with the pull
+    command rather than written and discovered later.
+
+    The registry is reloaded in-process afterwards, so the new model is
+    usable immediately. That is the whole point of the demo.
+    """
+    import yaml
+
+    from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+    model_id = body.id.strip()
+    tag = body.model.strip()
+    if not model_id or not tag:
+        raise HTTPException(400, detail="Both 'id' and 'model' are required.")
+
+    registry_path = Path(_DEFAULT_REGISTRY_PATH)
+    try:
+        existing = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"Could not read models.yaml: {exc}") from exc
+
+    if model_id in existing:
+        raise HTTPException(
+            409, detail=f"Registry id {model_id!r} already exists."
+        )
+
+    # Refuse a tag Ollama does not have.
+    try:
+        import requests
+
+        res = requests.get("http://localhost:11434/api/tags", timeout=5)
+        res.raise_for_status()
+        pulled = {m["name"] for m in res.json().get("models", [])}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            503,
+            detail=(
+                f"Cannot reach Ollama to verify {tag!r}: {exc}. Refusing to "
+                f"write an unverified model name into the registry."
+            ),
+        ) from exc
+
+    if tag not in pulled and f"{tag}:latest" not in pulled:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Ollama does not have {tag!r}. Pull it first:\n"
+                f"    ollama pull {tag}\n"
+                f"Two tags in this registry never existed and were found only "
+                f"when something tried to use them; names are verified here "
+                f"rather than trusted."
+            ),
+        )
+
+    raw = registry_path.read_text(encoding="utf-8")
+    entry = (
+        f"\n- id: {model_id}\n"
+        f"  backend: {body.backend}\n"
+        f"  model: {tag}\n"
+        f"  task_tags: [{', '.join(body.task_tags)}]\n"
+    )
+    registry_path.write_text(raw.rstrip() + "\n" + entry, encoding="utf-8")
+
+    try:
+        reloaded = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        # Put the file back rather than leaving the registry unloadable.
+        registry_path.write_text(raw, encoding="utf-8")
+        raise HTTPException(
+            500,
+            detail=f"Entry was invalid and has been rolled back: {exc}",
+        ) from exc
+
+    return {
+        "added": model_id,
+        "model": tag,
+        "registry_size": len(reloaded),
+        "message": f"{model_id} added and the registry reloaded. Usable now.",
+    }
 
 
 # --------------------------------------------------------- verification

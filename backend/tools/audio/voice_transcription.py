@@ -56,6 +56,47 @@ class TranscriptionResult(BaseModel):
     language: str
 
 
+def _whisper_device() -> tuple[str, str]:
+    """(device, compute_type) for faster-whisper.
+
+    This was hardcoded to ("cpu", "int8"). ctranslate2 -- faster-whisper's
+    runtime -- reports a CUDA device on this machine
+    (get_cuda_device_count() == 1), so the transcription was running on
+    the processor for no reason, contributing to the sustained CPU
+    saturation that made the desktop unresponsive.
+
+    COMPUTE TYPE CHANGES WITH THE DEVICE, and not arbitrarily. int8 is
+    the right quantisation for CPU inference, where integer arithmetic
+    is what the hardware is fast at. On an NVIDIA GPU float16 maps onto
+    the tensor cores and is both faster and more accurate than int8, so
+    carrying the CPU choice over to CUDA would take the GPU and then
+    run it in its worst mode.
+
+    Falls back to CPU rather than raising. A venue machine may have no
+    NVIDIA GPU, and slow transcription is better than a tool that cannot
+    load. Note the fallback is also what happens when ctranslate2 was
+    built without CUDA support, which is a different failure from having
+    no GPU and is why availability is asked of ctranslate2 itself rather
+    than inferred from torch.
+
+    Override with WORKBENCH_WHISPER_DEVICE.
+    """
+    import os
+
+    override = os.environ.get("WORKBENCH_WHISPER_DEVICE")
+    if override:
+        return override, ("float16" if override.startswith("cuda") else "int8")
+
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "float16"
+    except Exception:  # noqa: BLE001
+        pass
+    return "cpu", "int8"
+
+
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:
@@ -68,7 +109,8 @@ def _get_model() -> WhisperModel:
         # directory path never reaches that branch at all, so there is
         # no download_root/local_files_only flag to trust here — the
         # network-reaching code simply isn't in the call path.
-        _model = WhisperModel(str(cache_dir), device="cpu", compute_type="int8")
+        device, compute_type = _whisper_device()
+        _model = WhisperModel(str(cache_dir), device=device, compute_type=compute_type)
     return _model
 
 

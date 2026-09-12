@@ -52,7 +52,15 @@ from backend.tools.registry import tool
         "This is the primary way to find anything about MRPL's equipment, "
         "procedures, specifications, incidents, batches or lab results. "
         "Use it before answering any question about plant documentation. "
-        "Returns the matching passages with their source document and page."
+        "Returns the matching passages with their source document and page.\n"
+        "WRITE THE QUERY IN PLAIN LANGUAGE, exactly as you would say it. "
+        "This is a meaning-based search, NOT a boolean one: do not use AND, "
+        "OR, NOT or quotation marks. They are treated as ordinary words and "
+        "make the results worse. Write "
+        "'batches produced for Homopolymer H030SG', not "
+        "\"Homopolymer H030SG AND 'batches'\".\n"
+        "One broad search usually returns everything you need, including "
+        "neighbouring passages. Do not run several near-identical searches."
     ),
 )
 def search_documents(query: str, top_k: int = 5) -> dict:

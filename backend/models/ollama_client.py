@@ -158,8 +158,28 @@ DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 SHORT_PROMPT_NUM_CTX = int(os.environ.get("WORKBENCH_SHORT_CTX", "3072"))
 
 
+# Deterministic by default.
+#
+# Ollama defaults to temperature 0.8. Measured: the SAME question
+# ("compare batches for H030SG vs H110F and total them") ran twice
+# through the agent loop and produced 2 tool calls / 25.9s / the correct
+# answer 38, then 6 tool calls / 42.5s / an answer about a completely
+# different quantity. Sampling variance in tool SELECTION compounds --
+# a different first choice becomes the context for every choice after
+# it, so small randomness at the top becomes a different conversation.
+#
+# For a workbench whose claim is that answers are traceable, the same
+# question giving materially different work is its own problem,
+# separate from whether either answer was right.
+DEFAULT_TEMPERATURE = float(os.environ.get("WORKBENCH_TEMPERATURE", "0"))
+
+
 def default_options() -> dict:
-    return {"num_gpu": DEFAULT_NUM_GPU, "num_ctx": GENERATION_NUM_CTX}
+    return {
+        "num_gpu": DEFAULT_NUM_GPU,
+        "num_ctx": GENERATION_NUM_CTX,
+        "temperature": DEFAULT_TEMPERATURE,
+    }
 
 
 def short_prompt_options() -> dict:

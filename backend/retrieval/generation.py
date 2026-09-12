@@ -268,12 +268,25 @@ _ANSWER_DEPTH = (
 )
 
 
-def _build_prompt(sources_text: str, user_request: str) -> str:
+def _build_prompt(
+    sources_text: str, user_request: str, conversation_context: str = ""
+) -> str:
+    """Assemble the prompt.
+
+    `conversation_context` sits AFTER the sources and BEFORE the
+    request, and arrives already labelled as context-not-a-source (see
+    memory/working.py). Order matters: putting prior turns before the
+    sources invites the model to treat them as the primary material,
+    and prior answers contain numbers. A remembered number rendered as
+    an answer is an uncited fact, which is the one output this product
+    must never produce.
+    """
     return (
         f"{_GROUNDING_INSTRUCTIONS}{sources_text}"
         f"{_CITATION_FORM}"
         f"{_ANSWER_DEPTH}"
         f"{_FORMATTING_GUIDANCE}"
+        f"{conversation_context}"
         f"\nREQUEST:\n{user_request}"
     )
 
@@ -286,7 +299,14 @@ def _call_reasoning_model(prompt: str, model_name: str) -> str:
 
 
 def generate_grounded_answer(
-    store: VectorStore, user_request: str, top_k: int = 5, model_id: str = "reasoning-model"
+    store: VectorStore,
+    user_request: str,
+    top_k: int = 5,
+    model_id: str = "reasoning-model",
+    *,
+    search_query: str | None = None,
+    conversation_context: str = "",
+    active_documents: list[str] | None = None,
 ) -> GeneratedAnswer:
     """Answer `user_request`, grounded only in what `store` actually contains.
 
@@ -302,6 +322,8 @@ def generate_grounded_answer(
     T.section("RETRIEVAL")
     T.kv("request", repr(user_request))
     T.kv("top_k", top_k)
+    if active_documents is not None:
+        T.kv("active sources", f"{len(active_documents)} enabled (filter ON)")
     try:
         from backend.retrieval.query_builder import explain as _explain_query
 
@@ -313,14 +335,40 @@ def generate_grounded_answer(
             T.kv("search query", T.DIM("unchanged"))
     except Exception:  # noqa: BLE001 - tracing must never break the turn
         pass
+    # RETRIEVE ON THE RESOLVED QUERY, ANSWER THE ORIGINAL ONE.
+    #
+    # A follow-up ("give all columns") cannot be retrieved on its own --
+    # measured, it returned a P&ID schematic at rank 1 while the user
+    # meant the maintenance log table from two turns earlier. The
+    # resolver expands it using the session's focus documents; the
+    # REQUEST shown to the model stays verbatim so the answer addresses
+    # what was actually typed.
+    effective_query = search_query or user_request
+    if effective_query != user_request:
+        T.kv("resolved query", repr(effective_query))
+
     with T.stage("hybrid search + grounding check"):
-        grounding = retrieve_with_grounding_check(store, user_request, top_k)
+        grounding = retrieve_with_grounding_check(
+            store, effective_query, top_k, active_documents=active_documents
+        )
 
     try:
         from backend.ingestion.embeddings import active_backend
         from backend.retrieval.grounded_retrieval import confidence_threshold
 
         T.kv("embedding backend", active_backend())
+
+        # Loud on EVERY degraded turn, not once at startup. An operator
+        # starts the server and walks away; a single warning in the
+        # scrollback is a warning nobody sees. This ran for an entire
+        # session on hash vectors -- correctly shaped, semantically
+        # meaningless -- and the only evidence was one trace line among
+        # hundreds reading "deterministic-hash".
+        from backend.ingestion.embeddings import degraded_reason
+
+        _degraded = degraded_reason()
+        if _degraded:
+            T.error("EMBEDDINGS DEGRADED: " + _degraded)
         T.kv("confidence threshold", f"{confidence_threshold():.3f}")
     except Exception:  # noqa: BLE001 — tracing must never break the turn
         pass
@@ -348,7 +396,7 @@ def generate_grounded_answer(
 
     model_name = resolve_model_name(model_id)
     sources_text = _format_sources(grounding.chunks)
-    prompt = _build_prompt(sources_text, user_request)
+    prompt = _build_prompt(sources_text, user_request, conversation_context)
 
     T.section("GENERATION")
     T.kv("model id -> tag", f"{model_id} -> {model_name}")

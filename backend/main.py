@@ -36,6 +36,45 @@ logger = logging.getLogger("backend.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # IS THE EMBEDDING MODEL ACTUALLY HERE?
+    #
+    # models/embeddings/ is gitignored (1.3 GB), so a teammate who
+    # clones or pulls has the code and NOT the model. require_cached
+    # then raises, embeddings fall back to hash vectors, and everything
+    # keeps working -- badly, and silently.
+    #
+    # This happened on a teammate's machine and produced a completely
+    # wrong answer that looked entirely normal: asked for one person's
+    # assignments, retrieval returned two other people's files and the
+    # answer described a third. Right-shaped vectors, results for every
+    # search, citations on every answer. The only evidence was one trace
+    # line reading "embedding backend: deterministic-hash".
+    #
+    # Checked at startup and stated in the terms that matter -- what is
+    # broken, what it costs, and the one command that fixes it.
+    try:
+        from backend.ingestion.model_cache import local_cache_dir
+
+        _emb = local_cache_dir("embeddings", "BAAI/bge-large-en-v1.5")
+        if not _emb.exists() or not any(_emb.iterdir()):
+            logger.error(
+                "\n"
+                "  =============================================================\n"
+                "  EMBEDDING MODEL IS MISSING. RETRIEVAL WILL BE MEANINGLESS.\n"
+                "\n"
+                "  models/embeddings/ is gitignored (1.3 GB), so it does not\n"
+                "  arrive with a git pull. Without it the system falls back to\n"
+                "  hash vectors, which carry NO semantic meaning: searches\n"
+                "  return results, answers carry citations, and the content is\n"
+                "  wrong.\n"
+                "\n"
+                "  Fetch it once (needs internet, then never again):\n"
+                "      py -3 -m backend.ingestion.fetch_models\n"
+                "  =============================================================\n"
+            )
+    except Exception:  # noqa: BLE001 - a check that breaks startup is worse
+        pass
+
     try:
         from backend.sandbox import pool
         pool.start()

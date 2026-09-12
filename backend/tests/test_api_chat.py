@@ -1,3 +1,4 @@
+import json
 """Tests for FastAPI chat, health, and network endpoints (FRONTEND.md §2-§4).
 
 Verifies:
@@ -92,9 +93,41 @@ def test_api_chat_critical_action_approval():
     assert data["approval_action"] is not None
 
     action = data["approval_action"]
-    assert action["action_type"] == "DCS_SETPOINT_WRITE"
-    assert action["risk_level"] == "CRITICAL"
-    assert "FFC-201" in action["target"]
+
+    # THIS TEST USED TO PIN THE FABRICATION IN PLACE.
+    #
+    # It asserted action_type == "DCS_SETPOINT_WRITE", risk_level ==
+    # "CRITICAL", and "FFC-201" in target. All three were hardcoded
+    # literals in the route, invented rather than derived from the
+    # request -- the same three appeared for EVERY gated action,
+    # including a request to write a Word document.
+    #
+    # So the suite guaranteed the bug: any honest fix failed these
+    # assertions. That is the same trap as the planner test that
+    # asserted a tangled plan must RAISE when the cycle-breaker repairs
+    # it, and the gate test that pinned the literal string "Safety
+    # Interlock Gate". A test can hold a defect in place as firmly as
+    # it can catch one.
+    #
+    # What is actually true: this request IS a setpoint change, so the
+    # category must be recognised -- but the system has NOT resolved
+    # which device, which tag, or what the current value is, and must
+    # not claim to have.
+    assert action["action_type"] == "SETPOINT_WRITE"
+    assert "setpoint" in action["title"].lower()
+    assert "Increase feed rate to 115%" in action["detail"]
+
+    # Unresolved must read as unresolved.
+    assert action["target"] is None
+    assert action["resolved_parameters"] is False
+    assert action["risk_level"] == "REQUIRES_REVIEW"
+
+    # And none of the invented specifics may return.
+    blob = json.dumps(action)
+    for invented in ("FFC-201", "1,450", "1,667", "LHSV", "QFC-18"):
+        assert invented not in blob, (
+            f"fabricated value {invented!r} is back in the approval payload"
+        )
 
     # Test resolving the approval
     resolve_payload = {
@@ -139,3 +172,62 @@ def test_multi_step_request_still_gets_a_multi_step_plan():
 
     # And the shape that SHOULD bypass it.
     assert is_simple_lookup("What is the average MFI for Homopolymer H030SG?")
+
+
+def test_the_approval_modal_describes_the_action_that_was_requested():
+    """The payload used to describe a DIFFERENT action entirely.
+
+    Every field except the id and description was a hardcoded literal
+    about a feed-rate change. Asked to "Draft a DOCX report on the
+    Hassan incident and save it", the modal rendered:
+
+        DCS_SETPOINT_WRITE
+        "Confirm Operational Setpoint Modification"
+        Target: HCU-2 / FFC-201
+        CURRENT 100% (1,450 m3/h) -> PROPOSED 115% (1,667 m3/h)
+        "+15.0% Excursion"
+        "Operating above 110% reduces catalyst residence time..."
+
+    for a request to write a Word document.
+
+    This is the worst possible place for invented content. It is the one
+    screen where a human signs off, so approval recorded against
+    fabricated figures produces a signed audit entry for something
+    nobody approved -- worse than no gate at all, because the gate is
+    what makes the record trustworthy.
+    """
+    response = client.post(
+        "/api/chat",
+        json={
+            "message": "Draft a DOCX report on the Hassan incident and save it",
+            "session_id": "test-approval-shape",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["awaiting_human_approval"] is True
+    action = data["approval_action"]
+    assert action, "a gated request must carry an approval_action"
+
+    # It is a FILE WRITE, and must not be labelled as a setpoint change.
+    assert action["action_type"] == "FILE_WRITE"
+    assert "setpoint" not in (action["title"] or "").lower()
+
+    # The operator's own words, not a paraphrase or a substitute.
+    assert "DOCX report" in action["detail"]
+
+    # None of the fabricated specifics, anywhere in the payload.
+    blob = json.dumps(action)
+    for invented in (
+        "1,450", "1,667", "FFC-201", "HCU-2", "LHSV", "QFC-18",
+        "Excursion", "exothermic",
+    ):
+        assert invented not in blob, (
+            f"fabricated value {invented!r} is back in the approval payload"
+        )
+
+    # Unknown must read as unknown. A plausible placeholder reads as
+    # measured, which is how the original bug survived being looked at.
+    assert action["target"] is None
+    assert action["resolved_parameters"] is False

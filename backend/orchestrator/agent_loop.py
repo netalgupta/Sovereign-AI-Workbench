@@ -61,6 +61,7 @@ politeness.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -186,6 +187,69 @@ def _tools_for_chat() -> list[dict]:
     return [by_name[name] for name in CHAT_TOOLS if name in by_name]
 
 
+# Arithmetic stated WITH ITS RESULT: "22 + 16 = 38", "22+16 is 38".
+# Requires the operands AND the answer, so a number quoted from a
+# document ("22 batches") is not matched -- only a claim that a
+# calculation was performed.
+_STATED_ARITHMETIC = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:[-+*/x×]|plus|minus|times|divided by)\s*"
+    r"\d+(?:\.\d+)?(?:\s*(?:[-+*/x×]|plus|minus|times|divided by)\s*\d+(?:\.\d+)?)*"
+    r"\s*(?:=|is|equals|gives|totals?|comes to)\s*\d+(?:\.\d+)?",
+    re.I,
+)
+
+# Tools whose output is a computed number.
+_COMPUTATION_TOOLS = frozenset({
+    "evaluate_expression",
+    "evaluate_unit_expression",
+    "analyse_trend",
+    "project_to_threshold",
+    "describe_series",
+    "lookup_thermophysical_property",
+})
+
+
+def _unverified_arithmetic(reply: str, tools_used: set[str]) -> list[str]:
+    """Arithmetic the model stated without any tool having computed it.
+
+    CLAUDE.md hard constraint #3: no numeric result may come from an LLM
+    without an executed tool call. The registry, the dispatcher and the
+    tool set all enforce that a tool CAN be called. None of them enforce
+    that the model actually called one before writing a sum down.
+
+    Measured on the same question across three runs: two correctly
+    called evaluate_expression("22 + 16"); one wrote
+    "22 + 16 = 38" inline with no computation tool in the turn at all.
+    It was right. The constraint exists because the next one might not
+    be, and an inline sum carries no tool-call receipt for anyone to
+    check.
+
+    This does not block the answer -- the arithmetic may be quoted from
+    a source, and refusing on a regex would be worse than the problem.
+    It surfaces the claim so a reader knows which numbers were computed
+    and which were asserted.
+    """
+    if not reply or tools_used & _COMPUTATION_TOOLS:
+        return []
+    return [m.group(0).strip() for m in _STATED_ARITHMETIC.finditer(reply)]
+
+
+def _normalise_query(arguments: dict) -> str:
+    """A search's identity, for spotting repeats.
+
+    Lowercased, stripped of the boolean noise the model adds, and
+    word-sorted -- so "H030SG AND 'batches'" and "batches for H030SG"
+    are recognised as the same search, because against a semantic
+    retriever they ARE the same search.
+    """
+    import re as _re
+
+    raw = " ".join(str(v) for v in arguments.values() if isinstance(v, (str, int)))
+    raw = _re.sub(r"[\"\'()]", " ", raw.lower())
+    raw = _re.sub(r"\b(and|or|not)\b", " ", raw)
+    return " ".join(sorted(w for w in _re.split(r"\W+", raw) if len(w) > 2))
+
+
 def _requires_approval(name: str) -> bool:
     from backend.tools import catalog  # noqa: F401
     from backend.tools.registry import _REGISTRY
@@ -251,6 +315,7 @@ def run_agent_loop(
     session_id: str = "default",
     model_id: str = "reasoning-model",
     max_iterations: int = MAX_ITERATIONS,
+    active_documents: list[str] | None = None,
 ) -> Iterator[dict]:
     """Work on `request`, yielding events as it goes.
 
@@ -291,6 +356,20 @@ def run_agent_loop(
 
     full_text: list[str] = []
     tool_call_count = 0
+
+    # Searches already run this turn. Observed: asked one question, the
+    # model ran search_documents SIX times with near-identical boolean
+    # queries, got materially the same documents each time, and drifted
+    # off the question entirely -- 42.5s and a wrong answer, where the
+    # same question answered correctly in 25.9s with two calls on
+    # another run.
+    #
+    # Silently returning the same passages again is what sustains that:
+    # to the model, an unhelpful result means "search differently", so
+    # it searches differently, gets the same thing, and repeats. Telling
+    # it plainly that it already has these results breaks the loop.
+    seen_searches: dict[str, int] = {}
+    tools_used: set[str] = set()
 
     for iteration in range(1, max_iterations + 1):
         assistant_text: list[str] = []
@@ -345,6 +424,7 @@ def run_agent_loop(
             call_id = call.get("id") or f"call-{iteration}-{tool_call_count}"
             tool_call_count += 1
 
+            tools_used.add(name)
             T.note(f"    tool: {name}({json.dumps(arguments)[:70]})")
             yield {
                 "type": "tool_call",
@@ -387,6 +467,41 @@ def run_agent_loop(
                 return
 
             call_started = time.perf_counter()
+
+            signature = f"{name}:{_normalise_query(arguments)}"
+            repeat_count = seen_searches.get(signature, 0)
+            seen_searches[signature] = repeat_count + 1
+
+            if repeat_count >= 1:
+                # Answer with the fact of the repeat rather than the same
+                # passages again. The model needs to know its retry
+                # changed nothing, which the passages alone do not say.
+                T.warn(f"repeated search ({repeat_count + 1}x): {name}")
+                output = {
+                    "repeated_search": True,
+                    "message": (
+                        "You have already run this search and received the "
+                        "results above. Rewording it returns the same "
+                        "passages, because this is a meaning-based search "
+                        "and the rewording means the same thing. Answer "
+                        "from what you already have, or say what is "
+                        "missing from it."
+                    ),
+                }
+                status = "done"
+                yield {
+                    "type": "tool_result",
+                    "id": call_id,
+                    "name": name,
+                    "output": output,
+                    "status": status,
+                    "seconds": 0.0,
+                }
+                messages.append(
+                    {"role": "tool", "content": json.dumps(output), "name": name}
+                )
+                continue
+
             try:
                 from backend.tools.registry import call_tool
 
@@ -431,6 +546,28 @@ def run_agent_loop(
         }
 
     reply = "".join(full_text).strip()
+
+    # HARD CONSTRAINT #3, checked on the way out.
+    unverified = _unverified_arithmetic(reply, tools_used)
+    if unverified:
+        T.warn(
+            "arithmetic stated without a computation tool: "
+            + "; ".join(unverified[:3])
+        )
+        reply += (
+            "\n\n> **Note:** the arithmetic above was written by the model "
+            "rather than computed by a tool. Values quoted from documents are "
+            "still cited; the calculation itself is unverified."
+        )
+        yield {
+            "type": "unverified_arithmetic",
+            "expressions": unverified,
+            "message": (
+                "The answer states a calculation that no computation tool "
+                "performed."
+            ),
+        }
+
     T.kv("tool calls", tool_call_count)
     T.kv("elapsed", f"{time.perf_counter() - started:.2f}s")
 
@@ -475,6 +612,7 @@ def run_turn(
     request: str,
     session_id: str = "default",
     model_id: str = "reasoning-model",
+    active_documents: list[str] | None = None,
 ) -> Iterator[dict]:
     """Answer `request` by whichever path suits it, as one event stream.
 
@@ -554,6 +692,17 @@ def run_turn(
         )
 
         yield {
+            "type": "plan",
+            "steps": [{
+                "step_id": "interlock_gate",
+                "description": f"Safety Interlock Gate: Authorize {action_kind}",
+                "assigned_agent": "reasoning",
+                "status": "pending",
+                "depends_on": [],
+            }],
+            "path": "approval",
+        }
+        yield {
             "type": "approval_required",
             "id": app_req.request_id,
             "name": "DCS_SETPOINT_WRITE",
@@ -573,19 +722,101 @@ def run_turn(
         }
         return
 
+    # THE PLAN, EMITTED BEFORE ANY WORK STARTS.
+    #
+    # The Plan Graph rendered empty on every live turn: this endpoint
+    # runs a tool-calling loop and never called the planner, so no plan
+    # event was ever sent. POST /api/plan existed and nothing invoked
+    # it.
+    #
+    # The plan is built from the same planner the non-streaming path
+    # uses, so the two cannot show different plans for the same request.
+    # A failure here degrades to a single-step plan rather than breaking
+    # the turn -- the plan is a description of the work, not a
+    # prerequisite for it.
+    yield from _emit_plan(request, decision)
+
     if decision.path == "agentic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
-        for event in run_agent_loop(request, session_id=session_id, model_id=model_id):
+        for event in run_agent_loop(
+            request,
+            session_id=session_id,
+            model_id=model_id,
+            active_documents=active_documents,
+        ):
             if event.get("type") == "start":
                 continue
             yield event
         return
 
-    yield from _run_direct(request, decision)
+    yield from _run_direct(request, decision, active_documents=active_documents)
 
 
-def _run_direct(request: str, decision) -> Iterator[dict]:
+def _emit_plan(request: str, decision) -> Iterator[dict]:
+    """The step DAG for this turn, as a `plan` event.
+
+    Shape matches /api/chat's `plan` field exactly, so the Plan Graph
+    renders one thing regardless of which endpoint produced it.
+    """
+    from backend.observability import turn_log as T
+    from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    steps = []
+    try:
+        if decision.path == "corpus":
+            steps = [{
+                "step_id": "inventory",
+                "description": "Read the source index",
+                "assigned_agent": "retrieval",
+                "status": "pending",
+                "depends_on": [],
+            }]
+        elif is_simple_lookup(request):
+            steps = [
+                {
+                    "step_id": s.step_id,
+                    "description": s.description,
+                    "assigned_agent": s.assigned_agent,
+                    "status": "pending",
+                    "depends_on": list(s.depends_on),
+                }
+                for s in simple_plan(request)
+            ]
+        else:
+            from backend.orchestrator.planner import plan_request
+            from backend.orchestrator.state import AgentState
+
+            planned = plan_request(AgentState(session_id="plan", original_request=request))
+            steps = [
+                {
+                    "step_id": s.step_id,
+                    "description": s.description,
+                    "assigned_agent": s.assigned_agent,
+                    "status": "pending",
+                    "depends_on": list(s.depends_on),
+                }
+                for s in planned.plan
+            ]
+    except Exception as exc:  # noqa: BLE001
+        # A plan is a description of the work, not a prerequisite for
+        # it. Degrade to one honest step rather than failing the turn.
+        T.warn(f"planner unavailable ({type(exc).__name__}); single-step plan")
+        steps = [{
+            "step_id": "answer",
+            "description": f"Answer: {request[:110]}",
+            "assigned_agent": "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+
+    T.kv("plan steps", len(steps))
+    yield {"type": "plan", "steps": steps, "path": decision.path}
+
+
+def _run_direct(
+    request: str, decision, active_documents: list[str] | None = None
+) -> Iterator[dict]:
     """The grounded path, emitted as stream events.
 
     Adapted rather than duplicated: the answer still comes from
@@ -624,7 +855,9 @@ def _run_direct(request: str, decision) -> Iterator[dict]:
 
     try:
         store, _ = get_state().ensure_corpus()
-        answer = generate_grounded_answer(store, request)
+        answer = generate_grounded_answer(
+            store, request, active_documents=active_documents
+        )
     except Exception as exc:  # noqa: BLE001
         yield {
             "type": "error",

@@ -65,3 +65,5 @@ frontend/standalone/workbench_console.html
 # testing), which pointed every default at a directory that does not
 # exist here. Machine-local state, like document_registry/ and audit/.
 backend/evaluation/configured_sources.json
+
+backend/memory/*.db
