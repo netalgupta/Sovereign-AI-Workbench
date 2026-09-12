@@ -234,11 +234,17 @@ export async function resolveApproval(requestId, confirmed = true, operator = 'o
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ request_id: requestId, confirmed, operator }),
     })
-    if (res.ok) return await res.json()
+    if (res.ok) {
+      const data = await res.json()
+      return { ok: true, status: data.status || (confirmed ? 'approved' : 'refused'), ...data }
+    }
+    const errData = await res.json().catch(() => ({}))
+    const errorMsg = errData.detail || errData.message || `Backend returned HTTP ${res.status}`
+    return { ok: false, status: 'error', error: errorMsg }
   } catch (err) {
     console.warn('[API] /api/approvals/resolve error:', err)
+    return { ok: false, status: 'error', error: err?.message || 'Network error reaching /api/approvals/resolve' }
   }
-  return { status: confirmed ? 'approved' : 'refused' }
 }
 
 /**
@@ -288,35 +294,99 @@ async function backendIsReachable() {
   }
 }
 
-export async function sendMessage(message, sessionId) {
-  // 1. Attempt live agent turn via backend orchestrator (/api/chat)
+/**
+ * Stream a chat turn from the backend via real SSE (POST /api/chat/stream).
+ * Interleaves narration tokens, tool call events, step updates, and approval gates.
+ *
+ * Falls back to labelled offline simulation only if the backend is genuinely unreachable.
+ */
+export async function sendMessageStream(message, sessionId, callbacks = {}) {
+  const {
+    onStart,
+    onRoute,
+    onToolCall,
+    onToolResult,
+    onTextDelta,
+    onApprovalRequired,
+    onDone,
+    onError,
+  } = callbacks
+
   let liveError = null
+  let receivedAnyEvent = false
+
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), LIVE_TURN_TIMEOUT_MS)
-    const res = await fetch('/api/chat', {
+
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, session_id: sessionId || 'default' }),
       signal: controller.signal,
     })
-    clearTimeout(timeout)
 
-    if (res.ok) {
-      const data = await res.json()
-      if (data && (data.reply || data.plan?.length > 0 || data.citations?.length > 0)) {
-        return {
-          reply: data.reply || 'Analysis complete.',
-          citations: data.citations || [],
-          plan: data.plan || [],
-          session_id: data.session_id || sessionId,
-          awaiting_human_approval: Boolean(data.awaiting_human_approval),
-          approval_action: data.approval_action || null,
-          tool_call_events: data.tool_call_events || [],
-          live: true,
+    if (res.ok && res.body) {
+      clearTimeout(timeout)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop() // keep unparsed remainder
+
+        for (const block of blocks) {
+          const lines = block.split('\n')
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const rawJson = line.slice(6).trim()
+              if (!rawJson) continue
+              try {
+                const event = JSON.parse(rawJson)
+                receivedAnyEvent = true
+
+                switch (event.type) {
+                  case 'start':
+                    onStart?.(event)
+                    break
+                  case 'route':
+                    onRoute?.(event)
+                    break
+                  case 'tool_call':
+                    onToolCall?.(event)
+                    break
+                  case 'tool_result':
+                    onToolResult?.(event)
+                    break
+                  case 'text_delta':
+                    onTextDelta?.(event.text || '')
+                    break
+                  case 'approval_required':
+                    onApprovalRequired?.(event)
+                    break
+                  case 'done':
+                    onDone?.(event)
+                    return { ok: true, ...event }
+                  case 'error':
+                    onError?.(event.message || 'Stream error occurred')
+                    return { ok: false, error: event.message }
+                  default:
+                    break
+                }
+              } catch (parseErr) {
+                console.warn('[SSE] JSON parse error:', parseErr, rawJson)
+              }
+            }
+          }
         }
       }
-      liveError = 'The backend returned an empty response.'
+
+      return { ok: true }
     } else {
       liveError = `The backend returned HTTP ${res.status}.`
     }
@@ -324,63 +394,165 @@ export async function sendMessage(message, sessionId) {
     liveError =
       err?.name === 'AbortError'
         ? `The agent turn exceeded ${LIVE_TURN_TIMEOUT_MS / 1000}s and was cancelled.`
-        : `Could not reach /api/chat: ${err?.message || err}`
-    console.warn('[API] Live /api/chat failed:', err)
+        : `Could not reach /api/chat/stream: ${err?.message || err}`
+    console.warn('[API] Live /api/chat/stream failed:', err)
   }
 
-  // 2. The backend is running and it failed. Say so.
-  //
-  // Falling through to the simulation here is what hid every real
-  // backend error behind a polished fake answer - including, for weeks,
-  // the fact that the live path was never reached at all.
+  // If stream dropped mid-turn after starting
+  if (receivedAnyEvent) {
+    const streamErr = `Stream connection interrupted: ${liveError}`
+    onError?.(streamErr)
+    return { ok: false, error: streamErr }
+  }
+
+  // 2. The backend is reachable and it failed. Report failure honestly without faking data.
   if (await backendIsReachable()) {
-    return {
-      reply:
-        `**The backend could not complete this turn.**\n\n` +
-        `${liveError}\n\n` +
-        `No simulated answer is being shown in its place: the backend is ` +
-        `running, so anything displayed here would be mistaken for its output. ` +
-        `Check the server log for the failing step.`,
-      citations: [],
-      plan: [],
-      session_id: sessionId,
-      awaiting_human_approval: false,
-      approval_action: null,
-      tool_call_events: [],
-      live: true,
-      error: true,
-    }
+    const failureMsg =
+      `**The backend could not complete this turn.**\n\n` +
+      `${liveError}\n\n` +
+      `No simulated answer is being shown in its place: the backend is running, ` +
+      `so anything displayed here would be mistaken for its output. ` +
+      `Check the server log for the failing step.`
+    onError?.(failureMsg)
+    return { ok: false, error: failureMsg }
   }
 
-  // 3. Backend genuinely absent - offline simulation, labelled as such.
+  // 3. Backend genuinely absent — offline simulation, explicitly labelled as such.
   await new Promise((r) => setTimeout(r, MOCK_LATENCY_MS))
 
   const isApprovalNeeded = isActionApprovalRequest(message)
 
   if (isApprovalNeeded) {
-    return {
-      reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_
+    const mockReply =
+      `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n` +
+      `**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_\n\n` +
+      `> 🛑 **Safety Interlock Gate [FR-15 / §3.12]:** Changing reactor feed rate from **100% (1,450 m³/h)** to **115% (1,667 m³/h)** exceeds the continuous design basis and requires manual human operator authorization before DCS controller FFC-201 can accept the parameter update.\n>\n` +
+      `> A human approval gate modal has been displayed. Composer input is locked until this action is confirmed or cancelled.`
 
-> 🛑 **Safety Interlock Gate [FR-15 / §3.12]:** Changing reactor feed rate from **100% (1,450 m³/h)** to **115% (1,667 m³/h)** exceeds the continuous design basis and requires manual human operator authorization before DCS controller FFC-201 can accept the parameter update.
->
-> A human approval gate modal has been displayed. Composer input is locked until this action is confirmed or cancelled.`,
+    onApprovalRequired?.({
+      id: MOCK_FEED_RATE_APPROVAL_ACTION.id,
+      name: 'DCS_SETPOINT_WRITE',
+      arguments: { feed_rate: 115 },
+      effect: MOCK_FEED_RATE_APPROVAL_ACTION.description,
+      action: MOCK_FEED_RATE_APPROVAL_ACTION,
+    })
+    onTextDelta?.(mockReply)
+    onDone?.({
+      reply: mockReply,
       citations: MOCK_CITATIONS.slice(0, 2),
       plan: MOCK_PLAN_STEPS,
-      session_id: sessionId,
-      awaiting_human_approval: true,
+      awaiting_approval: true,
       approval_action: MOCK_FEED_RATE_APPROVAL_ACTION,
-      live: false,
-    }
+      simulated: true,
+    })
+    return { ok: true, simulated: true }
   }
 
-  return {
-    reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n` + buildMockReply(message),
+  const mockReply =
+    `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n` +
+    buildMockReply(message)
+
+  onRoute?.({
+    type: 'route',
+    path: 'simulated',
+    reason: 'Backend offline. Showing local simulated demo response.',
+    tools_expected: false,
+  })
+  onToolCall?.({
+    type: 'tool_call',
+    id: 'mock-search-1',
+    name: 'search_documents',
+    arguments: { query: message },
+  })
+  onToolResult?.({
+    type: 'tool_result',
+    id: 'mock-search-1',
+    name: 'search_documents',
+    output: { found: true, count: 4, note: 'Simulated passages from test corpus' },
+    status: 'done',
+    seconds: 0.15,
+  })
+  onTextDelta?.(mockReply)
+  onDone?.({
+    reply: mockReply,
     citations: MOCK_CITATIONS,
     plan: MOCK_PLAN_STEPS,
+    awaiting_approval: false,
+    simulated: true,
+  })
+  return { ok: true, simulated: true }
+}
+
+/**
+ * Backwards-compatible single-shot wrapper around sendMessageStream.
+ */
+export async function sendMessage(message, sessionId) {
+  let reply = ''
+  let citations = []
+  let plan = []
+  let tool_call_events = []
+  let awaiting_human_approval = false
+  let approval_action = null
+  let isLive = true
+
+  const res = await sendMessageStream(message, sessionId, {
+    onRoute: () => {},
+    onToolCall: (call) => {
+      tool_call_events.push({
+        id: call.id,
+        tool_name: call.name,
+        input_params: call.arguments,
+        status: 'running',
+      })
+    },
+    onToolResult: (resEv) => {
+      const idx = tool_call_events.findIndex((e) => e.id === resEv.id)
+      if (idx >= 0) {
+        tool_call_events[idx] = {
+          ...tool_call_events[idx],
+          output: resEv.output,
+          status: resEv.status,
+          seconds: resEv.seconds,
+        }
+      }
+    },
+    onTextDelta: (delta) => {
+      reply += delta
+    },
+    onApprovalRequired: (appEv) => {
+      awaiting_human_approval = true
+      approval_action = appEv.action || {
+        id: appEv.id,
+        title: 'Confirm Critical Parameter Modification',
+        action_type: appEv.name || 'DCS_SETPOINT_WRITE',
+        description: appEv.effect || 'Critical parameter change intercepted',
+        arguments: appEv.arguments,
+      }
+    },
+    onDone: (doneEv) => {
+      if (doneEv.citations) citations = doneEv.citations
+      if (doneEv.plan) plan = doneEv.plan
+      if (doneEv.awaiting_approval !== undefined) awaiting_human_approval = doneEv.awaiting_approval
+      if (doneEv.approval_action) approval_action = doneEv.approval_action
+      if (doneEv.simulated) isLive = false
+    },
+    onError: (err) => {
+      reply = err
+    },
+  })
+
+  if (res?.simulated) isLive = false
+
+  return {
+    reply,
+    citations,
+    plan,
+    tool_call_events,
     session_id: sessionId,
-    awaiting_human_approval: false,
-    approval_action: null,
-    live: false,
+    awaiting_human_approval,
+    approval_action,
+    live: isLive,
+    error: !res?.ok,
   }
 }
 

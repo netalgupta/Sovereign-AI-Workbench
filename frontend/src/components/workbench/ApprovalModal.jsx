@@ -22,24 +22,26 @@ export function ApprovalModal({
 }) {
   const storeIsOpen = useChatStore((s) => s.isApprovalModalOpen)
   const storeAction = useChatStore((s) => s.pendingApprovalAction)
+  const storeApprovalError = useChatStore((s) => s.approvalError)
+  const isResolving = useChatStore((s) => s.isResolvingApproval)
   const resolveApproval = useChatStore((s) => s.resolveApproval)
 
   const isOpen = propIsOpen !== undefined ? propIsOpen : storeIsOpen
   const action = propAction || storeAction || MOCK_FEED_RATE_APPROVAL_ACTION
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     if (propOnClose) {
       propOnClose()
     } else {
-      resolveApproval(false)
+      await resolveApproval(false)
     }
   }
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (propOnConfirm) {
-      propOnConfirm()
+      await propOnConfirm()
     } else {
-      resolveApproval(true)
+      await resolveApproval(true)
     }
   }
 
@@ -228,13 +230,32 @@ export function ApprovalModal({
           </div>
         </div>
 
+        {/* Authorization Failure Banner if backend rejection or network error */}
+        {storeApprovalError && (
+          <div
+            id="approval-gate-error-banner"
+            className="w-full mt-3 p-3 rounded-xl flex items-center gap-2.5 text-left border animate-shake"
+            style={{
+              background: 'rgba(239, 68, 68, 0.12)',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              color: '#ef4444',
+            }}
+          >
+            <ShieldAlert size={16} className="flex-shrink-0" />
+            <span className="text-xs font-semibold leading-tight">
+              {storeApprovalError}
+            </span>
+          </div>
+        )}
+
         {/* Explicit Action Buttons ONLY — No click-outside or top-right X dismiss */}
         <div className="w-full mt-5 flex items-center gap-3">
           <button
             type="button"
             id="approval-gate-cancel-btn"
+            disabled={isResolving}
             onClick={handleCancel}
-            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)]"
+            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
             style={{
               background: 'var(--color-surface)',
               borderColor: 'var(--color-border-strong)',
@@ -246,14 +267,15 @@ export function ApprovalModal({
           <button
             type="button"
             id="approval-gate-confirm-btn"
+            disabled={isResolving}
             onClick={handleConfirm}
-            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5"
+            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5 disabled:opacity-60"
             style={{
               background: 'var(--color-accent)',
             }}
           >
             <Check size={14} strokeWidth={2.6} />
-            <span>Authorize &amp; Dispatch</span>
+            <span>{isResolving ? 'Authorizing…' : 'Authorize & Dispatch'}</span>
           </button>
         </div>
       </div>

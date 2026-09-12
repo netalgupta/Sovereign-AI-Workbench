@@ -303,6 +303,26 @@ body {
 }
 
 /* ── Breathing pulse dot animation for live thinking ────────────────────── */
+@keyframes status-breathe {
+  0%, 100% {
+    opacity: 0.38;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
 @keyframes breathing-dot {
   0%, 100% {
     transform: scale(1);

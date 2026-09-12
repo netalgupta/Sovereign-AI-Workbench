@@ -25,7 +25,7 @@ import {
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
-import { sendMessage } from '../../lib/api'
+import { sendMessageStream } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
@@ -49,6 +49,8 @@ import { CalcTraceCard } from '../../integrations/calc-trace'
 export function ChatPane() {
   const messages = useChatStore((s) => s.messages)
   const addMessage = useChatStore((s) => s.addMessage)
+  const updateMessage = useChatStore((s) => s.updateMessage)
+  const addToolCallEvent = useChatStore((s) => s.addToolCallEvent)
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
   const finishStreaming = useChatStore((s) => s.finishStreaming)
   const sessionId = useChatStore((s) => s.sessionId)
@@ -152,10 +154,7 @@ export function ChatPane() {
     // set. A test that could switch it on without a request was only
     // ever testing the animation.
     window.__workbenchSetThinkingExpanded = (expanded) => setIsMidResponseExpanded(expanded)
-    window.__workbenchSetCompletedPhrases = (p1, p2) => {
-      if (p1) setPhraseMsg1(p1)
-      if (p2) setPhraseMsg2(p2)
-    }
+    window.__workbenchSetCompletedPhrases = () => {}
     window.__workbenchTriggerApproval = (action) => useChatStore.getState().setAwaitingApproval(true, action)
     window.__workbenchResolveApproval = (confirmed) => useChatStore.getState().resolveApproval(confirmed)
     return () => {
@@ -217,34 +216,103 @@ export function ChatPane() {
     setDraft('')
     addMessage('user', text)
     setIsPending(true)
+
+    // Add the assistant message immediately with streaming=true so MessageBubble
+    // starts typewriter draining as real SSE chunks arrive, and TurnTrace shows
+    // in-flight agent activity live as it happens.
+    const startTime = Date.now()
+    const msgId = addMessage('assistant', '', {
+      streaming: true,
+      citations: [],
+      toolCallEvents: [],
+      userRequest: text,
+      plan: [],
+      verification: null,
+      route: null,
+      elapsedSeconds: 0,
+    })
+
     try {
-      const res = await sendMessage(text, sessionId)
-      if (res.plan) {
-        setPlan(res.plan)
-      }
-      if (res.awaiting_human_approval) {
-        setAwaitingApproval(true, res.approval_action)
-      }
-      // Add the assistant message with streaming=true so MessageBubble
-      // starts the typewriter reveal. appendStreamChunk pushes the full
-      // text into the queue (mock: one chunk; real SSE: called per chunk).
-      // Carry the REAL execution trace onto the message so the
-      // thinking-block UI has something true to render. These components
-      // are genuinely useful -- the problem was never the rendering, it
-      // was that they were fed literals baked into the JSX.
-      const msgId = addMessage('assistant', '', {
-        streaming: true,
-        citations: res.citations || [],
-        toolCallEvents: res.tool_call_events || [],
-        // Carried so the Verify button can re-ask the same question;
-        // /api/verify re-retrieves the sources itself rather than
-        // trusting a client-supplied copy.
-        userRequest: text,
-        plan: res.plan || [],
-        verification: res.verification || null,
-        elapsedSeconds: liveElapsed,
+      await sendMessageStream(text, sessionId, {
+        onRoute: (routeEv) => {
+          updateMessage(msgId, { route: routeEv })
+        },
+        onToolCall: (call) => {
+          addToolCallEvent(msgId, {
+            id: call.id,
+            name: call.name,
+            tool_name: call.name,
+            arguments: call.arguments,
+            input_params: call.arguments,
+            status: 'running',
+          })
+        },
+        onToolResult: (resEv) => {
+          addToolCallEvent(msgId, {
+            id: resEv.id,
+            name: resEv.name,
+            tool_name: resEv.name,
+            output: resEv.output,
+            status: resEv.status || 'done',
+            seconds: resEv.seconds,
+          })
+        },
+        onTextDelta: (delta) => {
+          appendStreamChunk(msgId, delta)
+        },
+        onApprovalRequired: (appEv) => {
+          const actionPayload = appEv.action || {
+            id: appEv.id,
+            title: 'Confirm Critical Parameter Modification',
+            action_type: appEv.name || 'DCS_SETPOINT_WRITE',
+            description: appEv.effect || 'Critical parameter change intercepted',
+            arguments: appEv.arguments,
+            target: appEv.arguments?.target || appEv.name,
+            proposed_value: appEv.arguments ? JSON.stringify(appEv.arguments) : '',
+          }
+          setAwaitingApproval(true, actionPayload)
+        },
+        onDone: (doneEv) => {
+          const normCitations = (doneEv.citations || []).map((c, idx) => ({
+            id: c.id ?? idx + 1,
+            doc: c.doc || c.source_document || c.document_name || 'Document',
+            section: c.section || (c.page_number ? `p. ${c.page_number}` : ''),
+            passage: c.passage || c.text || c.excerpt || '',
+            score: c.score,
+            page_number: c.page_number,
+            source_document: c.source_document || c.doc,
+          }))
+
+          if (doneEv.plan && doneEv.plan.length > 0) {
+            setPlan(doneEv.plan)
+          }
+
+          updateMessage(msgId, {
+            citations: normCitations,
+            plan: doneEv.plan || [],
+            verification: doneEv.verification || null,
+            elapsedSeconds:
+              doneEv.seconds ??
+              Number(((Date.now() - startTime) / 1000).toFixed(1)),
+          })
+
+          // Ensure any tail reply content is synchronized
+          if (doneEv.reply) {
+            const cur = useChatStore.getState().messages.find((m) => m.id === msgId)
+            if (!cur || !cur.content || cur.content.length < doneEv.reply.length) {
+              appendStreamChunk(msgId, doneEv.reply.slice(cur?.content?.length || 0))
+            }
+          }
+
+          finishStreaming(msgId)
+        },
+        onError: (errMsg) => {
+          appendStreamChunk(msgId, `\n\n> ⚠️ **Error:** ${errMsg}`)
+          finishStreaming(msgId)
+        },
       })
-      appendStreamChunk(msgId, res.reply)
+    } catch (err) {
+      appendStreamChunk(msgId, `\n\n> ⚠️ **Turn Error:** ${err?.message || err}`)
       finishStreaming(msgId)
     } finally {
       setIsPending(false)
