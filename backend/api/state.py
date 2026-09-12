@@ -315,6 +315,31 @@ class PipelineState:
 
         return export_graph(uri, user, password)
 
+    def graph_client(
+        self, uri="bolt://localhost:7687", user="neo4j", password="testpassword123"
+    ):
+        """A connected GraphClient, or None if the graph is unreachable.
+
+        Separate from graph() because graph() exports the WHOLE graph,
+        which answers only one question. Traversal endpoints need a live
+        client to run a parameterised query instead of downloading
+        everything and filtering client-side -- the difference does not
+        matter at 101 nodes and decides whether the feature works at all
+        on a real corpus.
+
+        Returns None rather than raising: the graph being down is a
+        normal, recoverable state in this product (Docker not running),
+        and every caller already has to handle it.
+        """
+        from backend.graph.neo4j_client import GraphClient
+
+        try:
+            client = GraphClient(uri, user, password)
+            client.verify_connectivity()
+            return client
+        except Exception:  # noqa: BLE001
+            return None
+
     # ---- measured metrics ---------------------------------------------
 
     def metrics(self) -> dict:

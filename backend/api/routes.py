@@ -1624,6 +1624,117 @@ def system_info() -> dict:
     return info
 
 
+@router.get("/graph/neighbourhood")
+def graph_neighbourhood(
+    node: str,
+    hops: int = Query(2, ge=1, le=4),
+    limit: int = Query(300, ge=1, le=2000),
+) -> dict:
+    """The subgraph within `hops` of `node`, with each node's distance.
+
+    WHY THIS EXISTS. /api/graph returns the whole graph, which is fine
+    at this corpus size and useless at a real one -- and it answers the
+    wrong question anyway. The interesting GraphRAG queries are
+    multi-hop: "what incidents touch the segment this SOP governs?" is
+    document -> segment -> incident, two hops, and the value of the
+    answer is the PATH, not the endpoints.
+
+    Returns `distance` on every node so the UI can stage the reveal by
+    hop -- which is what makes a traversal legible rather than a hairball
+    appearing all at once.
+
+    PARAMETERISED, NOT ARBITRARY CYPHER. The client sends a node name and
+    a hop count, never a query. An endpoint that executed client-supplied
+    Cypher against the knowledge graph would be an injection surface on
+    a system whose entire claim is that it is trustworthy about
+    provenance -- and `hops` is capped because an uncapped variable-
+    length match on a dense graph is a denial of service against your own
+    database.
+    """
+    state = get_state()
+    graph = state.graph()
+    if not graph.get("available"):
+        raise HTTPException(
+            503, detail=graph.get("error") or "graph unavailable"
+        )
+
+    client = state.graph_client()
+    if client is None:
+        raise HTTPException(503, detail="graph client unavailable")
+
+    # Match on any of the name properties the schema uses, so callers do
+    # not need to know which label they are asking about.
+    cypher = (
+        # The property names are the real ones in this schema, verified
+        # against a populated graph: Equipment.tag, Document.filename,
+        # Person.name, PipelineSegment.segment_name, Incident.summary.
+        # Guessing them produced a silent empty result plus a Neo4j
+        # "property key does not exist" warning that the API swallowed --
+        # a traversal that finds nothing looks identical to a node with
+        # no neighbours.
+        "MATCH (start) "
+        "WHERE start.name = $node OR start.segment_name = $node "
+        "   OR start.tag = $node OR start.filename = $node "
+        f"MATCH path = (start)-[*0..{int(hops)}]-(reached) "
+        "WITH start, reached, min(length(path)) AS distance "
+        "RETURN DISTINCT labels(reached) AS labels, properties(reached) AS props, "
+        "       distance, elementId(reached) AS id "
+        "ORDER BY distance "
+        f"LIMIT {int(limit)}"
+    )
+
+    try:
+        rows = client.run_cypher(cypher, node=node)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"traversal failed: {exc}") from exc
+
+    if not rows:
+        # An empty result is not an error, but it must not look like a
+        # successful traversal of an empty neighbourhood either.
+        return {
+            "node": node,
+            "hops": hops,
+            "found": False,
+            "detail": f"No node matched {node!r}. Names are exact.",
+            "nodes": [],
+            "edges": [],
+        }
+
+    nodes = [
+        {
+            "id": r.get("id"),
+            "labels": r.get("labels") or [],
+            "properties": r.get("props") or {},
+            "distance": r.get("distance"),
+        }
+        for r in rows
+    ]
+    ids = {n["id"] for n in nodes}
+
+    edge_cypher = (
+        "MATCH (a)-[r]-(b) "
+        "WHERE elementId(a) IN $ids AND elementId(b) IN $ids "
+        "RETURN DISTINCT elementId(a) AS source, elementId(b) AS target, "
+        "       type(r) AS type"
+    )
+    try:
+        edges = client.run_cypher(edge_cypher, ids=list(ids))
+    except Exception:  # noqa: BLE001
+        edges = []
+
+    return {
+        "node": node,
+        "hops": hops,
+        "found": True,
+        "nodes": nodes,
+        "edges": edges,
+        "by_distance": {
+            str(d): sum(1 for n in nodes if n["distance"] == d)
+            for d in sorted({n["distance"] for n in nodes if n["distance"] is not None})
+        },
+    }
+
+
 # --------------------------------------------------------- verification
 
 class VerifyRequest(BaseModel):

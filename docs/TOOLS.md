@@ -32,7 +32,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 4 | Denoise/deskew/binarize (OpenCV) | Aryan | built | 🔴 | Cheap, always run before OCR |
 | 5 | Layout & table extraction (LayoutLMv3) | Aryan | built | 🟡 | Structures inspection report tables |
 | 6 | P&ID symbol/connection extraction (Qwen2.5-VL) | Aryan | not started | 🟡 | Feeds the graph layer (pipeline segment query); tuned on hydrocracker-specific line/valve tagging conventions per H1 |
-| 62 | Chart image description (Qwen2.5-VL) | unassigned | not started | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
+| 62 | Chart image description (Qwen2.5-VL) | Aryan | built | 🟡 | For chart PICTURES with no underlying data (embedded in a PDF page, or a standalone photo) — output is always a vision-model estimate, never a verified fact; see VIBECODING_SPEC.md CARD 13. Distinct from native XLSX chart extraction (RAG_SPEC.md §2, exact/deterministic, no vision model at all) — different tool for a genuinely different problem, not two names for the same thing |
 | 63 | Knowledge graph explorer (UI) | Aryan | built | 🟡 | Full-page force-directed viewer over the real Neo4j graph — drag, zoom, filter by label, search, and click a node to see every property stored on it and every relationship attached. Shows the edge TYPE explicitly, because GRAPH_SPEC.md §8's REFERENCES (merely mentioned) vs APPLIES_TO (explicitly in scope) distinction is exactly what a reviewer needs to see and cannot infer from an anonymous line. Fills the `/graph` route already reserved in FRONTEND.md §2. Owner: Aryan (implementation)/Netal (route + polish) |
 | 64 | Knowledge base inspector (UI) | Aryan | built | 🟡 | What the retriever actually holds, at `/sources`: every chunk with its metadata and nearest neighbours in embedding space, and every image with each distinct understanding produced for it — OCR text (what really entered the corpus), the CARD 13 chart reading, and ground truth where the chart was generated for testing. Chart readings are labelled ESTIMATE and invented values are called out by name, because measurement showed the model stating figures for charts with no printed numbers at all (CLAUDE.md hard constraint #3). Owner: Aryan |
 | 65 | Agent tool registry | Aryan | built | 🔴 | The list the orchestrator reads. Derives each tool's JSON schema from its own type hints and docstring (a hand-maintained schema drifts silently the first time a parameter is renamed), dispatches by name with validation so a hallucinated tool name is correctable rather than fatal, and enforces the safety properties centrally: `requires_approval` (hard constraint #4) is checked by the DISPATCHER, so the next person to add a file-writing tool cannot forget the gate. `is_estimate` and `computes_numbers` let a caller tell a model's guess from an executed calculation without reading each tool. Owner: Aryan |
@@ -48,8 +48,8 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 9 | Document type classifier | Aryan | not started | 🔴 | Routes scans to correct pipeline |
 | 10 | Image diffing/change detection | Aryan | not started | ⚪ | Registry-listed |
 | 11 | Signature/stamp detection | Aryan | not started | ⚪ | Nice MRPL-approval-workflow touch, low priority |
-| 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | unassigned | not started | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
-| 61 | Voice note transcription (local speech-to-text) | unassigned | not started | 🟡 | **Team addition — not traceable to a PS26117 line.** Extends FR-7's document-modality handling to audio input (depot/HQ voice notes, shift handovers). Fully offline (faster-whisper, fetch-once/offline-forever pattern per `model_cache.py`). VIBECODING_SPEC.md CARD 12, Owner: Aryan. See REQUIREMENTS.md §6 for how this is kept honestly separate from PS-derived scope. |
+| 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | Aryan | not started | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
+| 61 | Voice note transcription (local speech-to-text) | Aryan | built | 🟡 | **Team addition — not traceable to a PS26117 line.** Extends FR-7's document-modality handling to audio input (depot/HQ voice notes, shift handovers). Fully offline (faster-whisper, fetch-once/offline-forever pattern per `model_cache.py`). VIBECODING_SPEC.md CARD 12, Owner: Aryan. See REQUIREMENTS.md §6 for how this is kept honestly separate from PS-derived scope. |
 
 ## B. Knowledge & Retrieval (RAG/GraphRAG) — Owner: Aryan (core), Netal (UI)
 
@@ -63,8 +63,8 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 17 | Source-grounded citation on every claim | Aryan | built | 🔴 | Non-negotiable per NFR-4 |
 | 18 | Correspondence/email summarization | Aryan | not started | 🟡 | Generic depot-to-HQ use case |
 | 19 | Cross-reference resolver | Aryan | not started | ⚪ | Registry-listed |
-| 57 | Aromatic Complex ↔ refinery cross-document reconciliation | unassigned | not started | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
-| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | unassigned | not started | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
+| 57 | Aromatic Complex ↔ refinery cross-document reconciliation | Aryan | not started | ⚪ | MRPL-specific — reconciles refinery-side and MSEZ Aromatic Complex-side documentation on shared feedstock/utilities; non-obvious, genuinely MRPL-specific win, Owner: Aryan |
+| 60 | Multi-location correspondence summarizer (Kasargod/Hindupur/Hosur depots) | Aryan | not started | 🟡 | Specializes tool 18 for MRPL's named depots — condenses depot-to-HQ threads, flags anything needing HQ approval action, Owner: Aryan (logic)/Netal (UI) |
 
 ## C. Reasoning, Planning & Orchestration — Owner: Aryan (logic), Aditya (infra)
 
@@ -98,9 +98,9 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 |---|---|---|---|---|---|
 | 33 | Code generation (routed) | Aditya | built | 🔴 | FR-13 |
 | 34 | Sandboxed execution (Docker, no network) | Aditya | not started | 🔴 | FR-13, NFR core |
-| 35 | Automated test generation + run | unassigned | not started | 🟡 | Strengthens the verification story |
-| 36 | Static analysis/linting pass | unassigned | not started | ⚪ | Registry-listed |
-| 37 | Internal tool scaffolding | unassigned | not started | ⚪ | Registry-listed |
+| 35 | Automated test generation + run | Aditya | not started | 🟡 | Strengthens the verification story |
+| 36 | Static analysis/linting pass | Aditya | not started | ⚪ | Registry-listed |
+| 37 | Internal tool scaffolding | Aditya | not started | ⚪ | Registry-listed |
 
 ## F. Output Generation — Owner: Kanishka
 
@@ -112,10 +112,10 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 41 | Calculation trace documents | Aryan | built | 🔴 | NFR-5 |
 | 42 | Audio briefing (Piper TTS) | Kanishka | not started | ⚪ | Polish item |
 | 43 | Redaction tool | Kanishka | not started | 🟡 | Confidentiality-relevant differentiator |
-| 54 | Novolen grade-changeover checklist generator | unassigned | not started | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
-| 55 | Novolen batch quality report generator | unassigned | not started | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
-| 56 | Merox sulphur-spec compliance checker | unassigned | not started | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
-| 58 | Aromatic Complex benzene safety-note drafting | unassigned | not started | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
+| 54 | Novolen grade-changeover checklist generator | Kanishka | not started | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
+| 55 | Novolen batch quality report generator | Kanishka | not started | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
+| 56 | Merox sulphur-spec compliance checker | Aryan | not started | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
+| 58 | Aromatic Complex benzene safety-note drafting | Kanishka | not started | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
 
 ## G. Governance, Audit & Trust — Owner: Aditya (backend), Kanishka (UI)
 

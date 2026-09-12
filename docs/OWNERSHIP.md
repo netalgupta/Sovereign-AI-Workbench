@@ -40,6 +40,10 @@ not at all, and nobody could tell which. Three real gaps were found:
 | `Technical_Specs/*.md` | `docs/Technical_Specs/` | spec owner, listed in each file |
 | `Assignments/*.md` | `docs/Assignments/` | Aryan |
 | This file | `docs/OWNERSHIP.md` | Aryan |
+| `docs/STATUS.md` — built vs pending, per person | `docs/` | Aryan |
+| `docs/RUNNING.md` — how to start and read the system | `docs/` | Aryan |
+| `docs/INTEGRATION.md` — every live endpoint and its shape | `docs/` | Aryan |
+| `docs/TEAM_KICKOFF_MESSAGE.md` — kickoff text | `docs/` | Aryan |
 
 There is exactly **one** copy of each. The duplicates under `docs/` that
 shadowed root files have been deleted. If you need a file, link to it;
@@ -90,6 +94,7 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Confidence gate / refusal | Aryan | Advay (chat) |
 | Query expansion | Aryan | — |
 | GraphRAG entity + relationship extraction | Aryan | Netal (explorer) |
+| Multi-hop graph traversal (`/api/graph/neighbourhood`) | Aryan (built) | **Netal** (hop-by-hop visualisation) |
 | Grounded generation + citation validation | Aryan | Netal (citation chips) |
 | Self-verification (§5) | Aryan | Kanishka (trace viewer) |
 | Contradiction detection | Aryan | Netal |
@@ -130,6 +135,7 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Sources panel + `/sources` | Netal |
 | Citation chips + expansion | Netal |
 | Graph explorer `/graph` | Netal |
+| Multi-hop traversal / path visualisation | Netal |
 | Source page preview | Netal |
 | Chunk / vector inspector | Netal |
 | Output library `/outputs` | Kanishka |
@@ -156,6 +162,7 @@ finished work. Each was built to unblock you, not to take the item.
 | `draft_docx` — the gated-output reference implementation | `backend/tools/documents/draft_docx.py` | **Kanishka** to copy for XLSX/PPTX |
 | Approval gate backend + `/api/approvals/*` | `backend/audit/` | **Aditya** |
 | Network monitor, scoped to this process tree | `backend/audit/network_monitor.py` | **Sahil** (UI) |
+| `GET /api/graph/neighbourhood` — N-hop subgraph with per-node `distance` | `backend/api/routes.py` | **Netal** (hop-by-hop reveal) |
 
 ---
 

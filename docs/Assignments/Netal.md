@@ -76,6 +76,54 @@ Backend ready: `GET /api/graph` returns all nodes with every property
 and typed edges, and degrades to a snapshot when Neo4j is down rather
 than serving an empty graph as live truth.
 
+### 4b. Multi-hop graph traversal visualisation — **NEW, and the demo moment**
+
+The interesting GraphRAG questions are not "show me this node", they are
+multi-hop: *"what incidents touch the segment this SOP governs?"* is
+Document -> PipelineSegment -> Incident. **The answer is the path, not
+the endpoints**, and a path is something you can only really show by
+animating it.
+
+Backend ready (built for you): `GET /api/graph/neighbourhood?node=X&hops=N`
+returns the subgraph within N hops, and **every node carries its
+`distance`** plus a `by_distance` histogram. Verified live:
+
+```
+'Mangalore-Hassan' hops=1: 3 nodes,  4 edges, by_distance={'0':1, '1':2}
+'Mangalore-Hassan' hops=2: 8 nodes, 18 edges, by_distance={'0':1, '1':2, '2':5}
+'P-HS-02'          hops=2: 5 nodes, 10 edges, by_distance={'0':1, '1':1, '2':3}
+```
+
+`distance` exists specifically so you can stage the reveal: hop 0, then
+hop 1, then hop 2. A traversal that appears all at once is a hairball; a
+traversal that unfolds is an explanation, and it is the clearest
+possible demonstration that this system reasons over connections rather
+than just matching text.
+
+What to build:
+- **Hop-by-hop reveal** on query. Ring 0 is the anchor, then each hop
+  fades in with its edges. Let the user step forward and back.
+- **Path highlight** between two selected nodes — trace the actual
+  route, dim everything else.
+- **Hop depth control** (1-4, the API caps it) so the user can widen or
+  narrow the neighbourhood live.
+- **Edge types on the path**, always visible. `REFERENCES` vs
+  `REPORTS_INCIDENT_AT` is the difference between "this document
+  mentions the segment" and "an incident happened there", and hiding the
+  distinction makes the graph decorative.
+- **Wire it to the chat**: when an answer cites documents, offer "show
+  how these connect" and traverse from them.
+
+Two things to know before you start:
+- The graph has been **lost three times** to a container without a named
+  volume. If `/api/graph` returns 0 nodes, rebuild it in seconds with
+  `py -3 -m backend.evaluation.build_graph` — no LLM calls, it replays a
+  committed extraction cache. Don't debug your UI against an empty graph.
+- The endpoint is **parameterised, not arbitrary Cypher**. If you need a
+  traversal shape it does not support, ask for it rather than adding a
+  client-supplied-query endpoint — that would be an injection surface on
+  the component whose whole job is being trustworthy about provenance.
+
 ### 5. Chunk / vector inspector — **NEW**
 **Take over `InstrumentationPage.jsx` and `KnowledgeBasePage.jsx`.**
 Both are prototypes. Make them tools:
@@ -136,10 +184,14 @@ fraction of files looks precise and misleads. Do not add a percentage.
   viewer. Test with a genuinely long PDF, not a 2-page fixture.
 - **Day 6:** Graph explorer — take over the existing page, add the
   signature-query subgraph highlight.
-- **Day 7:** Retrieval trace UI in the chat.
-- **Day 8:** Chunk/vector inspector; ingestion progress feed.
-- **Day 9:** Hand to Advay for integration; support his consistency pass.
-- **Day 10:** Buffer.
+- **Day 6-7:** Multi-hop traversal visualisation (§4b). Treat this as
+  the highest-value item after the page preview — it is the clearest
+  proof that the system reasons over connections, and the backend is
+  already done.
+- **Day 8:** Retrieval trace UI in the chat.
+- **Day 9:** Chunk/vector inspector; ingestion progress feed.
+- **Day 10:** Hand to Advay for integration; support his consistency pass.
+  Buffer for bugs.
 
 ## Dependencies
 - Everything you need on the backend **exists today** on
