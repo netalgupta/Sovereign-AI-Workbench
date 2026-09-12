@@ -658,7 +658,32 @@ def run_turn(
     # prerequisite for it.
     yield from _emit_plan(request, decision)
 
-    if decision.path == "agentic":
+    # Instant paths: no retrieval, no model, no planner.
+    if decision.path in ("greeting", "closing", "capability"):
+        from backend.orchestrator.intent import (
+            CLOSING_REPLY,
+            GREETING_REPLY,
+            capability_reply,
+        )
+
+        reply = {
+            "greeting": GREETING_REPLY,
+            "closing": CLOSING_REPLY,
+            "capability": capability_reply(),
+        }[decision.path]
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.0,
+            "awaiting_approval": False,
+            "citations": [],
+        }
+        return
+
+    if decision.path == "agentic" or decision.path == "arithmetic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
         for event in run_agent_loop(
