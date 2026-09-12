@@ -159,5 +159,22 @@ def register_all() -> None:
         tools_md_row=64,
     )(select_images_for_request)
 
+    # ---- code & sandbox (FR-13, TOOLS.md row 34) ------------------------
+
+    from backend.sandbox.executor import run_in_sandbox
+
+    tool(
+        name="run_in_sandbox",
+        description=(
+            "Execute Python or Node.js code inside an isolated Docker container with "
+            "--network none, strict resource limits, and timeout protection. Use for "
+            "data processing, engineering calculations, parsing, and running verification code."
+        ),
+        category="code",
+        priority="🔴",
+        tools_md_row=34,
+    )(run_in_sandbox)
+
 
 register_all()
+

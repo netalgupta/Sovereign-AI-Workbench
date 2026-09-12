@@ -1,0 +1,54 @@
+# Dockerfile.sandbox
+#
+# Build ONCE on a machine with internet access (dev laptop / CI), then
+# transfer into the air-gapped facility with `docker save` / `docker load`.
+# The running worker container NEVER has network access (--network none
+# is applied at container-run time in pool.py) so nothing can be pip/npm
+# installed after this image is built. Whatever you need must be here.
+#
+#   docker build -t mrpl-sandbox:combined -f Dockerfile.sandbox .
+#   docker save mrpl-sandbox:combined -o mrpl-sandbox.tar
+#   # transfer mrpl-sandbox.tar into the facility via your approved process
+#   docker load -i mrpl-sandbox.tar
+
+FROM nikolaik/python-nodejs:python3.11-nodejs20-slim AS builder
+
+# pip install happens in the builder stage, which has network access
+# during `docker build` only -- never at container-run time.
+RUN pip install --no-cache-dir --target=/deps \
+    pandas==2.2.2 \
+    numpy==1.26.4 \
+    sympy==1.12 \
+    matplotlib==3.8.4 \
+    scipy==1.13.0 \
+    scikit-learn==1.5.0 \
+    xgboost==2.0.3 \
+    joblib==1.4.2 \
+    seaborn==0.13.2 \
+    plotly==5.22.0 \
+    networkx==3.3 \
+    pypdf==4.2.0 \
+    python-docx==1.1.2 \
+    openpyxl==3.1.2 \
+    beautifulsoup4==4.12.3 \
+    pyyaml==6.0.1 \
+    markdown==3.6 \
+    pillow==10.3.0 \
+    regex==2024.5.15 \
+    jsonschema==4.22.0
+
+FROM nikolaik/python-nodejs:python3.11-nodejs20-slim
+
+# xgboost dynamically links against libgomp at import time -- must be
+# present in the final runtime layer, not just the builder.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /deps /usr/local/lib/python3.11/site-packages
+
+# Non-root user -- matches the `user="1000:1000"` set in pool.py.
+RUN useradd -u 1000 -m sandboxuser
+
+WORKDIR /sandbox
+CMD ["sleep", "infinity"]

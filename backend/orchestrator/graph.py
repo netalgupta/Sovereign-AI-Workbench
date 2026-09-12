@@ -189,6 +189,7 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
                     from backend.sandbox.executor import run_in_sandbox
                     result = run_in_sandbox(
                         code="print('Sandboxed verification check: OK')",
+                        session_id=state.session_id,
                         language="python",
                         timeout_seconds=10,
                     )

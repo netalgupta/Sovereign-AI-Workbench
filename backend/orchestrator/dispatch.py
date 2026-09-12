@@ -231,20 +231,56 @@ def run_vision_step(step: PlanStep, tool_name: str, arguments: dict) -> ToolCall
     return event
 
 
-def run_code_step(step: PlanStep, code: str) -> ToolCallEvent:
+def run_code_step(step: PlanStep, code: str, session_id: str = "default", language: str = "python") -> ToolCallEvent:
     """The `code_agent` node — sandbox execution only (CARD 04).
 
-    Not implemented here: the sandbox is Aditya's module, and
-    Aryan.md lists sandbox mechanics under "explicitly not your job".
-
-    It raises rather than returning an empty success, because a step that
-    reports done without running is worse than one that reports failure —
-    the plan would continue on an output that does not exist, and the
-    verification node would then be asked to check nothing.
+    Executes untrusted agent-generated code inside the warm Docker sandbox
+    pool (--network none, memory/cpu constrained, read-only root).
     """
-    step.status = "failed"
-    raise SubAgentError(
-        "code_agent requires the sandbox execution wrapper (CARD 04, backend/sandbox), "
-        "which is not implemented yet. Refusing rather than reporting a step done "
-        "without running it. Owner: Aditya."
+    from backend.sandbox import pool, run_in_sandbox
+
+    if not pool.workers:
+        step.status = "failed"
+        raise SubAgentError(
+            "code_agent requires the sandbox execution wrapper (CARD 04, backend/sandbox), "
+            "and the sandbox pool has not been started. Start the sandbox pool with pool.start()."
+        )
+
+    event = ToolCallEvent(
+        tool_name="sandbox_python" if language == "python" else "sandbox_node",
+        input_params={"language": language, "session_id": session_id},
+        status="running",
+        timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+    try:
+        result = run_in_sandbox(code, session_id=session_id, language=language)
+    except Exception as exc:
+        event.status = "failed"
+        event.output = {"error": f"{type(exc).__name__}: {exc}"}
+        step.status = "failed"
+        raise SubAgentError(str(exc)) from exc
+
+    event.status = "done" if result.exit_code == 0 and not result.timed_out else "failed"
+    event.output = result.model_dump()
+    step.status = "done" if result.exit_code == 0 and not result.timed_out else "failed"
+    return event
+
+
+async def dispatch_code_agent_call(session_id: str, code: str, language: str = "python", ws=None) -> dict:
+    """Async dispatch called when streaming live websocket execution chunks to UI."""
+    from backend.sandbox import run_code_step as async_run_code_step
+
+    result = await async_run_code_step(
+        code=code,
+        session_id=session_id,
+        language=language,
+        timeout_seconds=30,
+        ws=ws,
+    )
+    return {
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+    }
+
