@@ -31,6 +31,34 @@ export const useChatStore = create((set, get) => ({
   sessionId: generateSessionId(),
   draft: '',
   plan: MOCK_PLAN_STEPS,
+  attachments: [],
+
+  // ── Attachment Actions ─────────────────────────────────────────────────────
+  addAttachment: (att) =>
+    set((state) => ({
+      attachments: [
+        ...state.attachments.filter((a) => a.attachment_id !== att.attachment_id),
+        att,
+      ],
+    })),
+
+  updateAttachmentStatus: (attachmentId, status, details = {}) =>
+    set((state) => ({
+      attachments: state.attachments.map((a) =>
+        a.attachment_id === attachmentId || a.id === attachmentId
+          ? { ...a, status, ...details }
+          : a
+      ),
+    })),
+
+  removeAttachment: (attachmentId) =>
+    set((state) => ({
+      attachments: state.attachments.filter(
+        (a) => a.attachment_id !== attachmentId && a.id !== attachmentId
+      ),
+    })),
+
+  clearAttachments: () => set({ attachments: [] }),
 
   // ── Approval Gate State (§3.12 / FR-15) ────────────────────────────────────
   awaitingHumanApproval: false,

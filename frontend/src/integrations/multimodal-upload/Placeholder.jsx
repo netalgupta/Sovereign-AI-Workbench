@@ -1,9 +1,10 @@
-import React, { useRef } from 'react'
-import { Paperclip, UploadCloud, X, FileText, Image as ImageIcon } from 'lucide-react'
+import React, { useRef, useState } from 'react'
+import { Paperclip, UploadCloud, X, FileText, Image as ImageIcon, CheckCircle2, Clock, Loader2 } from 'lucide-react'
+import { uploadAttachment, getAttachmentStatus } from '../../lib/api'
+import { useChatStore } from '../../store/chatStore'
 
 /**
- * Placeholder for MultimodalUpload component.
- * Owner: Sahil (FRONTEND.md §3.13)
+ * MultimodalUpload component with attachment state sync.
  *
  * @param {import('./contract').MultimodalUploadProps} props
  */
@@ -11,24 +12,42 @@ export default function Placeholder({
   onUpload,
   onRemove,
   pendingFiles = [],
-  acceptedTypes = ['.pdf', '.png', '.jpg', '.jpeg', '.tiff'],
+  acceptedTypes = ['.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.docx', '.xlsx', '.txt'],
   maxSizeBytes = 52428800,
   isCompact = true,
   disabled = false,
 }) {
   const fileInputRef = useRef(null)
+  const [category, setCategory] = useState('temporary')
+  const addAttachment = useChatStore((s) => s.addAttachment)
+  const sessionId = useChatStore((s) => s.sessionId)
 
-  const handleFilesChosen = (e) => {
+  const handleFilesChosen = async (e) => {
     const fileList = Array.from(e.target.files || [])
-    if (fileList.length > 0 && onUpload) {
+    if (fileList.length === 0) return
+
+    for (const file of fileList) {
+      const res = await uploadAttachment(file, category, sessionId)
+      const attId = res?.attachment_id || `att_${Date.now()}`
+      addAttachment({
+        attachment_id: attId,
+        filename: file.name,
+        type: file.type || 'application/octet-stream',
+        category: category,
+        status: res?.status || 'queued',
+        created_at: new Date().toISOString(),
+      })
+    }
+
+    if (onUpload) {
       onUpload(fileList)
     }
   }
 
-  // ── Compact Mode: Paperclip Trigger Button in Composer ──────────────────────
+  // ── Compact Mode ────────────────────────────────────────────────────────────
   if (isCompact) {
     return (
-      <div className="relative inline-flex items-center">
+      <div className="relative inline-flex items-center gap-1">
         <input
           ref={fileInputRef}
           type="file"
@@ -42,7 +61,7 @@ export default function Placeholder({
           type="button"
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
-          title="Multimodal upload: Drop PDFs, scans, or inspection photos (Integration pending — owned by Sahil)"
+          title="Multimodal upload: Drop PDFs, scans, or inspection photos"
           className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors disabled:opacity-40"
         >
           <Paperclip size={16} />
@@ -51,7 +70,7 @@ export default function Placeholder({
     )
   }
 
-  // ── Full Dropzone / Modal Mode ──────────────────────────────────────────────
+  // ── Full Dropzone Mode ──────────────────────────────────────────────────────
   return (
     <div
       className="p-4 rounded-xl border flex flex-col gap-3 text-xs"
@@ -64,16 +83,18 @@ export default function Placeholder({
         <div className="flex items-center gap-2">
           <UploadCloud size={16} style={{ color: 'var(--color-accent)' }} />
           <span className="font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
-            Multimodal Ingestion Tray
+            Multimodal Attachment Tray
           </span>
           <span
-            className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold uppercase tracking-wider"
+            className="text-[10px] font-mono px-2 py-0.5 rounded font-semibold uppercase tracking-wider cursor-pointer"
             style={{
-              background: 'var(--color-overlay)',
-              color: 'var(--color-text-muted)',
+              background: category === 'permanent' ? 'rgba(59, 130, 246, 0.15)' : 'var(--color-overlay)',
+              color: category === 'permanent' ? '#2563eb' : 'var(--color-text-muted)',
             }}
+            onClick={() => setCategory((c) => (c === 'temporary' ? 'permanent' : 'temporary'))}
+            title="Click to toggle category"
           >
-            Integration pending — owned by Sahil
+            Category: {category}
           </span>
         </div>
       </div>
@@ -104,7 +125,7 @@ export default function Placeholder({
         <div className="space-y-1.5 pt-2">
           {pendingFiles.map((file) => (
             <div
-              key={file.id}
+              key={file.id || file.name}
               className="p-2 rounded border flex items-center justify-between font-mono text-[11px]"
               style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
             >
@@ -114,7 +135,7 @@ export default function Placeholder({
                   {file.name}
                 </span>
                 <span style={{ color: 'var(--color-text-muted)' }}>
-                  ({Math.round(file.size / 1024)} KB)
+                  ({Math.round((file.size || 0) / 1024)} KB)
                 </span>
               </div>
               {onRemove && (

@@ -34,6 +34,8 @@ indexed, this citation may no longer be accurate" — so resolve() returns
 a status rather than raising, and the caller can say the true thing.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from datetime import date

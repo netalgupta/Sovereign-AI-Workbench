@@ -26,6 +26,8 @@ page at 150 DPI is a few hundred KB and tens of milliseconds; the whole
 500-page document is neither.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 

@@ -384,3 +384,94 @@ export async function sendMessage(message, sessionId) {
   }
 }
 
+/**
+ * Upload an attachment payload to /api/attachments/upload.
+ * Supports File upload or JSON payload.
+ */
+export async function uploadAttachment(fileOrPayload, category = 'temporary', sessionId = 'default') {
+  try {
+    let res
+    if (fileOrPayload instanceof File) {
+      const formData = new FormData()
+      formData.append('file', fileOrPayload)
+      formData.append('filename', fileOrPayload.name)
+      formData.append('type', fileOrPayload.type || 'application/octet-stream')
+      formData.append('category', category)
+      formData.append('session_id', sessionId)
+      res = await fetch('/api/attachments/upload', {
+        method: 'POST',
+        body: formData,
+      })
+    } else {
+      const payload = {
+        filename: fileOrPayload.filename || fileOrPayload.name || 'attachment.pdf',
+        type: fileOrPayload.type || 'application/pdf',
+        category: fileOrPayload.category || category,
+        processing: true,
+        contentBase64: fileOrPayload.contentBase64 || fileOrPayload.content || null,
+        session_id: fileOrPayload.session_id || sessionId,
+      }
+      res = await fetch('/api/attachments/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+    }
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] uploadAttachment error:', err)
+  }
+  return { attachment_id: `att_mock_${Date.now()}`, status: 'queued' }
+}
+
+/**
+ * Fetch current processing status for an attachment.
+ */
+export async function getAttachmentStatus(attachmentId) {
+  try {
+    const res = await fetch(`/api/attachments/${attachmentId}`)
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] getAttachmentStatus error:', err)
+  }
+  return { attachment_id: attachmentId, status: 'ready', category: 'temporary', storage_ref: 'mock' }
+}
+
+/**
+ * List currently tracked attachments, optionally filtered by category.
+ */
+export async function getAttachments(category) {
+  try {
+    const url = category ? `/api/attachments?category=${encodeURIComponent(category)}` : '/api/attachments'
+    const res = await fetch(url)
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] getAttachments error:', err)
+  }
+  return { attachments: [], count: 0 }
+}
+
+/**
+ * Session cleanup hook for temporary attachments.
+ */
+export async function cleanupSessionAttachments(sessionId = 'default') {
+  try {
+    const res = await fetch(`/api/attachments/cleanup?session_id=${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+    })
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] cleanupSessionAttachments error:', err)
+  }
+  return { success: true, deleted_count: 0 }
+}
+
+

@@ -16,6 +16,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  Eye,
 } from 'lucide-react'
 import { api } from '../lib/pipelineApi'
 import { ForceGraph } from '../components/graph/ForceGraph'
@@ -23,6 +24,7 @@ import { nodeName, getNodeColor } from '../components/graph/graphTheme'
 import { VectorScatter, SimilarityHeatmap } from '../components/graph/VectorViews'
 import { SourceFileTree } from '../components/workbench/SourceFileTree'
 import { AddSourceDirectoryModal } from '../components/workbench/AddSourceDirectoryModal'
+import { SourcePreviewModal } from '../components/workbench/SourcePreviewModal'
 import { EmptyState } from '../components/ui/EmptyState'
 import { showToast } from '../store/toastStore'
 
@@ -37,6 +39,8 @@ export function SourcesPage() {
   const [fileSearchQuery, setFileSearchQuery] = useState('')
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [previewModalFile, setPreviewModalFile] = useState(null)
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false)
 
   // Pipeline inspection data (Graph, Chunks, Images)
   const [graph, setGraph] = useState(null)
@@ -521,6 +525,11 @@ export function SourcesPage() {
                   searchQuery={fileSearchQuery}
                   selectedId={selectedFile?.id}
                   onSelectSource={(source) => setSelectedFile(source)}
+                  onPreviewSource={(source) => {
+                    setSelectedFile(source)
+                    setPreviewModalFile(source)
+                    setIsPreviewModalOpen(true)
+                  }}
                   onToggleSource={handleToggleSource}
                   onDeleteSource={handleDeleteSource}
                   compact={false}
@@ -589,6 +598,24 @@ export function SourcesPage() {
                     </div>
 
                     <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewModalFile(selectedFile)
+                          setIsPreviewModalOpen(true)
+                        }}
+                        className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-fast flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        style={{
+                          background: 'var(--color-accent)',
+                          borderColor: 'var(--color-accent)',
+                          color: '#fff',
+                        }}
+                        title={`Preview "${selectedFile.name}"`}
+                      >
+                        <Eye size={14} />
+                        <span>Preview Document</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => handleToggleSource(selectedFile.id)}
@@ -1347,6 +1374,13 @@ export function SourcesPage() {
         onClose={() => setIsAddModalOpen(false)}
         onDirectoriesUpdated={refreshAll}
         currentDirectories={corpusData.directories || []}
+      />
+
+      {/* ── Document Preview Modal ─────────────────────────────────────── */}
+      <SourcePreviewModal
+        file={previewModalFile}
+        isOpen={isPreviewModalOpen}
+        onClose={() => setIsPreviewModalOpen(false)}
       />
     </div>
   )

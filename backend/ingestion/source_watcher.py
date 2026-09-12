@@ -36,6 +36,8 @@ miss a change that happened overnight. A watch API could later feed the
 same queue as an optimisation, not a replacement.
 """
 
+from __future__ import annotations
+
 import fnmatch
 import json
 from datetime import datetime

@@ -1,44 +1,90 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Send } from 'lucide-react'
+import { Send, Paperclip, CheckCircle2, Clock, Loader2, Database, ShieldAlert, X } from 'lucide-react'
 import { useChatStore } from '../../store/chatStore'
-import { sendMessage } from '../../lib/api'
-import { MultimodalUpload } from '../../integrations/multimodal-upload'
+import { sendMessage, uploadAttachment, getAttachmentStatus } from '../../lib/api'
 import { Spinner } from '../ui/Spinner'
 import { ErrorBanner } from '../ui/ErrorBanner'
 
 /**
- * ChatComposer — message input bar at the bottom of the chat pane.
+ * ChatComposer — message input bar with attachment payload & state sync.
  *
- * Wiring:
- *   - useMutation wraps sendMessage (the ONLY call site for api.js)
- *   - On success: assistant reply appended to chatStore
- *   - On error: ErrorBanner shown inline — never raw error objects
- *   - Loading: Send button shows Spinner, textarea + button disabled
- *
- * Paperclip icon is stubbed (non-functional) — file upload arrives Day 3-4.
+ * Features:
+ *   - Category selection: "temporary" (session inspection) vs "permanent" (KB standard)
+ *   - Near-real-time polling (1.2s interval) while attachment status is queued or processing
+ *   - Live visual indicator moving queued -> processing -> ready without page refresh
  */
 export function ChatComposer() {
   const draft = useChatStore((s) => s.draft)
   const setDraft = useChatStore((s) => s.setDraft)
+  const attachments = useChatStore((s) => s.attachments)
+  const addAttachment = useChatStore((s) => s.addAttachment)
+  const updateAttachmentStatus = useChatStore((s) => s.updateAttachmentStatus)
+  const removeAttachment = useChatStore((s) => s.removeAttachment)
+  const sessionId = useChatStore((s) => s.sessionId)
+
+  const [category, setCategory] = useState('temporary') // 'temporary' | 'permanent'
   const [sendError, setSendError] = useState(null)
   const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   const addMessage = useChatStore((s) => s.addMessage)
-  const sessionId  = useChatStore((s) => s.sessionId)
 
   const mutation = useMutation({
     mutationFn: ({ message, session_id }) => sendMessage(message, session_id),
     onSuccess: (data) => {
-      addMessage('assistant', data.reply)
+      addMessage('assistant', data.reply, {
+        citations: data.citations,
+        plan: data.plan,
+      })
       setSendError(null)
     },
     onError: (err) => {
-      setSendError(
-        err?.message || 'Failed to send message. Please try again.'
-      )
+      setSendError(err?.message || 'Failed to send message. Please try again.')
     },
   })
+
+  // ── Polling effect for pending attachments ────────────────────────────────
+  useEffect(() => {
+    const pending = attachments.filter(
+      (a) => a.status === 'queued' || a.status === 'processing'
+    )
+    if (pending.length === 0) return
+
+    const interval = setInterval(async () => {
+      for (const att of pending) {
+        const res = await getAttachmentStatus(att.attachment_id)
+        if (res && res.status && res.status !== att.status) {
+          updateAttachmentStatus(att.attachment_id, res.status, res)
+        }
+      }
+    }, 1200)
+
+    return () => clearInterval(interval)
+  }, [attachments, updateAttachmentStatus])
+
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    for (const file of files) {
+      // 1. Send upload request to backend API
+      const res = await uploadAttachment(file, category, sessionId)
+      const attId = res?.attachment_id || `att_${Date.now()}`
+
+      // 2. Add attachment to store with initial status 'queued'
+      addAttachment({
+        attachment_id: attId,
+        filename: file.name,
+        type: file.type || 'application/octet-stream',
+        category: category,
+        status: res?.status || 'queued',
+        created_at: new Date().toISOString(),
+      })
+    }
+    // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   const canSend = draft.trim().length > 0 && !mutation.isPending
 
@@ -46,11 +92,18 @@ export function ChatComposer() {
     if (!canSend) return
     const trimmed = draft.trim()
     setSendError(null)
-    addMessage('user', trimmed)
+
+    let finalMessage = trimmed
+    const readyAttachments = attachments.filter((a) => a.status === 'ready')
+    if (readyAttachments.length > 0) {
+      const attNames = readyAttachments.map((a) => a.filename).join(', ')
+      finalMessage = `${trimmed}\n\n[Attached Files: ${attNames}]`
+    }
+
+    addMessage('user', finalMessage)
     setDraft('')
-    // Reset textarea height
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    mutation.mutate({ message: trimmed, session_id: sessionId })
+    mutation.mutate({ message: finalMessage, session_id: sessionId })
   }
 
   const handleKeyDown = (e) => {
@@ -62,7 +115,6 @@ export function ChatComposer() {
 
   const handleInput = (e) => {
     setDraft(e.target.value)
-    // Auto-grow textarea
     const el = e.target
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
@@ -76,10 +128,98 @@ export function ChatComposer() {
       {/* Error banner */}
       {sendError && (
         <div className="mb-3">
-          <ErrorBanner
-            message={sendError}
-            onDismiss={() => setSendError(null)}
-          />
+          <ErrorBanner message={sendError} onDismiss={() => setSendError(null)} />
+        </div>
+      )}
+
+      {/* Attachment status list strip */}
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {attachments.map((att) => {
+            const isReady = att.status === 'ready'
+            const isProcessing = att.status === 'processing'
+            const isQueued = att.status === 'queued'
+            const isFailed = att.status === 'failed'
+
+            return (
+              <div
+                key={att.attachment_id}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono border transition-all"
+                style={{
+                  background: isReady
+                    ? 'rgba(34, 197, 94, 0.08)'
+                    : isProcessing
+                    ? 'rgba(59, 130, 246, 0.08)'
+                    : isFailed
+                    ? 'rgba(239, 68, 68, 0.08)'
+                    : 'rgba(234, 179, 8, 0.08)',
+                  borderColor: isReady
+                    ? 'rgba(34, 197, 94, 0.3)'
+                    : isProcessing
+                    ? 'rgba(59, 130, 246, 0.3)'
+                    : isFailed
+                    ? 'rgba(239, 68, 68, 0.3)'
+                    : 'rgba(234, 179, 8, 0.3)',
+                  color: isReady
+                    ? '#15803d'
+                    : isProcessing
+                    ? '#1d4ed8'
+                    : isFailed
+                    ? '#b91c1c'
+                    : '#a16207',
+                }}
+              >
+                {att.category === 'permanent' ? (
+                  <Database size={12} className="opacity-70" title="Permanent KB Document" />
+                ) : (
+                  <Clock size={12} className="opacity-70" title="Temporary Session File" />
+                )}
+
+                <span className="truncate max-w-[160px] font-medium">{att.filename}</span>
+
+                <span className="text-[10px] uppercase font-bold px-1 py-0.2 rounded bg-black/5 dark:bg-white/10">
+                  {att.category}
+                </span>
+
+                {/* Status indicator */}
+                <div className="flex items-center gap-1 ml-1 font-semibold text-[11px]">
+                  {isQueued && (
+                    <>
+                      <Clock size={12} className="animate-pulse" />
+                      <span>queued</span>
+                    </>
+                  )}
+                  {isProcessing && (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      <span>processing</span>
+                    </>
+                  )}
+                  {isReady && (
+                    <>
+                      <CheckCircle2 size={12} />
+                      <span>ready</span>
+                    </>
+                  )}
+                  {isFailed && (
+                    <>
+                      <ShieldAlert size={12} />
+                      <span>failed</span>
+                    </>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(att.attachment_id)}
+                  className="ml-1 hover:opacity-75 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  title="Remove attachment"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -102,17 +242,42 @@ export function ChatComposer() {
           }
         }}
       >
-        {/* Multimodal upload integration boundary — owned by Sahil (FRONTEND.md §3.13) */}
-        <MultimodalUpload
-          isCompact={true}
-          disabled={mutation.isPending}
-          onUpload={(files) => {
-            if (files && files.length > 0) {
-              const fileNames = files.map((f) => f.name).join(', ')
-              setDraft((prev) => (prev ? `${prev} [Attached: ${fileNames}]` : `[Attached: ${fileNames}] `))
-            }
-          }}
-        />
+        {/* Attachment Category Selector & Upload Trigger */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFileSelect}
+            className="hidden"
+            disabled={mutation.isPending}
+          />
+
+          <button
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach file (PDF, image, doc, csv)"
+            className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors disabled:opacity-40"
+          >
+            <Paperclip size={16} />
+          </button>
+
+          {/* Category Toggle */}
+          <button
+            type="button"
+            onClick={() => setCategory((c) => (c === 'temporary' ? 'permanent' : 'temporary'))}
+            title={`Current upload category: ${category}. Click to toggle.`}
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold tracking-tight uppercase border transition-colors"
+            style={{
+              background: category === 'permanent' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(107, 114, 128, 0.1)',
+              borderColor: category === 'permanent' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(107, 114, 128, 0.3)',
+              color: category === 'permanent' ? '#2563eb' : '#4b5563',
+            }}
+          >
+            {category === 'permanent' ? 'perm' : 'temp'}
+          </button>
+        </div>
 
         {/* Textarea */}
         <textarea

@@ -11,6 +11,7 @@ import {
   FileCode,
   HardDrive,
   Trash2,
+  Eye,
 } from 'lucide-react'
 
 
@@ -136,6 +137,7 @@ export function SourceFileTree({
   searchQuery = '',
   selectedId = null,
   onSelectSource,
+  onPreviewSource,
   onToggleSource,
   onDeleteSource,
   compact = false,
@@ -329,7 +331,10 @@ export function SourceFileTree({
     return (
       <div
         key={node.id}
-        onClick={() => onSelectSource && onSelectSource(node)}
+        onClick={() => {
+          if (onSelectSource) onSelectSource(node)
+          if (onPreviewSource) onPreviewSource(node)
+        }}
         className="flex items-center justify-between py-1.5 px-2 rounded-md transition-fast group cursor-pointer"
         style={{
           paddingLeft: `${depth * 12 + 16}px`,
@@ -337,7 +342,7 @@ export function SourceFileTree({
           borderLeft: isSelected ? '2px solid var(--color-accent)' : '2px solid transparent',
           opacity: isEnabled ? 1 : 0.55,
         }}
-        title={`${node.name} • ${fileType} • ${node.size || ''}`}
+        title={`${node.name} • ${fileType} • ${node.size || ''} — Click to preview`}
       >
         <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
           {/* Subtle colored File Icon to differentiate types */}
@@ -388,8 +393,23 @@ export function SourceFileTree({
           </div>
         </div>
 
-        {/* Action Buttons: Delete & Scope Toggle */}
+        {/* Action Buttons: Preview, Delete & Scope Toggle */}
         <div className="flex items-center gap-1 flex-shrink-0">
+          {onPreviewSource && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (onSelectSource) onSelectSource(node)
+                onPreviewSource(node)
+              }}
+              className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-overlay)] transition-fast cursor-pointer opacity-0 group-hover:opacity-100"
+              title={`Preview "${node.name}"`}
+            >
+              <Eye size={12} />
+            </button>
+          )}
+
           {onDeleteSource && (
             <button
               type="button"

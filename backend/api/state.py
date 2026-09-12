@@ -21,6 +21,8 @@ presenting yesterday's corpus as today's is the same class of mistake as
 a citation pointing at a document that has since been edited.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -84,6 +86,13 @@ class PipelineState:
         from backend.ingestion.ingestion_queue import IngestionQueue
 
         return IngestionQueue()
+
+    @property
+    def attachment_manager(self):
+        from backend.attachments.manager import get_attachment_manager
+
+        return get_attachment_manager()
+
 
     # ---- corpus: expensive, cached -----------------------------------
 
