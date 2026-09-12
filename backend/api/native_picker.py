@@ -8,6 +8,18 @@ from pathlib import Path
 def pick_folder_gui(title: str = "Select Folder to Add to Sovereign Workbench") -> str | None:
     """Open native OS directory picker dialog and return selected absolute path or None."""
     py_code = """
+import sys
+import ctypes
+# Enable Per-Monitor High DPI awareness on Windows to prevent blurry dialogs
+if sys.platform == 'win32':
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 import tkinter as tk
 from tkinter import filedialog
 root = tk.Tk()
@@ -39,6 +51,18 @@ if path:
 def pick_files_gui(title: str = "Select Files to Add to Sovereign Workbench") -> list[str]:
     """Open native OS file picker dialog and return list of selected paths."""
     py_code = """
+import sys
+import ctypes
+# Enable Per-Monitor High DPI awareness on Windows to prevent blurry dialogs
+if sys.platform == 'win32':
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 import tkinter as tk
 from tkinter import filedialog
 root = tk.Tk()
