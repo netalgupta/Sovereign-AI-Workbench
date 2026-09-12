@@ -17,7 +17,7 @@ Branch: `aryan/rag-and-graphrag` · Suite: **358 passed, 1 skipped**
 | Built | **35** |
 | Not started | **37** |
 | 🔴 demo-critical built | **23 of 33** |
-| Live API endpoints | **41** |
+| Live API endpoints | **40** |
 | Registered, callable tools | **19** |
 
 ---

@@ -30,7 +30,7 @@ What's working right now:
 • Approval gate, audit log, sandbox (egress-isolated, proven)
 • NEW: the agent now CHOOSES its own tools and narrates while working —
   POST /api/chat/stream streams it live (text, work, text, work)
-• 357 tests passing
+• 358 tests passing
 
 Two things that changed and will confuse you if you don't know:
 1. START THE BACKEND BEFORE THE FRONTEND. If you don't, the Vite dev
