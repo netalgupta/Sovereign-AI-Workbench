@@ -66,10 +66,21 @@ _GREETING = re.compile(
     re.I,
 )
 
+# A closing may be TWO acknowledgements in a row. "thanks, that's all"
+# matched neither branch of the first version of this pattern -- it
+# anchored the end of the message immediately after the first word --
+# and so took the full document pipeline. Written as "one or more
+# acknowledgement phrases, separated by punctuation, and nothing else".
+_CLOSING_PHRASE = (
+    r"(?:thanks|thank\s+you|thx|ty|cheers|bye|goodbye|see\s+you|"
+    r"no\s+that'?s\s+(?:all|it)|that'?s\s+(?:all|it)|ok(?:ay)?|"
+    r"got\s+it|understood|great|perfect|nice|awesome|cool|"
+    r"appreciate\s+it|much\s+appreciated|for\s+now)"
+)
 _CLOSING = re.compile(
-    r"^\s*(thanks|thank\s+you|thx|ty|cheers|bye|goodbye|see\s+you|"
-    r"that'?s\s+(all|it)|no\s+that'?s\s+all|ok\s*(thanks|thx)?|great|perfect|"
-    r"nice|awesome|cool)\b[\s!.,]*$",
+    r"^\s*" + _CLOSING_PHRASE + r"\b"
+    r"(?:[\s!.,]*" + _CLOSING_PHRASE + r"\b)*"
+    r"[\s!.,]*$",
     re.I,
 )
 

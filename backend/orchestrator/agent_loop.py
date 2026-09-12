@@ -709,6 +709,35 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     from backend.observability import turn_log as T
     from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
 
+    # THE PLANNER MUST NOT RUN FOR A TURN THAT NEEDS NO PLAN.
+    #
+    # This is the 3.5s greeting from HANDOFF.md 3a, measured and now
+    # explained. Routing was never the cost -- decide_path and classify
+    # really do take 0.0001s. The cost was HERE, three lines above the
+    # instant-path check: a greeting is not a simple lookup (no question
+    # opener), so it fell through to the LLM planner and spent 10.5s
+    # planning work that the next statement was about to skip.
+    #
+    # It also explains why capability looked FASTER than greeting
+    # through the same path, which made no sense at the time: "what can
+    # you do" starts with "what", matches the question opener, and got
+    # the deterministic plan for free.
+    #
+    # An instant path still emits a plan -- the Plan Graph should not go
+    # blank because the answer was cheap -- but it describes the one
+    # thing that actually happens.
+    if decision.path in ("greeting", "closing", "capability", "arithmetic"):
+        steps = [{
+            "step_id": decision.path,
+            "description": decision.reason,
+            "assigned_agent": "math" if decision.path == "arithmetic" else "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+        T.kv("plan steps", len(steps))
+        yield {"type": "plan", "steps": steps, "path": decision.path}
+        return
+
     steps = []
     try:
         if decision.path == "corpus":
