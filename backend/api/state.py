@@ -53,6 +53,12 @@ class PipelineState:
         self._chunks = None
         self._snapshot = None
 
+    def reset(self):
+        with self._lock:
+            self._store = None
+            self._chunks = None
+            self._snapshot = None
+
     # ---- stores that are cheap to open -------------------------------
 
     @property
@@ -93,23 +99,184 @@ class PipelineState:
         return datetime.fromtimestamp(SNAPSHOT_PATH.stat().st_mtime).isoformat(timespec="seconds")
 
     def ensure_corpus(self):
-        """Ingest the corpus once, on demand. Returns (store, chunks).
+        """Get or initialize the active VectorStore and chunks.
 
-        This is the multi-minute path. Endpoints that can answer from a
-        snapshot should do so and leave this untouched.
+        Hydrates instantly from pre-computed snapshot when available,
+        falling back to directory traversal only if no snapshot exists.
         """
         with self._lock:
             if self._store is None:
-                from backend.evaluation.ingest_corpus import ingest_corpus
+                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                from backend.ingestion.embeddings import embed_texts
+                from backend.retrieval.vector_store import VectorStore
 
-                self._store, self._chunks, _stats = ingest_corpus(
-                    self.corpus_dir, verbose=False
-                )
+                self._store = VectorStore(dim=1024)
+                self._chunks = []
+
+                if SNAPSHOT_PATH.exists():
+                    try:
+                        data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                        raw_chunks = data.get("chunks", [])
+                        for rc in raw_chunks:
+                            meta = ChunkMetadata(
+                                source_document=rc.get("source_document", "unknown"),
+                                document_type=rc.get("document_type", "txt"),
+                                page_number=rc.get("page_number", 1),
+                                chunk_index=rc.get("chunk_index", 0),
+                                ingestion_date=rc.get("ingestion_date", "2026-09-12"),
+                                image_ids=[],
+                            )
+                            self._chunks.append(IngestedChunk(text=rc.get("text", ""), metadata=meta))
+                        if self._chunks:
+                            vecs = embed_texts([c.text for c in self._chunks])
+                            self._store.add_chunks(self._chunks, vecs)
+                    except Exception:
+                        pass
+                else:
+                    from backend.evaluation.ingest_corpus import ingest_corpus
+                    self._store, self._chunks, _stats = ingest_corpus(
+                        self.corpus_dir, verbose=False
+                    )
         return self._store, self._chunks
+
+    def ingest_path(self, target_path: str | Path) -> tuple[int, list[dict]]:
+        """Chunk, embed, and index a file or folder into the active VectorStore.
+
+        Returns (total_chunks_added, list_of_document_details).
+        """
+        from backend.ingestion.document_ingestion import ingest_document
+        from backend.ingestion.document_types import detect_document_type
+        from backend.ingestion.embeddings import embed_texts
+        def _ocr_fn(img_path: str) -> str:
+            try:
+                from backend.tools.vision.ocr_printed import extract_printed_text
+                res = extract_printed_text(img_path).full_text
+                return res if res.strip() else f"[Image Document: {Path(img_path).name}]"
+            except Exception:
+                return f"[Image Document: {Path(img_path).name}]"
+
+        p = Path(target_path).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
+
+        files: list[Path] = []
+        if p.is_file():
+            files = [p]
+        elif p.is_dir():
+            files = sorted(
+                f for f in p.rglob("*")
+                if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
+            )
+
+        store, existing_chunks = self.ensure_corpus()
+        total_chunks = 0
+        details = []
+
+        for f in files:
+            try:
+                type_info = detect_document_type(str(f))
+                chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
+            except Exception as exc:
+                details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
+                continue
+
+            if not chunks:
+                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                import datetime
+                fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
+                chunks = [
+                    IngestedChunk(
+                        text=fallback_text,
+                        metadata=ChunkMetadata(
+                            source_document=f.name,
+                            document_type=getattr(type_info, "detected_type", "txt"),
+                            page_number=1,
+                            chunk_index=0,
+                            ingestion_date=datetime.date.today().isoformat(),
+                            image_ids=[],
+                        ),
+                    )
+                ]
+
+            if chunks:
+                vectors = embed_texts([c.text for c in chunks])
+                store.add_chunks(chunks, vectors)
+                with self._lock:
+                    self._chunks.extend(chunks)
+                    # Invalidate cached static snapshot so live chunks are served
+                    self._snapshot = None
+                try:
+                    self.registry.register(str(f), type_info.detected_type)
+                except Exception:
+                    pass
+                total_chunks += len(chunks)
+                details.append({
+                    "filename": f.name,
+                    "path": str(f),
+                    "chunks": len(chunks),
+                    "document_type": type_info.detected_type,
+                })
+
+        return total_chunks, details
+
+    def delete_source(self, target_path: str) -> dict:
+        """Remove a file or folder from the active corpus, VectorStore, and registry."""
+        p = Path(target_path)
+        doc_name = p.name
+        norm_path = str(p.resolve()).lower()
+
+        # 1. Stop watching if it's a watched directory
+        self.watcher.remove_source(target_path)
+
+        # 2. Remove matching chunks from in-memory chunks list
+        removed_count = 0
+        with self._lock:
+            if self._chunks:
+                original_len = len(self._chunks)
+                self._chunks = [
+                    c for c in self._chunks
+                    if c.metadata.source_document != doc_name
+                    and c.metadata.source_document != target_path
+                    and not norm_path in str(Path(c.metadata.source_document).resolve()).lower()
+                ]
+                removed_count = original_len - len(self._chunks)
+            self._snapshot = None
+
+        # 3. Remove from VectorStore SQLite metadata table
+        if self._store and getattr(self._store, "_conn", None):
+            try:
+                self._store._conn.execute(
+                    "DELETE FROM chunks WHERE source_document = ? OR source_document LIKE ?",
+                    (doc_name, f"%{doc_name}%")
+                )
+                self._store._conn.commit()
+            except Exception:
+                pass
+
+        # 4. If file is in 07_User_Uploads or explicitly specified, delete from disk
+        file_deleted = False
+        try:
+            if p.exists() and p.is_file():
+                if "07_user_uploads" in str(p.resolve()).lower() or p.name in target_path:
+                    p.unlink()
+                    file_deleted = True
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "removed": target_path,
+            "filename": doc_name,
+            "chunks_removed": removed_count,
+            "file_deleted": file_deleted,
+            "message": f"Source '{doc_name}' removed from active knowledge base ({removed_count} chunks deleted).",
+        }
 
     @property
     def corpus_is_loaded(self) -> bool:
+
         return self._store is not None
+
 
     # ---- graph --------------------------------------------------------
 
@@ -156,3 +323,10 @@ def get_state() -> PipelineState:
     if _state is None:
         _state = PipelineState()
     return _state
+
+
+def reset_state() -> None:
+    global _state
+    if _state is not None:
+        _state.reset()
+    _state = None

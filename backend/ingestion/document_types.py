@@ -24,7 +24,11 @@ is provably too generic to be the "ground truth" RAG_SPEC.md wants.
 from pathlib import Path
 from typing import Literal
 
-import magic
+try:
+    import magic
+except ImportError:
+    magic = None
+
 from pydantic import BaseModel
 
 DetectedType = Literal[
@@ -35,6 +39,21 @@ _EXTENSION_TO_TYPE: dict[str, DetectedType] = {
     ".pdf": "pdf",
     ".docx": "docx",
     ".txt": "txt",
+    ".md": "txt",
+    ".markdown": "txt",
+    ".json": "txt",
+    ".log": "txt",
+    ".yaml": "txt",
+    ".yml": "txt",
+    ".xml": "txt",
+    ".py": "txt",
+    ".sql": "txt",
+    ".html": "txt",
+    ".htm": "txt",
+    ".ini": "txt",
+    ".env": "txt",
+    ".conf": "txt",
+    ".tsv": "csv",
     ".csv": "csv",
     ".xlsx": "xlsx",
     ".xls": "xls",
@@ -57,6 +76,12 @@ _MIME_TO_TYPE: dict[str, DetectedType] = {
     "application/vnd.ms-excel": "xls",
     "text/csv": "csv",
     "text/plain": "txt",
+    "text/markdown": "txt",
+    "text/x-markdown": "txt",
+    "application/json": "txt",
+    "text/xml": "txt",
+    "application/xml": "txt",
+    "text/x-python": "txt",
     "message/rfc822": "email",
     "image/png": "image",
     "image/jpeg": "image",
@@ -106,7 +131,38 @@ def detect_document_type(file_path: str) -> DocumentTypeInfo:
     extension = path.suffix.lower()
     extension_guess = _EXTENSION_TO_TYPE.get(extension, "unknown")
 
-    mime_type = magic.from_file(str(path), mime=True)
+    mime_type = None
+    if magic is not None:
+        try:
+            mime_type = magic.from_file(str(path), mime=True)
+        except Exception:
+            mime_type = None
+
+    if mime_type is None:
+        try:
+            header = path.read_bytes()[:64]
+        except Exception:
+            header = b""
+        if header.startswith(b"%PDF"):
+            mime_type = "application/pdf"
+        elif header.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime_type = "image/png"
+        elif header.startswith(b"\xff\xd8\xff"):
+            mime_type = "image/jpeg"
+        elif header.startswith((b"II*\x00", b"MM\x00*")):
+            mime_type = "image/tiff"
+        elif header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WAVE":
+            mime_type = "audio/x-wav"
+        elif header.startswith(b"ID3") or header[:2] in (b"\xff\xfb", b"\xff\xf3"):
+            mime_type = "audio/mpeg"
+        elif header.startswith(b"PK\x03\x04"):
+            mime_type = "application/zip"
+        elif header.startswith(b"\xd0\xcf\x11\xe0"):
+            mime_type = "application/vnd.ms-excel"
+        else:
+            import mimetypes
+            mime_type = mimetypes.guess_type(str(path))[0] or "text/plain"
+
     mime_guess = _MIME_TO_TYPE.get(mime_type, "unknown")
 
     return DocumentTypeInfo(

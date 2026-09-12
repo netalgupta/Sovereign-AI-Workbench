@@ -103,25 +103,20 @@ def get_graph() -> dict:
 # ---------------------------------------------------------------- chunks
 
 @router.get("/chunks")
-def get_chunks(live: bool = Query(False, description="Force a live ingestion (slow)")) -> dict:
-    """Every chunk with metadata, plus the chunk-to-chunk similarity matrix.
-
-    Defaults to the snapshot because a live ingestion is minutes; pass
-    live=true to pay for the current truth.
-    """
+def get_chunks(live: bool = Query(False, description="Force a live ingestion")) -> dict:
+    """Every chunk with metadata, plus the chunk-to-chunk similarity matrix."""
     state = get_state()
-    if not live:
-        snapshot = state.snapshot()
-        if snapshot:
-            return {
-                "source": "snapshot",
-                "written_at": state.snapshot_age(),
-                "chunking": snapshot["chunking"],
-                "embedding_dim": snapshot["embedding_dim"],
-                "pca_explained_variance": snapshot["pca_explained_variance"],
-                "chunks": snapshot["chunks"],
-                "similarity": snapshot["similarity"],
-            }
+    snapshot = state.snapshot()
+    if not live and snapshot and not state.corpus_is_loaded:
+        return {
+            "source": "snapshot",
+            "written_at": state.snapshot_age(),
+            "chunking": snapshot["chunking"],
+            "embedding_dim": snapshot["embedding_dim"],
+            "pca_explained_variance": snapshot["pca_explained_variance"],
+            "chunks": snapshot["chunks"],
+            "similarity": snapshot["similarity"],
+        }
 
     from backend.ingestion.chunking import (
         CHUNK_OVERLAP_TOKENS,
@@ -132,9 +127,25 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion (sl
     from backend.ingestion.embeddings import embed_texts
 
     _store, chunks = state.ensure_corpus()
+    if not chunks:
+        return {
+            "source": "live",
+            "written_at": None,
+            "chunking": {
+                "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+                "chunk_overlap_tokens": CHUNK_OVERLAP_TOKENS,
+                "encoding": TIKTOKEN_ENCODING,
+            },
+            "embedding_dim": 1024,
+            "pca_explained_variance": [0.0, 0.0],
+            "chunks": [],
+            "similarity": [],
+        }
+
     vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
-    coords, explained = _pca_2d(vectors)
+    coords, explained = _pca_2d(vectors) if len(chunks) > 1 else (np.zeros((len(chunks), 2)), [1.0, 0.0])
     similarity = (vectors @ vectors.T).tolist()
+
 
     return {
         "source": "live",
@@ -260,6 +271,50 @@ def get_metrics() -> dict:
     return get_state().metrics()
 
 
+# --------------------------------------------------------------- chunk & embed
+
+class ChunkRequest(BaseModel):
+    text: str
+    source_document: str = "custom"
+
+
+@router.post("/chunk")
+def chunk_endpoint(body: ChunkRequest) -> dict:
+    """Split text into ~512-token chunks with 64-token overlap."""
+    from backend.ingestion.chunking import (
+        CHUNK_OVERLAP_TOKENS,
+        CHUNK_SIZE_TOKENS,
+        TIKTOKEN_ENCODING,
+        chunk_text,
+    )
+
+    chunks = chunk_text(body.text)
+    return {
+        "chunks": chunks,
+        "count": len(chunks),
+        "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+        "chunk_overlap_tokens": CHUNK_OVERLAP_TOKENS,
+        "encoding": TIKTOKEN_ENCODING,
+    }
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+
+
+@router.post("/embed")
+def embed_endpoint(body: EmbedRequest) -> dict:
+    """Generate 1024-dimensional normalized dense embeddings for texts."""
+    from backend.ingestion.embeddings import embed_texts
+
+    vectors = embed_texts(body.texts)
+    return {
+        "embeddings": vectors.tolist(),
+        "dim": int(vectors.shape[1]) if len(vectors.shape) > 1 else 1024,
+        "count": len(vectors),
+    }
+
+
 # --------------------------------------------------------------- sources
 
 @router.get("/sources")
@@ -280,28 +335,484 @@ class AddSourceRequest(BaseModel):
     include_globs: list[str] = []
 
 
-@router.post("/sources")
-def add_source(body: AddSourceRequest) -> dict:
-    """Watch a folder from now on.
+class IngestPathRequest(BaseModel):
+    path: str
 
-    Writes only OUR config — it records a path to READ from. It does not
-    copy, move or modify anything the user owns, which is why it needs no
-    approval gate: there is no user-visible side effect to approve.
-    """
+
+class UploadFileItem(BaseModel):
+    name: str
+    relPath: str | None = None
+    contentBase64: str
+    sizeBytes: int | None = None
+
+
+class UploadSourcesRequest(BaseModel):
+    files: list[UploadFileItem]
+
+
+@router.post("/sources/upload")
+def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
+    """Accept uploaded files, write to disk, and chunk & embed them into FAISS."""
+    import hashlib
+    import json as _json
+
+    state = get_state()
+    target_base_dir = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads"
+    target_base_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = []
+    top_folders: set[str] = set()
+    for f in body.files:
+        # Preserve relative path (subdir/filename) — strip leading slashes/dots only
+        clean_rel = (f.relPath or f.name).replace("\\", "/").lstrip("./")
+        dest = target_base_dir / clean_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            raw_bytes = base64.b64decode(f.contentBase64)
+            dest.write_bytes(raw_bytes)
+            saved_files.append(dest)
+            parts = clean_rel.split("/")
+            if len(parts) > 1 and parts[0]:
+                top_folders.add(parts[0])
+        except Exception:
+            continue
+
+    # Register any top-level uploaded folder as a named corpus source
+    if top_folders:
+        config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        dirs: list[dict] = []
+        if config_file.exists():
+            try:
+                dirs = _json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        for folder in top_folders:
+            folder_path = target_base_dir / folder
+            norm_lower = str(folder_path.resolve()).lower()
+            folder_hash = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+            folder_id = f"dir_{folder_hash}"
+            if not any(str(Path(d.get("path", "")).resolve()).lower() == norm_lower for d in dirs):
+                dirs.append({
+                    "id": folder_id,
+                    "name": folder,
+                    "path": str(folder_path.resolve()),
+                    "isPreset": False,
+                    "isUploadedFolder": True,
+                    "enabled": True,
+                })
+        try:
+            config_file.write_text(_json.dumps(dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    total_chunks = 0
+    all_details = []
+    for sf in saved_files:
+        try:
+            chunks_cnt, details = state.ingest_path(sf)
+            total_chunks += chunks_cnt
+            all_details.extend(details)
+        except Exception as exc:
+            all_details.append({"filename": sf.name, "path": str(sf), "error": str(exc), "chunks": 0})
+
+    return {
+        "success": True,
+        "count": len(saved_files),
+        "total_chunks": total_chunks,
+        "details": all_details,
+        "saved": [{"path": str(sf), "name": sf.name} for sf in saved_files],
+        "added": {"path": str(saved_files[0]), "name": saved_files[0].name} if saved_files else None,
+        "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.post("/sources/dialog/folder")
+def browse_and_add_folder() -> dict:
+    """Open native OS directory dialog to choose a folder on disk, ingest and register it."""
+    import hashlib
+    import json
+    from backend.api.native_picker import pick_folder_gui
+
+    picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
+    if not picked_path:
+        return {"cancelled": True, "message": "Folder selection cancelled"}
+
+    target = Path(picked_path).resolve()
+    if not target.exists():
+        raise HTTPException(404, detail="Selected directory does not exist")
+
     state = get_state()
     try:
-        source = state.watcher.add_source(
-            body.path, recursive=body.recursive, include_globs=body.include_globs
-        )
+        source = state.watcher.add_source(str(target), recursive=True)
+    except Exception:
+        source = None
+
+    try:
+        total_chunks, details = state.ingest_path(target)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Failed to chunk and embed source folder: {exc}") from exc
+
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    norm_path = str(target.resolve())
+    norm_lower = norm_path.lower()
+    hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+
+    found = False
+    for d in dirs:
+        if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+            d["enabled"] = True
+            found = True
+            break
+    if not found:
+        dirs.append({
+            "id": dir_id,
+            "name": target.name or "Custom_Corpus",
+            "path": norm_path,
+            "isPreset": False,
+            "enabled": True,
+        })
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "path": norm_path,
+        "name": target.name,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "directories": dirs,
+        "added": {"path": norm_path, "name": target.name, "id": dir_id},
+        "source": source.model_dump() if source else {"path": norm_path},
+        "message": f"Folder '{target.name}' registered: {total_chunks} chunks indexed in FAISS.",
+    }
+
+
+@router.post("/sources/dialog/files")
+def browse_and_add_files() -> dict:
+    """Open native OS file dialog to choose documents on disk, ingest and register them."""
+    import hashlib
+    import json
+    from backend.api.native_picker import pick_files_gui
+
+    picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
+    if not picked_paths:
+        return {"cancelled": True, "message": "File selection cancelled"}
+
+    state = get_state()
+    total_chunks = 0
+    all_details = []
+    saved_items = []
+
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    for p_str in picked_paths:
+        target = Path(p_str).resolve()
+        try:
+            cnt, details = state.ingest_path(target)
+            total_chunks += cnt
+            all_details.extend(details)
+            saved_items.append({"path": str(target), "name": target.name})
+
+            # Ensure parent folder is tracked in configured_sources so it appears in corpus
+            parent_norm = str(target.parent.resolve())
+            parent_lower = parent_norm.lower()
+            if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
+                dirs.append({
+                    "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
+                    "name": target.parent.name,
+                    "path": parent_norm,
+                    "isPreset": False,
+                    "enabled": True,
+                })
+        except Exception as exc:
+            all_details.append({"filename": target.name, "path": str(target), "error": str(exc), "chunks": 0})
+
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "count": len(picked_paths),
+        "total_chunks": total_chunks,
+        "documents": all_details,
+        "saved": saved_items,
+        "added": saved_items[0] if saved_items else None,
+        "directories": dirs,
+        "message": f"Successfully ingested {len(picked_paths)} document(s): {total_chunks} chunks indexed into FAISS.",
+    }
+
+
+@router.post("/sources/ingest")
+def ingest_source_endpoint(body: IngestPathRequest) -> dict:
+    """Explicit endpoint to chunk, embed, and index a file or directory."""
+    state = get_state()
+    try:
+        total_chunks, details = state.ingest_path(body.path)
     except FileNotFoundError as exc:
-        raise HTTPException(400, detail=str(exc)) from exc
-    return source.model_dump()
+        raise HTTPException(404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Ingestion failed: {exc}") from exc
+
+    return {
+        "success": True,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "message": f"Successfully ingested {len(details)} document(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.get("/corpus")
+def get_corpus() -> dict:
+    """Native corpus endpoint matching configured sources and directory tree."""
+    import json
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if not dirs:
+        dirs = [
+            {
+                "id": "user_uploads_corpus",
+                "name": "User Ingested Sources",
+                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus" / "07_User_Uploads"),
+                "isPreset": True,
+                "isUserUploads": True,
+                "enabled": True,
+            },
+            {
+                "id": "mrpl_rag_corpus",
+                "name": "MRPL_RAG_Test_Corpus",
+                "path": str(Path.cwd() / "MRPL_RAG_Test_Corpus"),
+                "isPreset": True,
+                "enabled": True,
+            },
+            {
+                "id": "mrpl_chart_corpus",
+                "name": "MRPL_Chart_Stress_Corpus",
+                "path": str(Path.cwd() / "MRPL_Chart_Stress_Corpus"),
+                "isPreset": True,
+                "enabled": True,
+            },
+        ]
+
+    tree = []
+    all_items = []
+    custom_subpaths = [
+        str(Path(d.get("path", "")).resolve()).lower()
+        for d in dirs if not d.get("isPreset", False)
+    ]
+
+    for dir_cfg in dirs:
+        p = Path(dir_cfg.get("path", ""))
+        if not dir_cfg.get("enabled", True) or not p.exists():
+            continue
+
+        dir_node = {
+            "id": dir_cfg.get("id"),
+            "name": dir_cfg.get("name", p.name),
+            "fullPath": str(p),
+            "type": "directory",
+            "isRoot": True,
+            "isPreset": dir_cfg.get("isPreset", False),
+            "children": [],
+            "fileCount": 0,
+            "totalSizeBytes": 0,
+        }
+
+        def _scan(current_dir: Path, rel_prefix: str, parent: dict):
+            try:
+                entries = sorted(current_dir.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            except Exception:
+                return
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                entry_rel = f"{rel_prefix}/{entry.name}" if rel_prefix else entry.name
+                clean_id_rel = entry_rel.replace("/", "_").replace("\\", "_")
+                if entry.is_dir():
+                    if dir_cfg.get("id") == "mrpl_rag_corpus" and entry.name == "07_User_Uploads":
+                        continue
+                    if dir_cfg.get("isPreset", False) and str(entry.resolve()).lower() in custom_subpaths:
+                        continue
+                    sub = {
+                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "name": entry.name,
+                        "fullPath": str(entry),
+                        "relPath": entry_rel,
+                        "type": "directory",
+                        "isRoot": False,
+                        "children": [],
+                        "fileCount": 0,
+                        "totalSizeBytes": 0,
+                    }
+                    _scan(entry, entry_rel, sub)
+                    parent["children"].append(sub)
+                    parent["fileCount"] += sub["fileCount"]
+                    parent["totalSizeBytes"] += sub["totalSizeBytes"]
+                elif entry.is_file():
+                    stat = entry.stat()
+                    ext = entry.suffix.lstrip(".").lower()
+                    file_item = {
+                        "id": f"{dir_cfg.get('id')}_{clean_id_rel}",
+                        "name": entry.name,
+                        "type": ext.upper(),
+                        "extension": ext,
+                        "size": f"{round(stat.st_size / 1024, 1)} KB",
+                        "sizeBytes": stat.st_size,
+                        "folder": rel_prefix or dir_cfg.get("name"),
+                        "relPath": entry_rel,
+                        "fullPath": str(entry),
+                        "corpus": dir_cfg.get("name"),
+                        "enabled": True,
+                    }
+                    parent["children"].append({**file_item, "type": "file"})
+                    parent["fileCount"] += 1
+                    parent["totalSizeBytes"] += stat.st_size
+                    all_items.append(file_item)
+
+        _scan(p, "", dir_node)
+        dir_node["sizeDisplay"] = (
+            f"{round(dir_node['totalSizeBytes'] / (1024 * 1024), 2)} MB"
+            if dir_node["totalSizeBytes"] > 1e6
+            else f"{round(dir_node['totalSizeBytes'] / 1024)} KB"
+        )
+        tree.append(dir_node)
+
+    total_bytes = sum(i["sizeBytes"] for i in all_items)
+    return {
+        "directories": dirs,
+        "tree": tree,
+        "sources": all_items,
+        "count": len(all_items),
+        "corpusCount": len(all_items),
+        "totalSizeBytes": total_bytes,
+        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 2)} MB",
+    }
+
+
+@router.post("/sources")
+def add_source(body: AddSourceRequest) -> dict:
+    """Watch a folder or file, chunking and embedding it immediately into the knowledge base."""
+    import hashlib
+    import json
+    state = get_state()
+    target = Path(body.path).resolve()
+    if not target.exists():
+        # Check relative to cwd
+        target = Path.cwd() / body.path
+        if not target.exists():
+            raise HTTPException(400, detail=f"Path does not exist on disk: {body.path}")
+
+    watch_path = str(target if target.is_dir() else target.parent)
+    try:
+        source = state.watcher.add_source(
+            watch_path, recursive=body.recursive, include_globs=body.include_globs
+        )
+    except Exception:
+        source = None
+
+    # Ingest the target (file or directory) for chunking and embedding
+    try:
+        total_chunks, details = state.ingest_path(target)
+    except Exception as exc:
+        raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
+
+    # Synchronize with configured_sources.json
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    dirs = []
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    norm_path = str(target.resolve())
+    norm_lower = norm_path.lower()
+    hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+
+    found = False
+    for d in dirs:
+        if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+            d["enabled"] = True
+            found = True
+            break
+    if not found and target.is_dir():
+        dirs.append({
+            "id": dir_id,
+            "name": target.name or "Custom_Corpus",
+            "path": norm_path,
+            "isPreset": False,
+            "enabled": True,
+        })
+    elif not found and target.is_file():
+        parent_norm = str(target.parent.resolve())
+        parent_lower = parent_norm.lower()
+        if not any(str(Path(d.get("path", "")).resolve()).lower() == parent_lower for d in dirs):
+            dirs.append({
+                "id": f"dir_{hashlib.sha256(parent_lower.encode('utf-8')).hexdigest()[:10]}",
+                "name": target.parent.name,
+                "path": parent_norm,
+                "isPreset": False,
+                "enabled": True,
+            })
+    try:
+        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "total_chunks": total_chunks,
+        "documents": details,
+        "directories": dirs,
+        "added": {"path": norm_path, "name": target.name, "id": dir_id},
+        "source": source.model_dump() if source else {"path": str(target)},
+        "message": f"Source '{target.name}' registered: {total_chunks} chunks created, embedded (1024-d), and indexed in FAISS.",
+    }
 
 
 @router.delete("/sources")
 def remove_source(path: str = Query(...)) -> dict:
-    """Stop watching a folder. Removes nothing from disk."""
-    return {"removed": get_state().watcher.remove_source(path)}
+    """Remove a source file or directory from active knowledge base and vector store."""
+    import json
+    state = get_state()
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    if config_file.exists():
+        try:
+            dirs = json.loads(config_file.read_text(encoding="utf-8"))
+            norm_target = str(Path(path).resolve()).lower()
+            dirs = [
+                d for d in dirs
+                if d.get("id") != path
+                and str(Path(d.get("path", "")).resolve()).lower() != norm_target
+                and d.get("name", "").lower() != norm_target
+            ]
+            config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    return state.delete_source(path)
+
 
 
 @router.post("/sources/scan")
@@ -391,6 +902,42 @@ def call_tool_endpoint(body: ToolCallRequest) -> dict:
     if isinstance(result, bytes):
         return {"result": base64.b64encode(result).decode("ascii"), "encoding": "base64"}
     return {"result": result}
+
+
+# --------------------------------------------------------- contradictions
+
+@router.get("/contradictions")
+def contradictions(live: bool = Query(False)) -> dict:
+    """Documents in the corpus that disagree about the same limit.
+
+    Runs over the whole corpus rather than a query's results,
+    deliberately: a contradiction only matters if you might act on either
+    side of it, and a user who queries one document never sees that
+    another disagrees. This is the sweep that surfaces it unprompted.
+    """
+    from backend.retrieval.contradiction import find_contradictions
+
+    state = get_state()
+    if live or state.corpus_is_loaded:
+        _store, chunks = state.ensure_corpus()
+    else:
+        snapshot = state.snapshot()
+        if not snapshot:
+            raise HTTPException(503, detail="No corpus snapshot; run the ingestion export first.")
+
+        class _C:
+            def __init__(self, text, source):
+                self.text = text
+                self.source_document = source
+
+        chunks = [_C(c["text"], c["source_document"]) for c in snapshot["chunks"]]
+
+    found = find_contradictions(chunks)
+    return {
+        "checked_chunks": len(chunks),
+        "contradictions": [c.model_dump() for c in found],
+        "high_severity": sum(1 for c in found if c.severity == "high"),
+    }
 
 
 # ------------------------------------------------------------------- plan

@@ -296,7 +296,10 @@ def _extract_docx(
     # DOCX has no reliable page boundaries at the file-format level
     # (pagination depends on the renderer/font/margins) — per spec,
     # page_number is genuinely None here, not a missing value.
-    doc = DocxDocument(file_path)
+    try:
+        doc = DocxDocument(file_path)
+    except Exception:
+        return _extract_txt(file_path)
     parts = []
     for block in _iter_block_items(doc):
         if isinstance(block, DocxParagraph):

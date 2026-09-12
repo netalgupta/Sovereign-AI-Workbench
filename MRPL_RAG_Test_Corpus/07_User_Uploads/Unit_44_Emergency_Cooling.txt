@@ -1,0 +1,1 @@
+Unit 44 Emergency Cooling Protocol: In case of cooling water pump failure, operator must engage secondary nitrogen purge within 90 seconds.

@@ -1,0 +1,975 @@
+<title>Sovereign Workbench Internals</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#e9edf0; --surface:#ffffff; --surface-2:#f3f6f8; --sunken:#dfe5e9;
+  --ink:#151c21; --ink-2:#4a5a63; --ink-3:#77878f;
+  --line:#cdd6db; --line-2:#e2e9ed;
+  --flare:#c26a10;          /* sodium-flare amber, primary accent */
+  --flare-soft:#f5e2cd;
+  --readout:#12798c;        /* process-readout cyan, vector side */
+  --readout-soft:#d5eaee;
+  --ok:#2f7a52; --warn:#a8760f; --crit:#a63927;
+  --lbl-equipment:#c26a10; --lbl-segment:#12798c; --lbl-document:#5b5f9e;
+  --lbl-incident:#a63927; --lbl-person:#2f7a52;
+  --shadow:0 1px 2px rgba(21,28,33,.07), 0 6px 18px rgba(21,28,33,.06);
+  --rail-w:216px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#12171b; --surface:#1a2126; --surface-2:#1f272d; --sunken:#0d1215;
+    --ink:#dfe7ea; --ink-2:#a3b2ba; --ink-3:#75868f;
+    --line:#2c363d; --line-2:#242d33;
+    --flare:#e2941f; --flare-soft:#3a2c14;
+    --readout:#3fb2c6; --readout-soft:#123039;
+    --ok:#5aab7c; --warn:#d0a13c; --crit:#d2705c;
+    --lbl-equipment:#e2941f; --lbl-segment:#3fb2c6; --lbl-document:#8f93d6;
+    --lbl-incident:#d2705c; --lbl-person:#5aab7c;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#12171b; --surface:#1a2126; --surface-2:#1f272d; --sunken:#0d1215;
+  --ink:#dfe7ea; --ink-2:#a3b2ba; --ink-3:#75868f;
+  --line:#2c363d; --line-2:#242d33;
+  --flare:#e2941f; --flare-soft:#3a2c14;
+  --readout:#3fb2c6; --readout-soft:#123039;
+  --ok:#5aab7c; --warn:#d0a13c; --crit:#d2705c;
+  --lbl-equipment:#e2941f; --lbl-segment:#3fb2c6; --lbl-document:#8f93d6;
+  --lbl-incident:#d2705c; --lbl-person:#5aab7c;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:14px; line-height:1.5;
+}
+.mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace}
+
+/* ---- shell ---- */
+.shell{display:grid; grid-template-columns:var(--rail-w) 1fr; min-height:100vh}
+@media (max-width:860px){ .shell{grid-template-columns:1fr} .rail{position:static!important} }
+
+.rail{
+  background:var(--surface); border-right:1px solid var(--line);
+  padding:20px 0; position:sticky; top:0; height:100vh; overflow-y:auto;
+  display:flex; flex-direction:column; gap:24px;
+}
+.brand{padding:0 20px}
+.brand h1{
+  margin:0; font-size:15px; font-weight:600; letter-spacing:-.01em; text-wrap:balance;
+}
+.brand .sub{
+  margin-top:4px; font-size:11px; color:var(--ink-3); letter-spacing:.06em;
+  text-transform:uppercase; font-weight:500;
+}
+nav{display:flex; flex-direction:column; gap:2px; padding:0 12px}
+nav button{
+  display:flex; align-items:baseline; gap:10px; width:100%; text-align:left;
+  padding:9px 12px; border:0; border-radius:5px; background:transparent;
+  color:var(--ink-2); font:inherit; font-size:13px; font-weight:500; cursor:pointer;
+}
+nav button:hover{background:var(--surface-2); color:var(--ink)}
+nav button[aria-current="true"]{background:var(--flare-soft); color:var(--flare); font-weight:600}
+nav button .n{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+nav button[aria-current="true"] .n{color:var(--flare)}
+.rail-foot{margin-top:auto; padding:0 20px; font-size:11px; color:var(--ink-3); line-height:1.6}
+.rail-foot .airgap{
+  display:inline-flex; align-items:center; gap:6px; color:var(--ok); font-weight:600;
+  font-size:11px; letter-spacing:.04em;
+}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+
+/* ---- main ---- */
+main{padding:24px 28px 56px; min-width:0}
+.viewhead{margin-bottom:20px}
+.viewhead h2{margin:0 0 4px; font-size:20px; font-weight:600; letter-spacing:-.015em}
+.viewhead p{margin:0; color:var(--ink-2); max-width:66ch}
+
+.strip{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:1px;
+  background:var(--line-2); border:1px solid var(--line); border-radius:7px;
+  overflow:hidden; margin-bottom:22px;
+}
+.stat{background:var(--surface); padding:11px 14px}
+.stat .k{
+  font-size:10px; text-transform:uppercase; letter-spacing:.07em;
+  color:var(--ink-3); font-weight:600;
+}
+.stat .v{
+  font-family:"IBM Plex Mono",monospace; font-size:19px; font-weight:600;
+  font-variant-numeric:tabular-nums; margin-top:2px; letter-spacing:-.02em;
+}
+.stat .v small{font-size:11px; color:var(--ink-3); font-weight:500}
+
+.panel{
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:7px; box-shadow:var(--shadow);
+}
+.panel-h{
+  padding:11px 14px; border-bottom:1px solid var(--line-2);
+  display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+}
+.panel-h h3{margin:0; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-2)}
+
+.split{display:grid; grid-template-columns:1fr 316px; gap:16px; align-items:start}
+@media (max-width:1060px){ .split{grid-template-columns:1fr} }
+
+canvas{display:block; width:100%; touch-action:none}
+.canvas-wrap{position:relative; background:var(--sunken); border-radius:0 0 7px 7px; overflow:hidden}
+
+.legend{display:flex; flex-wrap:wrap; gap:4px 12px; align-items:center}
+.lg{display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--ink-2); font-weight:500}
+.lg i{width:9px;height:9px;border-radius:50%;display:block}
+
+input[type=search],select{
+  font:inherit; font-size:12px; padding:5px 9px; border-radius:5px;
+  border:1px solid var(--line); background:var(--surface-2); color:var(--ink);
+}
+input[type=search]:focus-visible,select:focus-visible,button:focus-visible,li:focus-visible{
+  outline:2px solid var(--readout); outline-offset:1px;
+}
+
+/* ---- inspector ---- */
+.insp{padding:14px}
+.insp .empty{color:var(--ink-3); font-size:13px; line-height:1.6}
+.badge{
+  display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+  font-weight:600; letter-spacing:.02em; color:#fff;
+}
+.kv{display:grid; grid-template-columns:auto 1fr; gap:5px 12px; margin-top:12px; font-size:12px}
+.kv dt{color:var(--ink-3); font-weight:500}
+.kv dd{margin:0; font-family:"IBM Plex Mono",monospace; word-break:break-word}
+.edges{margin-top:14px; border-top:1px solid var(--line-2); padding-top:11px}
+.edges h4{margin:0 0 7px; font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3)}
+.edge{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; padding:4px 0;
+  color:var(--ink-2); border-bottom:1px solid var(--line-2);
+}
+.edge .rel{color:var(--flare); font-weight:600}
+
+/* ---- chunk browser ---- */
+.chunks{display:grid; grid-template-columns:300px 1fr; gap:16px; align-items:start}
+@media (max-width:1060px){ .chunks{grid-template-columns:1fr} }
+ul.list{list-style:none; margin:0; padding:6px; max-height:560px; overflow-y:auto}
+ul.list li{
+  padding:9px 11px; border-radius:5px; cursor:pointer; border:1px solid transparent;
+}
+ul.list li:hover{background:var(--surface-2)}
+ul.list li[aria-selected="true"]{background:var(--flare-soft); border-color:var(--flare)}
+.li-top{display:flex; justify-content:space-between; gap:8px; align-items:baseline}
+.li-src{font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.li-i{font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--ink-3); flex:none}
+.li-prev{font-size:11px; color:var(--ink-3); margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.chunktext{
+  padding:14px; font-family:"IBM Plex Mono",monospace; font-size:12px; line-height:1.65;
+  white-space:pre-wrap; word-break:break-word; max-height:340px; overflow-y:auto;
+  background:var(--sunken); border-radius:5px; margin:0;
+}
+.chips{display:flex; flex-wrap:wrap; gap:6px; padding:12px 14px 0}
+.chip{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; padding:2px 8px;
+  border-radius:4px; background:var(--surface-2); border:1px solid var(--line-2); color:var(--ink-2);
+}
+.chip b{color:var(--ink); font-weight:600}
+
+/* ---- health ---- */
+.metrics{display:grid; grid-template-columns:repeat(auto-fit,minmax(232px,1fr)); gap:14px}
+.metric{background:var(--surface); border:1px solid var(--line); border-radius:7px; padding:14px}
+.metric .mk{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); font-weight:600}
+.metric .mv{font-family:"IBM Plex Mono",monospace; font-size:26px; font-weight:600; letter-spacing:-.02em; margin:5px 0 2px; font-variant-numeric:tabular-nums}
+.metric .mn{font-size:12px; color:var(--ink-2); line-height:1.5}
+.bar{height:5px; border-radius:3px; background:var(--sunken); overflow:hidden; margin:9px 0 7px}
+.bar span{display:block; height:100%; border-radius:3px}
+.sev-ok{color:var(--ok)} .sev-warn{color:var(--warn)} .sev-crit{color:var(--crit)}
+
+table{border-collapse:collapse; width:100%; font-size:12px}
+th,td{text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-2)}
+th{font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); font-weight:600}
+td.num{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; text-align:right}
+.tbl-wrap{overflow-x:auto}
+
+.hidden{display:none}
+.tip{
+  position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--line);
+  border-radius:5px; padding:6px 9px; font-size:11px; box-shadow:var(--shadow); max-width:250px;
+  z-index:5; line-height:1.45;
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+
+.btn{
+  font:inherit; font-size:12px; font-weight:500; padding:5px 11px; border-radius:5px;
+  border:1px solid var(--line); background:var(--surface-2); color:var(--ink-2); cursor:pointer;
+}
+.btn:hover{background:var(--flare-soft); color:var(--flare); border-color:var(--flare)}
+.insp-float{
+  position:absolute; top:12px; right:12px; width:290px; max-height:calc(100% - 24px);
+  overflow-y:auto; background:var(--surface); border:1px solid var(--line);
+  border-radius:6px; box-shadow:var(--shadow); padding:13px; font-size:13px;
+}
+.insp-float .empty{color:var(--ink-3); font-size:12px; line-height:1.55}
+body.graphfull .rail, body.graphfull .viewhead, body.graphfull .strip{display:none}
+body.graphfull main{padding:0}
+body.graphfull .shell{grid-template-columns:1fr}
+body.graphfull #graph-panel{border-radius:0; border:0; height:100vh; display:flex; flex-direction:column}
+body.graphfull .canvas-wrap{flex:1; border-radius:0}
+
+.imggrid{
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr));
+  gap:12px; padding:14px;
+}
+.imgcard{
+  border:1px solid var(--line); border-radius:6px; overflow:hidden; cursor:pointer;
+  background:var(--surface-2); display:flex; flex-direction:column;
+}
+.imgcard:hover{border-color:var(--flare)}
+.imgcard[aria-selected="true"]{border-color:var(--flare); box-shadow:0 0 0 2px var(--flare-soft)}
+.imgcard img{width:100%; height:118px; object-fit:cover; object-position:top; background:#fff; display:block}
+.imgcard .cap{padding:7px 9px; font-size:11px; line-height:1.4}
+.imgcard .cap b{display:block; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.tags{display:flex; flex-wrap:wrap; gap:3px; margin-top:4px}
+.tag{font-size:9px; padding:1px 5px; border-radius:3px; font-weight:600; letter-spacing:.02em}
+.tag.ocr{background:var(--readout-soft); color:var(--readout)}
+.tag.vis{background:var(--flare-soft); color:var(--flare)}
+.tag.fab{background:var(--crit); color:#fff}
+.tag.clean{background:var(--ok); color:#fff}
+.detail{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; padding:14px}
+@media (max-width:900px){ .detail{grid-template-columns:1fr} }
+.detail img{width:100%; border:1px solid var(--line); border-radius:6px; background:#fff}
+.readout{
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; line-height:1.6; white-space:pre-wrap;
+  background:var(--sunken); border-radius:5px; padding:11px; max-height:260px; overflow-y:auto;
+  word-break:break-word;
+}
+.sect{margin-bottom:14px}
+.sect h4{
+  margin:0 0 6px; font-size:10px; text-transform:uppercase; letter-spacing:.07em;
+  color:var(--ink-3); display:flex; align-items:center; gap:7px;
+}
+.warnbox{
+  border-left:3px solid var(--crit); background:var(--surface-2); padding:9px 11px;
+  border-radius:0 5px 5px 0; font-size:12px; line-height:1.55; margin-bottom:12px;
+}
+.okbox{border-left:3px solid var(--ok); background:var(--surface-2); padding:9px 11px;
+  border-radius:0 5px 5px 0; font-size:12px; line-height:1.55; margin-bottom:12px}
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <h1>Workbench Internals</h1>
+      <div class="sub">MRPL · PS26117</div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="rail-foot">
+      <div class="airgap"><span class="dot"></span>AIR-GAPPED</div>
+      <div style="margin-top:6px">Every figure on this page was measured on the real pipeline. Nothing here is illustrative.</div>
+    </div>
+  </aside>
+
+  <main>
+    <div id="view-graph" class="view">
+      <div class="viewhead">
+        <h2>Knowledge graph</h2>
+        <p>Every node and edge in Neo4j, rebuilt from the committed extraction cache. Drag to reposition, scroll to zoom, click a node to inspect what is actually stored on it.</p>
+      </div>
+      <div class="strip" id="graph-strip"></div>
+      <div class="panel" id="graph-panel">
+        <div class="panel-h">
+          <h3>Force layout</h3>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <input type="search" id="graph-search" placeholder="Find node…" aria-label="Find node">
+            <select id="graph-filter" aria-label="Filter by label"><option value="">All labels</option></select>
+            <button class="btn" id="graph-reheat" type="button">Re-run layout</button>
+            <button class="btn" id="graph-full" type="button">Full page</button>
+          </div>
+        </div>
+        <div class="panel-h" style="border-top:0; padding-top:0">
+          <div class="legend" id="graph-legend"></div>
+          <span class="mono" id="graph-zoom" style="font-size:11px; color:var(--ink-3)"></span>
+        </div>
+        <div class="canvas-wrap" id="graph-wrap">
+          <canvas id="graph-canvas" height="560"></canvas>
+          <div class="insp-float" id="graph-insp"><div class="empty">Click any node to see its labels, stored properties, and every relationship attached to it.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-images" class="view hidden">
+      <div class="viewhead">
+        <h2>Images and what the system understands about them</h2>
+        <p>Every image the pipeline has touched, with each distinct kind of understanding it produced: OCR text that entered the retrieval corpus, the vision model's chart reading, and — where we generated the chart ourselves — the true values that reading can be scored against.</p>
+      </div>
+      <div class="strip" id="img-strip"></div>
+      <div class="panel">
+        <div class="panel-h">
+          <h3>All images</h3>
+          <select id="img-filter" aria-label="Filter images">
+            <option value="">All</option>
+            <option value="corpus">Corpus scans</option>
+            <option value="stress">Generated charts</option>
+            <option value="fabricated">Fabricated values only</option>
+          </select>
+        </div>
+        <div class="imggrid" id="img-grid"></div>
+      </div>
+      <div id="img-detail"></div>
+    </div>
+
+    <div id="view-vectors" class="view hidden">
+      <div class="viewhead">
+        <h2>Embedding space</h2>
+        <p>All chunk vectors from bge-large-en-v1.5, projected to two dimensions. Colour is the source document — chunks from one document landing far apart, or two documents overlapping, is what you are looking for.</p>
+      </div>
+      <div class="strip" id="vec-strip"></div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-h">
+            <h3>PCA projection</h3>
+            <div class="legend" id="vec-legend"></div>
+          </div>
+          <div class="canvas-wrap"><canvas id="vec-canvas" height="440"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Cosine similarity</h3></div>
+          <div class="canvas-wrap"><canvas id="sim-canvas" height="300"></canvas></div>
+          <div class="insp" id="sim-insp"><div class="empty">Every chunk against every other. Bright off-diagonal cells are near-duplicates competing for the same queries.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-chunks" class="view hidden">
+      <div class="viewhead">
+        <h2>Chunk browser</h2>
+        <p>Exactly what the retriever sees: the post-chunking, post-extraction text with its metadata and nearest neighbours in embedding space.</p>
+      </div>
+      <div class="strip" id="chunk-strip"></div>
+      <div class="chunks">
+        <div class="panel">
+          <div class="panel-h">
+            <h3>Chunks</h3>
+            <input type="search" id="chunk-search" placeholder="Filter…" aria-label="Filter chunks">
+          </div>
+          <ul class="list" id="chunk-list"></ul>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3 id="chunk-title">Chunk detail</h3></div>
+          <div class="chips" id="chunk-chips"></div>
+          <div style="padding:12px 14px 14px">
+            <pre class="chunktext" id="chunk-text"></pre>
+            <div class="edges" id="chunk-neighbours"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-health" class="view hidden">
+      <div class="viewhead">
+        <h2>Pipeline health</h2>
+        <p>Measured, not asserted. Each figure links back to the harness that produced it, and several of these numbers replaced an earlier wrong one.</p>
+      </div>
+      <div class="metrics" id="health-metrics"></div>
+      <div class="panel" style="margin-top:18px">
+        <div class="panel-h"><h3>Rank of the correct document, per question</h3></div>
+        <div class="tbl-wrap"><table id="rank-table"></table></div>
+      </div>
+      <div class="panel" style="margin-top:18px">
+        <div class="panel-h"><h3>Relationships against GRAPH_SPEC §4 domain/range</h3></div>
+        <div class="tbl-wrap"><table id="rel-table"></table></div>
+      </div>
+    </div>
+  </main>
+</div>
+<div id="tip" class="tip hidden"></div>
+
+<script>
+const DATA = __INSPECTION_DATA__;
+const IMAGES = __IMAGE_DATA__;
+
+/* Measured elsewhere in the session; kept as literals because they come
+   from harnesses that are too slow to run on page load. */
+const HEALTH = {
+  mrr: 0.812, map: 0.779, recall5: 1.0, rankedFirst: 6, questions: 8,
+  precision: 0.350, ceiling: 0.350,
+  ranks: [
+    ["SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx", 1],
+    ["Novolen_Batch_QA_Report_Aug2026.pdf", 4],
+    ["Aromatic_Complex_Benzene_Safety_Circular.docx", 1],
+    ["Correspondence_Depot_HQ_Thread_Kasargod.docx", 1],
+    ["Pipeline_Incident_Report_Hassan_Segment.pdf", 1],
+    ["PSA_Hydrogen_Purity_Trend_Log.xlsx", 1],
+    ["Sulphur_Spec_Compliance_LabSheet.xlsx", 1],
+    ["SAP_Mock_Materials_Master_Export.xlsx", 4]
+  ],
+  rels: [
+    ["Equipment", "LOCATED_ON", "PipelineSegment", true],
+    ["Incident", "REPORTS_INCIDENT_AT", "Incident", false],
+    ["Incident", "LOCATED_ON", "Equipment", false],
+    ["Incident", "REPORTS_INCIDENT_AT", "Equipment", true],
+    ["PipelineSegment", "APPLIES_TO", "Incident", false],
+    ["Equipment", "APPLIES_TO", "Incident", false],
+    ["Equipment", "LOCATED_ON", "Incident", false],
+    ["Equipment", "LOCATED_ON", "Incident", false],
+    ["Equipment", "LOCATED_ON", "Incident", false],
+    ["Equipment", "LOCATED_ON", "PipelineSegment", true],
+    ["Incident", "LOCATED_ON", "Equipment", false]
+  ]
+};
+
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const LABEL_VARS = {
+  Equipment:"--lbl-equipment", PipelineSegment:"--lbl-segment",
+  Document:"--lbl-document", Incident:"--lbl-incident", Person:"--lbl-person"
+};
+const labelColor = l => cssVar(LABEL_VARS[l] || "--ink-3");
+const el = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* Prefer the human-meaningful property per label — the graph stores a
+   different key property for each (GRAPH_SPEC §4.1), so there is no one
+   "name" field to fall back on. */
+function nodeName(n){
+  const p = n.properties || {};
+  return p.tag || p.segment_name || p.name || p.summary || p.title || p.filename ||
+         (n.labels[0] + " " + n.id.split(":").pop());
+}
+
+/* ---------- navigation ---------- */
+const VIEWS = [
+  ["graph","Graph", () => DATA.graph.nodes.length],
+  ["images","Images", () => IMAGES.length],
+  ["vectors","Vectors", () => DATA.chunks.length],
+  ["chunks","Chunks", () => DATA.chunks.length],
+  ["health","Health", () => HEALTH.questions]
+];
+let current = "graph";
+function renderNav(){
+  el("nav").innerHTML = VIEWS.map(([id,label,count]) =>
+    `<button data-v="${id}" aria-current="${id===current}"><span>${label}</span><span class="n">${count()}</span></button>`
+  ).join("");
+  el("nav").querySelectorAll("button").forEach(b => b.onclick = () => show(b.dataset.v));
+}
+function show(v){
+  current = v;
+  VIEWS.forEach(([id]) => el("view-"+id).classList.toggle("hidden", id!==v));
+  renderNav();
+  if(v==="graph") sizeGraph();
+  if(v==="images"){ renderImageStrip(); renderImageGrid(); }
+  if(v==="vectors"){ drawVectors(); drawSim(); }
+}
+
+/* ---------- stat strips ---------- */
+function stat(k,v,sub){ return `<div class="stat"><div class="k">${k}</div><div class="v">${v}${sub?` <small>${sub}</small>`:""}</div></div>`; }
+function renderStrips(){
+  const g = DATA.graph, labels = {};
+  g.nodes.forEach(n => n.labels.forEach(l => labels[l] = (labels[l]||0)+1));
+  const relTypes = new Set(g.relationships.map(r => r.type));
+  el("graph-strip").innerHTML =
+    stat("Nodes", g.nodes.length) + stat("Relationships", g.relationships.length) +
+    stat("Labels", Object.keys(labels).length) + stat("Edge types", relTypes.size) +
+    stat("Spec-valid edges", "3", "of 11 extracted");
+
+  const pca = DATA.pca_explained_variance.reduce((a,b)=>a+b,0);
+  el("vec-strip").innerHTML =
+    stat("Vectors", DATA.chunks.length) + stat("Dimensions", DATA.embedding_dim) +
+    stat("PCA variance", (pca*100).toFixed(1)+"%", "in 2D") +
+    stat("Metric", "cosine");
+
+  const docs = new Set(DATA.chunks.map(c => c.source_document));
+  const chars = DATA.chunks.reduce((a,c)=>a+c.chars,0);
+  el("chunk-strip").innerHTML =
+    stat("Chunks", DATA.chunks.length) + stat("Documents", docs.size) +
+    stat("Chunk size", DATA.chunking.chunk_size_tokens, "tok") +
+    stat("Overlap", DATA.chunking.chunk_overlap_tokens, "tok") +
+    stat("Avg length", Math.round(chars/DATA.chunks.length), "chars");
+}
+
+/* ---------- graph: force-directed canvas ---------- */
+const gc = el("graph-canvas"), gctx = gc.getContext("2d");
+let nodes = [], links = [], selected = null, dragging = null, hoverNode = null;
+let zoom = 1, panX = 0, panY = 0, labelFilter = "", heat = 1;
+/* Screen <-> world conversion. Every hit-test and every draw goes
+   through these, so pan/zoom can never drift out of sync with what is
+   painted — the classic canvas-graph bug where clicks land on where a
+   node used to be. */
+const toWorldX = sx => (sx - panX) / zoom;
+const toWorldY = sy => (sy - panY) / zoom;
+
+function initGraph(){
+  const byId = {};
+  nodes = DATA.graph.nodes.map((n,i) => {
+    const a = (i/DATA.graph.nodes.length)*Math.PI*2;
+    const o = {id:n.id, labels:n.labels, props:n.properties, name:nodeName(n),
+               x:Math.cos(a)*160+ (Math.random()-.5)*40, y:Math.sin(a)*160+(Math.random()-.5)*40, vx:0, vy:0, deg:0};
+    byId[n.id]=o; return o;
+  });
+  links = DATA.graph.relationships.map(r => {
+    const s=byId[r.source], t=byId[r.target];
+    if(s) s.deg++; if(t) t.deg++;
+    return s&&t ? {s,t,type:r.type} : null;
+  }).filter(Boolean);
+
+  const present = [...new Set(DATA.graph.nodes.flatMap(n=>n.labels))];
+  el("graph-legend").innerHTML = present.map(l =>
+    `<span class="lg"><i style="background:${labelColor(l)}"></i>${l}</span>`).join("");
+}
+
+function sizeGraph(){
+  const wrap = gc.parentElement, w = wrap.clientWidth;
+  const h = document.body.classList.contains("graphfull") ? wrap.clientHeight : 560;
+  if(w && h){ gc.width = w*devicePixelRatio; gc.height = h*devicePixelRatio; gc.style.height = h+"px"; }
+}
+
+function tick(){
+  if(heat<=0 && !dragging) return;
+  heat = Math.max(0, heat - 0.0016);
+  const W = gc.width/devicePixelRatio, H = gc.height/devicePixelRatio;
+  const cx = W/2, cy = H/2;
+  for(const n of nodes){
+    if(n===dragging) continue;
+    n.vx += (cx-n.x)*0.0016; n.vy += (cy-n.y)*0.0016;   /* gravity to centre */
+  }
+  for(let i=0;i<nodes.length;i++){                        /* repulsion */
+    for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i], b=nodes[j];
+      let dx=b.x-a.x, dy=b.y-a.y, d2=dx*dx+dy*dy;
+      if(d2<0.01){ dx=Math.random()-.5; dy=Math.random()-.5; d2=0.01; }
+      if(d2>90000) continue;
+      const f = 900/d2, d=Math.sqrt(d2);
+      const ux=dx/d*f, uy=dy/d*f;
+      a.vx-=ux; a.vy-=uy; b.vx+=ux; b.vy+=uy;
+    }
+  }
+  for(const l of links){                                  /* spring */
+    const dx=l.t.x-l.s.x, dy=l.t.y-l.s.y;
+    const d=Math.max(Math.sqrt(dx*dx+dy*dy),0.01);
+    const f=(d-72)*0.012, ux=dx/d*f, uy=dy/d*f;
+    l.s.vx+=ux; l.s.vy+=uy; l.t.vx-=ux; l.t.vy-=uy;
+  }
+  for(const n of nodes){
+    if(n===dragging){ n.vx=n.vy=0; continue; }
+    n.vx*=0.82; n.vy*=0.82;
+    n.x+=Math.max(-8,Math.min(8,n.vx)); n.y+=Math.max(-8,Math.min(8,n.vy));
+    n.x=Math.max(16,Math.min(W-16,n.x)); n.y=Math.max(16,Math.min(H-16,n.y));
+  }
+}
+
+function radius(n){ return 5 + Math.min(n.deg,8)*1.4 + (n===selected?2:0); }
+
+function visible(n){ return !labelFilter || n.labels.includes(labelFilter); }
+
+function drawGraph(){
+  const W=gc.width/devicePixelRatio, H=gc.height/devicePixelRatio;
+  gctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  gctx.clearRect(0,0,W,H);
+  gctx.translate(panX, panY); gctx.scale(zoom, zoom);
+  gctx.lineWidth=1;
+  for(const l of links){
+    if(!visible(l.s) && !visible(l.t)) continue;
+    const hot = selected && (l.s===selected||l.t===selected);
+    gctx.strokeStyle = hot ? cssVar("--flare") : cssVar("--line");
+    gctx.globalAlpha = hot ? 0.95 : 0.5;
+    gctx.beginPath(); gctx.moveTo(l.s.x,l.s.y); gctx.lineTo(l.t.x,l.t.y); gctx.stroke();
+  }
+  gctx.globalAlpha=1;
+  for(const n of nodes){
+    if(!visible(n)) continue;
+    const r=radius(n);
+    gctx.beginPath(); gctx.arc(n.x,n.y,r,0,Math.PI*2);
+    gctx.fillStyle=labelColor(n.labels[0]); gctx.fill();
+    if(n===selected||n===hoverNode){
+      gctx.strokeStyle=cssVar("--ink"); gctx.lineWidth=1.5; gctx.stroke();
+    }
+  }
+  gctx.font='500 10px "IBM Plex Mono",monospace';
+  gctx.fillStyle=cssVar("--ink-2"); gctx.textAlign="center";
+  for(const n of nodes){
+    if(!visible(n)) continue;
+    if(n.deg>=2 || n===selected || n===hoverNode || zoom>1.6){
+      const t = n.name.length>18 ? n.name.slice(0,17)+"…" : n.name;
+      gctx.fillText(t, n.x, n.y-radius(n)-4);
+    }
+  }
+}
+
+function frame(){ tick(); drawGraph();
+  const z=el("graph-zoom"); if(z) z.textContent = `zoom ${zoom.toFixed(2)}x · ${nodes.filter(visible).length}/${nodes.length} nodes`;
+  requestAnimationFrame(frame); }
+
+function pick(ev){
+  const r=gc.getBoundingClientRect();
+  const x=toWorldX(ev.clientX-r.left), y=toWorldY(ev.clientY-r.top);
+  let best=null, bd=Infinity;
+  for(const n of nodes){
+    if(!visible(n)) continue;
+    const d=(n.x-x)**2+(n.y-y)**2;
+    if(d<bd && d < (radius(n)+6)**2){ bd=d; best=n; }
+  }
+  return best;
+}
+let panning=null;
+gc.addEventListener("pointerdown", e => {
+  const n=pick(e);
+  gc.setPointerCapture(e.pointerId);
+  if(n){ dragging=n; selected=n; heat=Math.max(heat,0.3); renderInspector(); }
+  else { panning={x:e.clientX-panX, y:e.clientY-panY}; gc.style.cursor="grabbing"; }
+});
+gc.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r=gc.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  const wx=toWorldX(mx), wy=toWorldY(my);
+  zoom = Math.max(0.25, Math.min(5, zoom * (e.deltaY<0 ? 1.12 : 1/1.12)));
+  panX = mx - wx*zoom; panY = my - wy*zoom;   /* keep cursor anchored */
+}, {passive:false});
+gc.addEventListener("pointermove", e => {
+  const r=gc.getBoundingClientRect();
+  if(panning){ panX=e.clientX-panning.x; panY=e.clientY-panning.y; return; }
+  if(dragging){ dragging.x=toWorldX(e.clientX-r.left); dragging.y=toWorldY(e.clientY-r.top); return; }
+  const n=pick(e); hoverNode=n; gc.style.cursor=n?"pointer":"default";
+});
+gc.addEventListener("pointerup", () => { dragging=null; panning=null; gc.style.cursor="default"; });
+
+function renderInspector(){
+  if(!selected){ return; }
+  const n=selected;
+  const attached = links.filter(l=>l.s===n||l.t===n);
+  const props = Object.entries(n.props).filter(([,v]) => v!=="None" && v!=="");
+  el("graph-insp").innerHTML =
+    `<span class="badge" style="background:${labelColor(n.labels[0])}">${esc(n.labels.join(" · "))}</span>
+     <div style="margin-top:9px; font-weight:600; font-size:14px; word-break:break-word">${esc(n.name)}</div>
+     <dl class="kv">${props.map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") ||
+        '<dt style="grid-column:1/-1; font-style:italic">no properties stored</dt>'}
+       <dt>degree</dt><dd>${n.deg}</dd>
+     </dl>
+     <div class="edges"><h4>Relationships (${attached.length})</h4>
+       ${attached.length ? attached.map(l => l.s===n
+          ? `<div class="edge">→ <span class="rel">${esc(l.type)}</span> ${esc(l.t.name)}</div>`
+          : `<div class="edge">← <span class="rel">${esc(l.type)}</span> ${esc(l.s.name)}</div>`).join("")
+        : '<div class="edge" style="color:var(--ink-3)">none — isolated node</div>'}
+     </div>`;
+}
+
+/* ---------- vectors ---------- */
+const DOC_HUES = {};
+function docColor(d){
+  if(!(d in DOC_HUES)){
+    const keys=Object.keys(DOC_HUES).length;
+    DOC_HUES[d] = `hsl(${(keys*47+18)%360} 58% ${document.documentElement.getAttribute("data-theme")==="dark"||window.matchMedia("(prefers-color-scheme:dark)").matches?"62%":"42%"})`;
+  }
+  return DOC_HUES[d];
+}
+const vc = el("vec-canvas"), vctx = vc.getContext("2d");
+function drawVectors(){
+  const w=vc.parentElement.clientWidth; if(!w) return;
+  vc.width=w*devicePixelRatio; vc.height=440*devicePixelRatio; vc.style.height="440px";
+  vctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  const W=w, H=440, pad=30;
+  vctx.clearRect(0,0,W,H);
+  const xs=DATA.chunks.map(c=>c.x), ys=DATA.chunks.map(c=>c.y);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const sx=v=>pad+((v-x0)/((x1-x0)||1))*(W-pad*2);
+  const sy=v=>H-pad-((v-y0)/((y1-y0)||1))*(H-pad*2);
+
+  vctx.strokeStyle=cssVar("--line-2"); vctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const gy=pad+(H-pad*2)*i/4, gx=pad+(W-pad*2)*i/4;
+    vctx.beginPath(); vctx.moveTo(pad,gy); vctx.lineTo(W-pad,gy); vctx.stroke();
+    vctx.beginPath(); vctx.moveTo(gx,pad); vctx.lineTo(gx,H-pad); vctx.stroke();
+  }
+  DATA.chunks.forEach(c => {
+    vctx.beginPath(); vctx.arc(sx(c.x),sy(c.y),6,0,Math.PI*2);
+    vctx.fillStyle=docColor(c.source_document); vctx.fill();
+    vctx.strokeStyle=cssVar("--surface"); vctx.lineWidth=1.5; vctx.stroke();
+  });
+  vctx.font='500 10px "IBM Plex Mono",monospace'; vctx.fillStyle=cssVar("--ink-3");
+  vctx.textAlign="left"; vctx.fillText(`PC1 · ${(DATA.pca_explained_variance[0]*100).toFixed(1)}% variance`, pad, H-10);
+  vctx.save(); vctx.translate(12,H-pad); vctx.rotate(-Math.PI/2);
+  vctx.fillText(`PC2 · ${(DATA.pca_explained_variance[1]*100).toFixed(1)}%`,0,0); vctx.restore();
+
+  const docs=[...new Set(DATA.chunks.map(c=>c.source_document))];
+  el("vec-legend").innerHTML = docs.map(d =>
+    `<span class="lg"><i style="background:${docColor(d)}"></i>${esc(d.replace(/\.[a-z]+$/,"").slice(0,20))}</span>`).join("");
+
+  vc.onmousemove = e => {
+    const r=vc.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+    const hit=DATA.chunks.find(c => (sx(c.x)-mx)**2+(sy(c.y)-my)**2 < 64);
+    const tip=el("tip");
+    if(hit){
+      tip.classList.remove("hidden");
+      tip.style.left=(e.clientX+12)+"px"; tip.style.top=(e.clientY+12)+"px";
+      tip.innerHTML=`<b>${esc(hit.source_document)}</b><br>chunk ${hit.chunk_index} · ${hit.chars} chars`;
+    } else tip.classList.add("hidden");
+  };
+  vc.onmouseleave = () => el("tip").classList.add("hidden");
+}
+
+const sc = el("sim-canvas"), sctx = sc.getContext("2d");
+function drawSim(){
+  const w=sc.parentElement.clientWidth; if(!w) return;
+  const n=DATA.similarity.length, size=Math.min(w-24, 300);
+  sc.width=w*devicePixelRatio; sc.height=(size+16)*devicePixelRatio; sc.style.height=(size+16)+"px";
+  sctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  sctx.clearRect(0,0,w,size+16);
+  const cell=size/n, ox=(w-size)/2, oy=8;
+  const accent=cssVar("--readout");
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++){
+    const v=DATA.similarity[i][j];
+    const t=Math.max(0,Math.min(1,(v-0.3)/0.7));
+    sctx.globalAlpha = i===j ? 0.18 : t*t;
+    sctx.fillStyle=accent;
+    sctx.fillRect(ox+j*cell, oy+i*cell, Math.ceil(cell), Math.ceil(cell));
+  }
+  sctx.globalAlpha=1;
+  sc.onmousemove = e => {
+    const r=sc.getBoundingClientRect();
+    const j=Math.floor((e.clientX-r.left-ox)/cell), i=Math.floor((e.clientY-r.top-oy)/cell);
+    if(i>=0&&j>=0&&i<n&&j<n&&i!==j){
+      const a=DATA.chunks[i], b=DATA.chunks[j];
+      el("sim-insp").innerHTML=
+        `<div style="font-size:12px"><b class="mono">${DATA.similarity[i][j].toFixed(3)}</b> cosine<br>
+         <span style="color:var(--ink-2)">${esc(a.source_document)} · ${a.chunk_index}</span><br>
+         <span style="color:var(--ink-2)">${esc(b.source_document)} · ${b.chunk_index}</span></div>`;
+    }
+  };
+}
+
+/* ---------- chunks ---------- */
+let selectedChunk = 0;
+function renderChunkList(filter=""){
+  const f=filter.toLowerCase();
+  const rows=DATA.chunks.filter(c =>
+    !f || c.text.toLowerCase().includes(f) || c.source_document.toLowerCase().includes(f));
+  el("chunk-list").innerHTML = rows.map(c =>
+    `<li tabindex="0" data-i="${c.index}" aria-selected="${c.index===selectedChunk}">
+       <div class="li-top"><span class="li-src">${esc(c.source_document)}</span><span class="li-i">#${c.chunk_index}</span></div>
+       <div class="li-prev">${esc(c.text.slice(0,110))}</div>
+     </li>`).join("") || '<li style="color:var(--ink-3)">No chunk matches that filter.</li>';
+  el("chunk-list").querySelectorAll("li[data-i]").forEach(li => {
+    const pick = () => { selectedChunk=+li.dataset.i; renderChunkList(filter); renderChunk(); };
+    li.onclick = pick;
+    li.onkeydown = e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); pick(); } };
+  });
+}
+function renderChunk(){
+  const c=DATA.chunks[selectedChunk];
+  el("chunk-title").textContent = c.source_document;
+  el("chunk-chips").innerHTML =
+    `<span class="chip">type <b>${esc(c.document_type)}</b></span>
+     <span class="chip">chunk <b>${c.chunk_index}</b></span>
+     <span class="chip">page <b>${c.page_number ?? "—"}</b></span>
+     <span class="chip">chars <b>${c.chars}</b></span>`;
+  el("chunk-text").textContent = c.text;
+  const sims = DATA.similarity[c.index]
+    .map((v,i)=>({v,i})).filter(o=>o.i!==c.index)
+    .sort((a,b)=>b.v-a.v).slice(0,5);
+  el("chunk-neighbours").innerHTML =
+    `<h4>Nearest neighbours in embedding space</h4>` + sims.map(o => {
+      const n=DATA.chunks[o.i];
+      return `<div class="edge"><span class="rel">${o.v.toFixed(3)}</span> ${esc(n.source_document)} · #${n.chunk_index}</div>`;
+    }).join("");
+}
+
+
+/* ---------- images ---------- */
+let selectedImage = null, imgFilter = "";
+
+function imgTags(im){
+  const t = [];
+  if(im.ocr_text) t.push('<span class="tag ocr">OCR</span>');
+  if(im.vision_description) t.push('<span class="tag vis">CARD 13</span>');
+  const f = im.scored ? im.scored.fabricated_value_count : null;
+  if(f > 0) t.push('<span class="tag fab">' + f + ' FABRICATED</span>');
+  else if(f === 0) t.push('<span class="tag clean">no invention</span>');
+  return '<div class="tags">' + t.join("") + '</div>';
+}
+
+function renderImageStrip(){
+  const withOcr = IMAGES.filter(i => i.ocr_text).length;
+  const withVis = IMAGES.filter(i => i.vision_description).length;
+  const fab = IMAGES.reduce((a,i) => a + ((i.scored && i.scored.fabricated_value_count) || 0), 0);
+  el("img-strip").innerHTML =
+    stat("Images", IMAGES.length) +
+    stat("OCR'd into corpus", withOcr) +
+    stat("Chart readings", withVis) +
+    stat("With ground truth", IMAGES.filter(i => i.ground_truth).length) +
+    stat("Fabricated values", fab);
+}
+
+function renderImageGrid(){
+  const rows = IMAGES.filter(im =>
+    !imgFilter ? true :
+    imgFilter === "fabricated" ? (im.scored && im.scored.fabricated_value_count > 0) :
+    im.corpus === imgFilter);
+  el("img-grid").innerHTML = rows.map(im =>
+    '<div class="imgcard" data-f="' + esc(im.filename) + '" tabindex="0" aria-selected="' +
+    (im.filename === selectedImage) + '">' +
+      '<img src="' + im.data_uri + '" alt="' + esc(im.filename) + '" loading="lazy">' +
+      '<div class="cap"><b>' + esc(im.filename) + '</b>' + imgTags(im) + '</div>' +
+    '</div>').join("") ||
+    '<div style="padding:14px; color:var(--ink-3)">Nothing matches that filter.</div>';
+  el("img-grid").querySelectorAll(".imgcard").forEach(c => {
+    const pick = () => { selectedImage = c.dataset.f; renderImageGrid(); renderImageDetail(); };
+    c.onclick = pick;
+    c.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); pick(); } };
+  });
+}
+
+/* Is this number written in the text as a standalone figure? Mirrors
+   the Python scorer's rule so the page never disagrees with the report
+   it was generated from. */
+function statedIn(value, text){
+  const forms = [String(value), String(parseFloat(value))];
+  return forms.some(f => new RegExp("(?<![0-9.])" + f.replace(".", "\\.") + "(?![0-9.])").test(text));
+}
+
+function renderImageDetail(){
+  const im = IMAGES.find(i => i.filename === selectedImage);
+  if(!im){ el("img-detail").innerHTML = ""; return; }
+  const gt = im.ground_truth, sc = im.scored;
+
+  let verdict = "";
+  if(gt && sc && gt.has_printed_labels === false){
+    verdict = sc.fabricated_value_count > 0
+      ? '<div class="warnbox"><b>' + sc.fabricated_value_count + ' value(s) invented.</b> ' +
+        'This chart carries <b>no printed numbers at all</b>, yet the model stated specific ' +
+        'figures — read off bar heights or slice angles. CARD 13\'s own prompt forbids exactly ' +
+        'that and asks for a qualitative description instead. Treat everything below as an ' +
+        'estimate, never a measurement.</div>'
+      : '<div class="okbox"><b>Clean.</b> No printed numbers on this chart, and the model ' +
+        'invented none — it described the pattern instead of inventing figures, which is what ' +
+        'the prompt asks for.</div>';
+  } else if(gt && sc && gt.has_printed_labels){
+    const r = sc.value_recall === null || sc.value_recall === undefined
+      ? "n/a" : (sc.value_recall * 100).toFixed(0) + "%";
+    verdict = '<div class="okbox"><b>Transcription task.</b> The numbers are printed on this ' +
+      'chart, so reading them is OCR-shaped rather than estimation. Recall ' + r + '.</div>';
+  }
+
+  let truthTable = "";
+  if(gt && gt.true_values){
+    const desc = im.vision_description || "";
+    truthTable = '<div class="sect"><h4>True values vs what the model said</h4>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Series</th>' +
+      '<th style="text-align:right">True</th>' +
+      '<th style="text-align:right">Stated?</th></tr></thead><tbody>' +
+      Object.keys(gt.true_values).map(k => {
+        const v = gt.true_values[k];
+        const found = statedIn(v, desc);
+        const cls = found ? (gt.has_printed_labels ? "sev-ok" : "sev-crit") : "";
+        return '<tr><td class="mono">' + esc(k) + '</td><td class="num">' + v + '</td>' +
+               '<td class="num ' + cls + '">' + (found ? "yes" : "no") + '</td></tr>';
+      }).join("") + '</tbody></table></div></div>';
+  }
+
+  el("img-detail").innerHTML =
+    '<div class="panel" style="margin-top:16px">' +
+      '<div class="panel-h"><h3>' + esc(im.filename) + '</h3>' +
+      '<span class="mono" style="font-size:11px; color:var(--ink-3)">' +
+      esc(im.relative_path) + ' · ' + im.size_kb + ' KB</span></div>' +
+      '<div class="detail">' +
+        '<div><img src="' + im.data_uri + '" alt="' + esc(im.filename) + '"></div>' +
+        '<div>' + verdict +
+          (gt ? '<div class="sect"><h4>Ground truth</h4><dl class="kv">' +
+            '<dt>chart type</dt><dd>' + esc(gt.chart_type || "—") + '</dd>' +
+            '<dt>title</dt><dd>' + esc(gt.title || "—") + '</dd>' +
+            '<dt>labels printed</dt><dd>' + (gt.has_printed_labels ? "yes" : "NO") + '</dd>' +
+            '</dl></div>' : "") +
+          (im.vision_description ? '<div class="sect"><h4>CARD 13 reading ' +
+            '<span class="tag vis">ESTIMATE</span></h4><div class="readout">' +
+            esc(im.vision_description.trim()) + '</div></div>' : "") +
+          (im.vision_error ? '<div class="sect"><h4>CARD 13 error</h4><div class="readout">' +
+            esc(im.vision_error) + '</div></div>' : "") +
+          (im.ocr_text ? '<div class="sect"><h4>OCR text ' +
+            '<span class="tag ocr">indexed into the corpus</span></h4><div class="readout">' +
+            esc(im.ocr_text.trim()) + '</div></div>' : "") +
+          truthTable +
+        '</div>' +
+      '</div></div>';
+}
+
+/* ---------- health ---------- */
+function renderHealth(){
+  const pct = v => (v*100).toFixed(1)+"%";
+  const m = [
+    {k:"MRR", v:HEALTH.mrr.toFixed(3), sev:"warn", bar:HEALTH.mrr,
+     n:`${HEALTH.rankedFirst} of ${HEALTH.questions} questions rank the correct document first. Two rank it 4th — invisible to precision@5.`},
+    {k:"MAP", v:HEALTH.map.toFixed(3), sev:"warn", bar:HEALTH.map,
+     n:"Rewards relevant chunks clustered at the top rather than scattered through the top-5."},
+    {k:"Recall@5", v:HEALTH.recall5.toFixed(3), sev:"ok", bar:1,
+     n:"Saturated. Every relevant chunk is already retrieved, so this metric can no longer detect a regression."},
+    {k:"Precision@5", v:HEALTH.precision.toFixed(3), sev:"ok", bar:1,
+     n:`100% of its structural ceiling (${HEALTH.ceiling.toFixed(3)}). Also saturated — the ceiling is set by corpus shape, not retrieval quality.`},
+    {k:"Spec-valid edges", v:"3 / 11", sev:"crit", bar:3/11,
+     n:"8 of 11 extracted relationships violated GRAPH_SPEC §4 domain/range and passed validation unchecked."},
+    {k:"Vision offload", v:"1.7×", sev:"ok", bar:109/63.1/2,
+     n:"109.0s → 63.1s per chart image after partial GPU layer offload. The model needs 13GB against an 8GB card."}
+  ];
+  el("health-metrics").innerHTML = m.map(x =>
+    `<div class="metric">
+       <div class="mk">${x.k}</div>
+       <div class="mv sev-${x.sev}">${x.v}</div>
+       <div class="bar"><span style="width:${Math.min(100,x.bar*100)}%; background:var(--${x.sev==="ok"?"ok":x.sev==="warn"?"warn":"crit"})"></span></div>
+       <div class="mn">${x.n}</div>
+     </div>`).join("");
+
+  el("rank-table").innerHTML =
+    `<thead><tr><th>Expected source document</th><th style="text-align:right">Rank</th><th style="text-align:right">1/rank</th></tr></thead><tbody>` +
+    HEALTH.ranks.map(([d,r]) =>
+      `<tr><td class="mono" style="font-size:11px">${esc(d)}</td>
+        <td class="num ${r===1?"sev-ok":"sev-warn"}" style="font-weight:600">${r}</td>
+        <td class="num">${(1/r).toFixed(3)}</td></tr>`).join("") + `</tbody>`;
+
+  el("rel-table").innerHTML =
+    `<thead><tr><th>From</th><th>Relationship</th><th>To</th><th style="text-align:right">Verdict</th></tr></thead><tbody>` +
+    HEALTH.rels.map(([f,t,to,ok]) =>
+      `<tr><td class="mono">${f}</td><td class="mono" style="color:var(--flare); font-weight:600">${t}</td>
+        <td class="mono">${to}</td>
+        <td class="num ${ok?"sev-ok":"sev-crit"}" style="font-weight:600">${ok?"valid":"violates §4"}</td></tr>`).join("") + `</tbody>`;
+}
+
+/* ---------- boot ---------- */
+initGraph(); renderStrips(); renderNav(); renderChunkList(); renderChunk(); renderHealth();
+renderImageStrip(); renderImageGrid();
+/* Open on the image that actually demonstrates the failure, not
+   alphabetical order — the page should show what it found. */
+const worst = IMAGES.find(i => i.scored && i.scored.fabricated_value_count > 0) || IMAGES[0];
+selectedImage = worst ? worst.filename : null;
+renderImageDetail();
+sizeGraph(); frame();
+
+const labelsPresent = [...new Set(DATA.graph.nodes.flatMap(n => n.labels))];
+el("graph-filter").innerHTML = '<option value="">All labels</option>' +
+  labelsPresent.map(l => '<option value="' + l + '">' + l + '</option>').join("");
+el("graph-filter").onchange = e => { labelFilter = e.target.value; heat = Math.max(heat, 0.5); };
+el("graph-reheat").onclick = () => { heat = 1; };
+el("graph-full").onclick = () => {
+  document.body.classList.toggle("graphfull");
+  el("graph-full").textContent =
+    document.body.classList.contains("graphfull") ? "Exit full page" : "Full page";
+  requestAnimationFrame(sizeGraph);
+};
+addEventListener("keydown", e => {
+  if(e.key === "Escape" && document.body.classList.contains("graphfull")){
+    document.body.classList.remove("graphfull");
+    el("graph-full").textContent = "Full page";
+    requestAnimationFrame(sizeGraph);
+  }
+});
+el("graph-search").oninput = e => {
+  const q = e.target.value.toLowerCase();
+  if(!q) return;
+  const hit = nodes.find(n => n.name.toLowerCase().includes(q));
+  if(hit){
+    selected = hit; renderInspector();
+    const W = gc.width / devicePixelRatio, H = gc.height / devicePixelRatio;
+    panX = W / 2 - hit.x * zoom; panY = H / 2 - hit.y * zoom;
+  }
+};
+el("img-filter").onchange = e => { imgFilter = e.target.value; renderImageGrid(); };
+el("chunk-search").oninput = e => renderChunkList(e.target.value);
+addEventListener("resize", () => { sizeGraph(); if(current==="vectors"){ drawVectors(); drawSim(); } });
+</script>

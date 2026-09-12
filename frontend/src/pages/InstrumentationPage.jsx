@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Activity, AlertTriangle, CheckCircle2, Database, FolderSearch,
+  Activity, AlertTriangle, CheckCircle2, FolderSearch,
   Image as ImageIcon, Layers, Network, Scatter3D, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../lib/pipelineApi'
-import { ForceGraph, nodeName } from '../components/graph/ForceGraph'
+import { ForceGraph } from '../components/graph/ForceGraph'
+import { nodeName, getNodeColor } from '../components/graph/graphTheme'
 import { VectorScatter, SimilarityHeatmap } from '../components/graph/VectorViews'
 import { Spinner } from '../components/ui/Spinner'
 
@@ -332,8 +333,24 @@ export function InstrumentationPage() {
                     <div className="font-semibold break-words" style={{ color: 'var(--color-text)' }}>
                       {nodeName(selectedNode)}
                     </div>
-                    <div className="text-[11px] mb-2" style={{ color: 'var(--color-text-muted)' }}>
-                      {selectedNode.labels.join(' · ')}
+                    <div className="flex flex-wrap gap-1.5 my-2">
+                      {selectedNode.labels.map((lbl) => {
+                        const col = getNodeColor({ labels: [lbl] })
+                        return (
+                          <span
+                            key={lbl}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono"
+                            style={{
+                              background: `${col}20`,
+                              color: col,
+                              border: `1px solid ${col}55`,
+                            }}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: col }} />
+                            {lbl}
+                          </span>
+                        )
+                      })}
                     </div>
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
                       {Object.entries(selectedNode.properties ?? {})

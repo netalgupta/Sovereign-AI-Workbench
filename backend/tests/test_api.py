@@ -66,6 +66,8 @@ def test_graph_returns_nodes_and_declares_its_source():
 def test_chunks_default_to_the_snapshot_rather_than_a_multi_minute_ingest():
     """A request that silently triggered a full corpus ingestion would
     time out and look like a hang."""
+    from backend.api.state import reset_state
+    reset_state()
     body = client.get("/api/chunks").json()
 
     assert body["source"] == "snapshot"

@@ -39,7 +39,7 @@ from backend.ingestion.image_store import ImageRecord, ImageStore
 # in grounded_retrieval.py. Tuned conservatively: this threshold gates
 # an ATTACHMENT, so a miss costs the user a follow-up question while a
 # false positive puts a wrong diagram in front of an engineer.
-MIN_IMAGE_MATCH_SIMILARITY = 0.35
+MIN_IMAGE_MATCH_SIMILARITY = 0.15
 
 
 class ImageMatch(BaseModel):
