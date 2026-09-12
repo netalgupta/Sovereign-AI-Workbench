@@ -140,7 +140,17 @@ def test_standard_query_executes_plan_and_dispatch():
     assert state.awaiting_human_approval is False
     assert len(state.plan) >= 2
     assert all(s.status == "done" for s in state.plan)
-    assert len(state.tool_call_log) >= 1
+    # NOT "a tool ran". The LLM planner is non-deterministic about
+    # whether it emits a retrieval step or an all-reasoning plan, and
+    # synthesize retrieves either way -- so this assertion failed on a
+    # run whose answer was entirely correct (it cited [3] and found the
+    # 410 C end-of-run threshold). Pinning planner variance makes the
+    # suite flaky about something that is not a defect.
+    #
+    # The real invariant is that the turn produced a grounded answer.
+    assert state.retrieved_context, (
+        "the turn produced no sources, so nothing could be grounded"
+    )
     assert state.draft_output is not None
     # Verification is DEFERRED by default and runs on demand via
     # POST /api/verify, so a normal turn carries no verdict. It used to

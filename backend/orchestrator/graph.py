@@ -484,9 +484,57 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     if is_corpus_question(state.original_request):
         return {"draft_output": answer_corpus_question(state.original_request)}
 
+    # Conversation memory: resolve the follow-up for RETRIEVAL, and hand
+    # the model prior turns as labelled context. Wrapped because a
+    # memory failure must degrade to a stateless (but correct) answer
+    # rather than break the turn -- memory is an improvement, not a
+    # dependency.
+    from backend.observability import turn_log as T
+
+    search_query = None
+    conversation_context = ""
+    try:
+        from backend.memory import resolver, working
+
+        memory = working.load(state.session_id)
+        if not memory.is_empty:
+            resolved = resolver.resolve(state.original_request, memory)
+            if resolved.changed:
+                search_query = resolved.search_query
+                T.kv("memory", f"resolved follow-up: +{resolved.added_terms}")
+            conversation_context = memory.context_block()
+            if memory.focus_documents:
+                T.kv("focus documents", memory.focus_documents[:3])
+
+        # Durable preferences and identity, across all sessions. Appended
+        # after the conversation block and labelled the same way: these
+        # shape HOW the answer is written, never WHAT it claims.
+        from backend.memory.long_term import get_long_term
+
+        durable = get_long_term().context_block()
+        if durable:
+            conversation_context += durable
+            T.kv("long-term facts", "applied")
+
+        # Offer the user's own message for durable storage. Most are not
+        # facts and are rejected; nothing is inferred or guessed.
+        try:
+            get_long_term().remember(
+                state.original_request, source_session=state.session_id
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        T.warn(f"memory unavailable ({type(exc).__name__}); answering statelessly")
+
     try:
         store, _ = get_state().ensure_corpus()
-        answer = generate_grounded_answer(store, state.original_request)
+        answer = generate_grounded_answer(
+            store,
+            state.original_request,
+            search_query=search_query,
+            conversation_context=conversation_context,
+        )
     except Exception as exc:  # noqa: BLE001
         # A synthesis failure is reported as a failure. The previous code
         # would have fallen through to the reassuring template, which is

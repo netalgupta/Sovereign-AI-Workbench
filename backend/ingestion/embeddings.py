@@ -129,7 +129,7 @@ def _get_model():
             if cache_dir.exists() and any(cache_dir.iterdir()):
                 from sentence_transformers import SentenceTransformer
 
-                _model = SentenceTransformer(str(cache_dir))
+                _model = SentenceTransformer(str(cache_dir), device=_embedding_device())
                 _active_backend = SEMANTIC_BACKEND
             else:
                 _load_failed = True
@@ -141,6 +141,69 @@ def _get_model():
             _active_backend = FALLBACK_BACKEND
             _warn_fallback(f"{type(exc).__name__}: {exc}")
     return _model
+
+
+def _embedding_device() -> str:
+    """Where the embedding model runs: "cuda" when it can, else "cpu".
+
+    WHY THIS IS EXPLICIT RATHER THAN LEFT TO THE DEFAULT.
+
+    sentence-transformers does pick CUDA automatically when torch sees
+    it, so on a correctly configured box this changes nothing. It is
+    written down because for most of this project's life torch was the
+    CPU-only build and this ran on the processor, and nothing in the
+    code said so.
+
+    The consequence was sustained 99% CPU spikes severe enough to make
+    the whole desktop unresponsive. PyTorch defaults its thread pool to
+    every physical core (measured: 24 of 24 here), every query embeds
+    its text and every ingested document embeds every chunk, so ordinary
+    use took the entire machine. Ollama was fine throughout -- it
+    manages its own GPU placement -- which made it look as though the
+    GPU was being used when the embedding half of the pipeline was not.
+
+    Fixed by installing torch 2.9.1+cu126: the SAME version already
+    present, only the CUDA build. Pinning the version is what matters --
+    a previous attempt let versions drift and hit cascading
+    torch/torchvision/torchao/triton conflicts in this shared,
+    system-wide Python, and had to be reverted.
+
+    Falls back to CPU rather than raising: an air-gapped venue machine
+    may have no NVIDIA GPU at all, and slow embeddings are a great deal
+    better than a workbench that will not start.
+
+    Override with WORKBENCH_EMBEDDING_DEVICE (e.g. "cpu" to reproduce a
+    CPU-only run, or "cuda:1" on a multi-GPU box).
+    """
+    import os
+
+    override = os.environ.get("WORKBENCH_EMBEDDING_DEVICE")
+    if override:
+        return override
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:  # noqa: BLE001
+        pass
+    return "cpu"
+
+
+def active_device() -> str:
+    """The device the loaded model is actually on, for diagnostics.
+
+    Reads it back off the model rather than recomputing the preference,
+    so this reports what IS rather than what was intended -- the
+    distinction that hid the CPU-only embeddings for so long.
+    """
+    if _model is None:
+        return "not loaded"
+    try:
+        return str(next(_model.parameters()).device)
+    except Exception:  # noqa: BLE001
+        return _embedding_device()
 
 
 def _warn_fallback(reason: str) -> None:

@@ -1405,6 +1405,15 @@ def chat(body: ChatRequestBody) -> dict:
     from backend.audit.approval_gate import ApprovalGate
     from backend.orchestrator.graph import run_agent_turn
 
+    # Persist the user turn BEFORE running, so the working memory a
+    # concurrent request loads is never missing the message that is
+    # currently being answered.
+    try:
+        from backend.memory.store import get_store
+        get_store().append(body.session_id, "user", body.message)
+    except Exception:  # noqa: BLE001 - memory must never break a turn
+        pass
+
     state = run_agent_turn(body.message, body.session_id)
 
     # Citations shaped for frontend citation viewer
@@ -1466,6 +1475,33 @@ def chat(body: ChatRequestBody) -> dict:
             }
         except Exception:
             pass
+
+    # Record the assistant turn, with the documents it actually looked
+    # at. `documents` is stored separately from `citations` on purpose:
+    # a follow-up like "give all columns" refers to the TABLE the last
+    # turn read, which may live in a chunk the answer never explicitly
+    # cited. Citations alone would lose it.
+    try:
+        from backend.memory.store import get_store
+
+        get_store().append(
+            body.session_id,
+            "assistant",
+            state.draft_output or "",
+            route="direct",
+            citations=citations[:20],
+            documents=sorted({
+                c.get("source_document")
+                for c in state.retrieved_context
+                if c.get("source_document")
+            }),
+            tool_calls=[
+                {"tool_name": e.tool_name, "status": e.status}
+                for e in state.tool_call_log
+            ],
+        )
+    except Exception:  # noqa: BLE001 - memory must never break a turn
+        pass
 
     return {
         "reply": state.draft_output or "Analysis complete.",
@@ -1735,6 +1771,165 @@ def graph_neighbourhood(
             for d in sorted({n["distance"] for n in nodes if n["distance"] is not None})
         },
     }
+
+
+# ---------------------------------------------------- memory / sessions
+
+@router.get("/sessions")
+def list_sessions(limit: int = Query(50, ge=1, le=200)) -> dict:
+    """Every conversation, newest first.
+
+    Sessions were previously not stored at all -- `session_id` was
+    threaded through every request and written nowhere, so each turn
+    began from nothing and the Chats list in the sidebar had to be
+    faked. It was, with five invented conversations.
+    """
+    from backend.memory.store import get_store
+
+    sessions = get_store().list_sessions(limit)
+    return {
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "turn_count": s.turn_count,
+            }
+            for s in sessions
+        ],
+        "count": len(sessions),
+    }
+
+
+@router.get("/sessions/{session_id}")
+def get_session(session_id: str) -> dict:
+    """One conversation with its full message history."""
+    from backend.memory.store import get_store
+
+    store = get_store()
+    session = store.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, detail=f"No session {session_id!r}")
+
+    messages = store.all_messages(session_id)
+    return {
+        "session_id": session.session_id,
+        "title": session.title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "turn_count": session.turn_count,
+        "messages": [
+            {
+                "message_id": m.message_id,
+                "turn_index": m.turn_index,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at,
+                "route": m.route,
+                "citations": m.citations,
+                "documents": m.documents,
+                "tool_calls": m.tool_calls,
+            }
+            for m in messages
+        ],
+    }
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: str) -> dict:
+    """Delete a conversation and everything in it."""
+    from backend.memory.store import get_store
+
+    get_store().delete_session(session_id)
+    return {"deleted": session_id}
+
+
+@router.get("/sessions/{session_id}/memory")
+def get_session_memory(session_id: str) -> dict:
+    """What the system currently remembers about this conversation.
+
+    Exposed because memory that cannot be inspected cannot be trusted or
+    debugged. When an answer refers to something unexpected, this is
+    where you look: the focus documents are what steer retrieval for
+    follow-ups.
+    """
+    from backend.memory import working
+
+    memory = working.load(session_id)
+    return {
+        "session_id": session_id,
+        "message_count": len(memory.messages),
+        "focus_documents": memory.focus_documents,
+        "last_user_request": memory.last_user_request,
+        "last_route": memory.last_route,
+        "context_block": memory.context_block(),
+    }
+
+
+class RememberRequest(BaseModel):
+    content: str
+    session_id: str | None = None
+
+
+@router.get("/memory/facts")
+def list_facts(limit: int = Query(100, ge=1, le=500)) -> dict:
+    """Durable facts about the user, across all conversations.
+
+    Every one is listed and deletable. A memory system that silently
+    decides what to remember about a person is one they cannot correct.
+    """
+    from backend.memory.long_term import get_long_term
+
+    facts = get_long_term().all_facts(limit)
+    return {
+        "facts": [
+            {
+                "fact_id": f.fact_id,
+                "kind": f.kind,
+                "content": f.content,
+                "source_session": f.source_session,
+                "created_at": f.created_at,
+                "use_count": f.use_count,
+            }
+            for f in facts
+        ],
+        "count": len(facts),
+    }
+
+
+@router.post("/memory/facts")
+def remember_fact(body: RememberRequest) -> dict:
+    """Store a durable preference or identity fact.
+
+    Returns stored=false when the statement does not qualify -- most
+    messages do not, and that is the normal case rather than an error.
+
+    Document FINDINGS are rejected here by design: storing "the average
+    MFI is 3.4" would create a second source of truth that is never
+    cited and never expires, so the first corpus revision leaves the
+    system answering confidently from a stale number.
+    """
+    from backend.memory.long_term import get_long_term
+
+    fact = get_long_term().remember(body.content, source_session=body.session_id)
+    if fact is None:
+        return {
+            "stored": False,
+            "reason": (
+                "Not a durable preference or identity statement, or it looks "
+                "like a finding from a document. Findings come from retrieval "
+                "with a citation, every time."
+            ),
+        }
+    return {"stored": True, "fact_id": fact.fact_id, "kind": fact.kind}
+
+
+@router.delete("/memory/facts/{fact_id}")
+def forget_fact(fact_id: str) -> dict:
+    from backend.memory.long_term import get_long_term
+
+    return {"deleted": get_long_term().forget(fact_id)}
 
 
 # ------------------------------------------------------ agentic stream
