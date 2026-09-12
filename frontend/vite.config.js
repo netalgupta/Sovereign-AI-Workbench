@@ -257,13 +257,51 @@ function systemAndModelsPlugin() {
           return `dir_${hash}`
         }
 
+        // THIS FUNCTION USED TO DESTROY THE USER'S TRACKED FOLDERS.
+        //
+        // The old body read the file inside `try { ... } catch {}`. Any
+        // failure -- a transient read error, a partially written file, a
+        // JSON syntax error -- was swallowed, `list` stayed empty, and
+        // the `list.length === 0` branch below substituted the three
+        // hardcoded preset corpora. The caller then IMMEDIATELY called
+        // saveConfiguredDirs() on that result, writing the presets over
+        // the real file.
+        //
+        // So a single unreadable byte silently and permanently deleted
+        // every directory the user had added, at dev-server startup,
+        // with no user action and no message. Observed live: a tracked
+        // `docs` folder (19 files) vanished across a Vite restart, and
+        // the corpus went from 50 sources to 31.
+        //
+        // The file is gitignored, so there was no copy to restore from.
+        //
+        // Two changes: a read failure is now distinguished from an empty
+        // file and never silently yields presets, and the unreadable
+        // file is preserved as a .corrupt backup instead of being
+        // overwritten. Presets are only for a genuinely absent file --
+        // a first run, where there is nothing to lose.
         function loadConfiguredDirs() {
           let list = []
           if (fs.existsSync(configFilePath)) {
             try {
               const saved = JSON.parse(fs.readFileSync(configFilePath, 'utf-8'))
               if (Array.isArray(saved) && saved.length > 0) list = saved
-            } catch {}
+            } catch (err) {
+              // Keep the bytes. They are the only record of what the
+              // user was tracking, and they are about to be replaced.
+              const backup = `${configFilePath}.corrupt-${Date.now()}`
+              try {
+                fs.copyFileSync(configFilePath, backup)
+              } catch {}
+              console.error(
+                `[sources] configured_sources.json is unreadable (${err.message}).\n` +
+                  `[sources] A copy was saved to ${backup}.\n` +
+                  `[sources] Refusing to overwrite it with defaults - your tracked ` +
+                  `folders are recoverable from that file.`
+              )
+              // Signal "do not persist this" to the caller.
+              return { dirs: [], unreadable: true }
+            }
           }
           if (list.length === 0) {
             list = [
@@ -326,7 +364,7 @@ function systemAndModelsPlugin() {
               path: path.normalize(d.path),
             })
           }
-          return deduped
+          return { dirs: deduped, unreadable: false }
         }
 
         function saveConfiguredDirs(dirs) {
@@ -337,8 +375,18 @@ function systemAndModelsPlugin() {
           } catch {}
         }
 
-        global.__configuredSourceDirs = loadConfiguredDirs()
-        saveConfiguredDirs(global.__configuredSourceDirs)
+        // Load only. The unconditional save that used to be here is
+        // what turned a read failure into permanent data loss: startup
+        // rewrote the file every time, so the fallback presets were
+        // persisted before anyone could notice they were wrong.
+        //
+        // Nothing is written unless the user actually changes something,
+        // which the add/remove handlers below do explicitly.
+        {
+          const loaded = loadConfiguredDirs()
+          global.__configuredSourceDirs = loaded.dirs
+          global.__sourcesConfigUnreadable = loaded.unreadable
+        }
 
         // Generic local file streaming for preview/reading across all configured sources
         if (url === '/api/sources/file' && req.method === 'GET') {
@@ -401,7 +449,7 @@ function systemAndModelsPlugin() {
               }
               if (targetPath) {
                 const normTarget = path.normalize(targetPath).toLowerCase()
-                global.__configuredSourceDirs = loadConfiguredDirs().filter(
+                global.__configuredSourceDirs = loadConfiguredDirs().dirs.filter(
                   (d) =>
                     d.id !== targetPath &&
                     path.normalize(d.path).toLowerCase() !== normTarget &&
@@ -509,7 +557,7 @@ function systemAndModelsPlugin() {
                 }
               }
 
-              global.__configuredSourceDirs = loadConfiguredDirs()
+              global.__configuredSourceDirs = loadConfiguredDirs().dirs
               for (const folder of topFolders) {
                 const folderPath = path.resolve(targetBaseDir, folder)
                 const id = getDirectoryId(folderPath)
@@ -619,7 +667,7 @@ function systemAndModelsPlugin() {
                   console.warn('[Ingest error]', err.message)
                 }
 
-                global.__configuredSourceDirs = loadConfiguredDirs()
+                global.__configuredSourceDirs = loadConfiguredDirs().dirs
                 saveConfiguredDirs(global.__configuredSourceDirs)
 
                 const fileId = `file_${crypto.createHash('sha256').update(path.normalize(destFile).toLowerCase()).digest('hex').slice(0, 10)}`
@@ -646,7 +694,7 @@ function systemAndModelsPlugin() {
               const dirName = path.basename(resolved) || 'Custom_Corpus'
               const id = getDirectoryId(resolved)
               const normResolved = path.normalize(resolved).toLowerCase()
-              global.__configuredSourceDirs = loadConfiguredDirs()
+              global.__configuredSourceDirs = loadConfiguredDirs().dirs
               const existingIdx = global.__configuredSourceDirs.findIndex(
                 (d) => path.normalize(d.path).toLowerCase() === normResolved
               )
@@ -705,7 +753,7 @@ function systemAndModelsPlugin() {
           try {
             const allItems = []
             const tree = []
-            global.__configuredSourceDirs = loadConfiguredDirs()
+            global.__configuredSourceDirs = loadConfiguredDirs().dirs
 
             // List of custom subpaths to avoid double-listing in parent
             const customSubpaths = global.__configuredSourceDirs
