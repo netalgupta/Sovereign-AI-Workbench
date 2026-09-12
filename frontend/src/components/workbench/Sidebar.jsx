@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
+import { useChatStore } from '../../store/chatStore'
 import { SourceFileTree } from './SourceFileTree'
 import { AddSourceDirectoryModal } from './AddSourceDirectoryModal'
 
@@ -57,6 +58,7 @@ const MOCK_CHATS = []
 
 export function Sidebar() {
   const { theme, toggleTheme } = useThemeStore()
+  const setActiveDocuments = useChatStore((s) => s.setActiveDocuments)
 
   // Two-tab accordion switcher: 'sources' | 'chats' (mutually exclusive)
   const [activeTab, setActiveTab] = useState('sources')
@@ -98,6 +100,12 @@ export function Sidebar() {
       .then((data) => {
         if (data?.sources && Array.isArray(data.sources)) {
           setSources(data.sources)
+          // Push active source names to chatStore on initial load
+          const enabled = data.sources
+            .filter((s) => s.enabled !== false)
+            .map((s) => s.name || s.corpus || s.id || '')
+            .filter(Boolean)
+          setActiveDocuments(enabled)
         }
         if (data?.tree && Array.isArray(data.tree)) {
           setTree(data.tree)
@@ -114,25 +122,61 @@ export function Sidebar() {
 
   const handleDeleteSource = async (source) => {
     if (!source) return
-    const name = source.name || 'item'
-    if (!window.confirm(`Are you sure you want to delete "${name}" from sources and FAISS index?`)) {
-      return
+    const name = source.name || 'document'
+    const targetId = source.id
+    const targetFullPath = source.fullPath || source.relPath || source.path || source.name
+
+    // 1. Optimistic instant removal from sources
+    setSources((prev) =>
+      prev.filter(
+        (s) =>
+          s.id !== targetId &&
+          s.name !== name &&
+          (!targetFullPath || s.fullPath !== targetFullPath)
+      )
+    )
+
+    // 2. Optimistic instant removal from tree
+    const removeNodeFromTree = (nodes) => {
+      if (!Array.isArray(nodes)) return []
+      return nodes
+        .filter(
+          (n) =>
+            n.id !== targetId &&
+            n.name !== name &&
+            (!targetFullPath || n.fullPath !== targetFullPath)
+        )
+        .map((n) => {
+          if (n.children && n.children.length > 0) {
+            const filteredChildren = removeNodeFromTree(n.children)
+            return {
+              ...n,
+              children: filteredChildren,
+              fileCount: filteredChildren.reduce(
+                (acc, c) => acc + (c.type === 'directory' ? c.fileCount || 0 : 1),
+                0
+              ),
+            }
+          }
+          return n
+        })
+        .filter((n) => n.type !== 'directory' || (n.isPreset || (n.children && n.children.length > 0)))
     }
+    setTree((prev) => removeNodeFromTree(prev))
+
+    showToast(`Source "${name}" removed from knowledge base`, 'info')
+
+    // 3. Dispatch to backend API
     try {
-      const targetParam = source.fullPath || source.relPath || source.path || source.id || source.name
-      const res = await fetch(`/api/sources?path=${encodeURIComponent(targetParam)}`, {
+      const queryParam = encodeURIComponent(targetFullPath)
+      const idParam = encodeURIComponent(targetId || '')
+      const nameParam = encodeURIComponent(name)
+      await fetch(`/api/sources?path=${queryParam}&id=${idParam}&name=${nameParam}`, {
         method: 'DELETE',
       })
-      if (res.ok) {
-        showToast(`Source "${name}" removed from knowledge base`, 'info')
-        window.dispatchEvent(new CustomEvent('corpus-updated'))
-        fetchCorpus()
-      } else {
-        const err = await res.json().catch(() => ({}))
-        showToast(err.error || `Failed to delete "${name}"`, 'error')
-      }
-    } catch {
-      showToast(`Failed to delete "${name}"`, 'error')
+      window.dispatchEvent(new CustomEvent('corpus-updated'))
+    } catch (err) {
+      console.warn('Failed to delete source on server:', err)
     }
   }
 
@@ -153,21 +197,80 @@ export function Sidebar() {
     }
   }, [])
 
-  const toggleSource = (id) => {
+  const toggleSource = (id, explicitEnabled, node) => {
+    let targetName = node?.name
+    let targetFullPath = node?.fullPath
+
     setSources((prev) =>
       prev.map((s) => {
-        if (s.id === id) {
-          const nextState = !s.enabled
-          showToast(
-            nextState
-              ? `"${s.name}" included in retrieval scope`
-              : `"${s.name}" excluded from retrieval scope`,
-            nextState ? 'success' : 'info'
-          )
+        const isMatch =
+          s.id === id ||
+          (targetName && s.name === targetName) ||
+          (targetFullPath && s.fullPath === targetFullPath)
+        if (isMatch) {
+          const nextState = explicitEnabled !== undefined ? explicitEnabled : !s.enabled
+          if (!targetName) targetName = s.name
           return { ...s, enabled: nextState }
         }
         return s
       })
+    )
+
+    // Synchronize tree state so tree is always in sync with sources
+    const updateTreeNodes = (nodes) => {
+      if (!Array.isArray(nodes)) return nodes
+      return nodes.map((n) => {
+        const isMatch =
+          n.id === id ||
+          (targetName && n.name === targetName) ||
+          (targetFullPath && n.fullPath === targetFullPath)
+        let updated = isMatch
+          ? {
+              ...n,
+              enabled:
+                explicitEnabled !== undefined
+                  ? explicitEnabled
+                  : n.enabled === false
+                  ? true
+                  : false,
+            }
+          : n
+        if (updated.children && updated.children.length > 0) {
+          updated = { ...updated, children: updateTreeNodes(updated.children) }
+        }
+        return updated
+      })
+    }
+    setTree((prev) => updateTreeNodes(prev))
+
+    // Sync enabled source names into chatStore so ChatPane can pass them
+    // as active_documents on the next /api/chat/stream call.
+    setSources((latestSources) => {
+      const enabled = latestSources
+        .map((s) => {
+          const isMatch =
+            s.id === id ||
+            (targetName && s.name === targetName) ||
+            (targetFullPath && s.fullPath === targetFullPath)
+          if (isMatch) {
+            const next = explicitEnabled !== undefined ? explicitEnabled : !s.enabled
+            return { ...s, enabled: next }
+          }
+          return s
+        })
+        .filter((s) => s.enabled !== false)
+        .map((s) => s.name || s.corpus || s.id || '')
+        .filter(Boolean)
+      setActiveDocuments(enabled)
+      return latestSources // don't mutate here; setSources above already did it
+    })
+
+    const isNowEnabled = explicitEnabled !== undefined ? explicitEnabled : true
+    showToast(
+      isNowEnabled
+        ? `"${targetName || 'Source'}" included in retrieval scope`
+        : `"${targetName || 'Source'}" excluded from retrieval scope`,
+      isNowEnabled ? 'success' : 'info'
     )
   }
 
@@ -345,10 +448,13 @@ export function Sidebar() {
             style={{ display: activeTab === 'sources' ? 'flex' : 'none' }}
           >
             {/* Category Filter Pills & Add / Expand Buttons */}
-            <div className="px-3 pt-3 pb-2 flex-shrink-0 flex items-center justify-between gap-1.5">
+            <div className="px-3 pt-3 pb-2 flex-shrink-0 flex items-center justify-between gap-1.5 border-b border-[var(--color-border)]">
               <div
-                className="flex items-center p-0.5 rounded-md text-[10px] font-medium flex-1 min-w-0"
-                style={{ background: 'var(--color-overlay)' }}
+                className="flex items-center p-0.5 rounded-lg text-[10px] font-medium flex-1 min-w-0 border"
+                style={{
+                  background: 'var(--color-overlay)',
+                  borderColor: 'var(--color-border)',
+                }}
               >
                 {[
                   { id: 'all', label: `All (${counts.all})` },
@@ -363,11 +469,12 @@ export function Sidebar() {
                       key={tab.id}
                       type="button"
                       onClick={() => setSourcesCategory(tab.id)}
-                      className="flex-1 py-0.5 rounded text-[9.5px] transition-fast text-center cursor-pointer truncate"
+                      className="flex-1 py-1 rounded-md text-[9.5px] transition-fast text-center cursor-pointer truncate"
                       style={{
                         background: isSelected ? 'var(--color-surface)' : 'transparent',
                         color: isSelected ? 'var(--color-text)' : 'var(--color-text-muted)',
                         fontWeight: isSelected ? 600 : 500,
+                        boxShadow: isSelected ? 'var(--shadow-xs)' : 'none',
                       }}
                     >
                       {tab.label}
@@ -380,10 +487,10 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={() => setIsAddDirModalOpen(true)}
-                className="p-1 rounded-md text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 shadow-xs"
+                className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
+                  borderColor: 'var(--color-border)',
                   color: 'var(--color-accent)',
                 }}
                 title="Browse & add source directories or files"
@@ -394,10 +501,10 @@ export function Sidebar() {
               {/* Expand to Full Sources Hub button */}
               <Link
                 to="/sources"
-                className="p-1 rounded-md text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 shadow-xs"
+                className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
+                  borderColor: 'var(--color-border)',
                   color: 'var(--color-text-muted)',
                 }}
                 title="Open Sources & Pipeline Internals Hub (/sources)"
@@ -407,7 +514,7 @@ export function Sidebar() {
             </div>
 
             {/* Hierarchical Tree with Smooth Custom Scrollbar */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1 flex flex-col gap-0.5 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 flex flex-col gap-0.5 custom-scrollbar">
               <SourceFileTree
                 tree={tree}
                 filterCategory={sourcesCategory}
@@ -418,48 +525,64 @@ export function Sidebar() {
             </div>
 
             {/* Knowledge Base Summary Card */}
-            <div className="px-3.5 py-2 flex-shrink-0">
+            <div className="px-3 py-2 flex-shrink-0 border-t border-[var(--color-border)]">
               <div
-                className="p-2.5 rounded-lg flex flex-col gap-1.5 transition-fast"
+                className="p-3 rounded-xl flex flex-col gap-2.5 transition-fast border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                  boxShadow: 'var(--shadow-xs)',
+                  borderColor: 'var(--color-border)',
                 }}
               >
-                <div className="flex items-center justify-between text-xs">
-                  <div
-                    className="flex items-center gap-1.5 font-semibold"
-                    style={{ color: 'var(--color-text)' }}
-                  >
-                    <HardDrive size={13} strokeWidth={2} style={{ color: 'var(--color-accent)' }} />
-                    <span className="text-[11px]">Knowledge Base</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                      style={{
+                        background: 'var(--color-accent-tint)',
+                        color: 'var(--color-accent)',
+                        border: '1px solid var(--color-accent-border)',
+                      }}
+                    >
+                      <HardDrive size={12} strokeWidth={2.2} />
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-[11px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: 'var(--color-text)' }}>
+                        Knowledge Base
+                      </span>
+                      <span className="text-[10px] leading-tight mt-0.5 truncate" style={{ color: 'var(--color-text-muted)' }}>
+                        Air-gapped on-prem index
+                      </span>
+                    </div>
                   </div>
                   <span
-                    className="text-[10px] font-mono font-medium"
-                    style={{ color: 'var(--color-text-muted)' }}
+                    className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border flex-shrink-0"
+                    style={{
+                      background: 'var(--color-overlay)',
+                      borderColor: 'var(--color-border)',
+                      color: 'var(--color-accent)',
+                    }}
                   >
                     {activeCount} / {totalCount} active
                   </span>
                 </div>
 
                 {/* Storage Meter */}
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1 pt-0.5">
                   <div
-                    className="flex items-center justify-between text-[9px]"
+                    className="flex items-center justify-between text-[10px]"
                     style={{ color: 'var(--color-text-muted)' }}
                   >
-                    <span className="truncate">MRPL Dual-Corpus Storage</span>
-                    <span className="font-mono font-medium flex-shrink-0">{totalSizeDisplay}</span>
+                    <span className="font-medium">Storage utilization</span>
+                    <span className="font-mono font-semibold text-[var(--color-text)]">{totalSizeDisplay}</span>
                   </div>
                   <div
-                    className="w-full h-1.5 rounded-xs overflow-hidden"
+                    className="w-full h-1.5 rounded-full overflow-hidden"
                     style={{ background: 'var(--color-overlay)' }}
                   >
                     <div
-                      className="h-full rounded-xs transition-base"
+                      className="h-full rounded-full transition-all duration-500"
                       style={{
-                        width: '100%',
+                        width: `${totalCount > 0 ? Math.min(100, Math.max(12, Math.round((activeCount / totalCount) * 100))) : 0}%`,
                         background: 'var(--color-accent)',
                       }}
                     />
@@ -469,14 +592,14 @@ export function Sidebar() {
                 {/* Link to full Sources Hub */}
                 <Link
                   to="/sources"
-                  className="flex items-center justify-between mt-1 pt-1.5 border-t text-[10px] font-semibold hover:underline cursor-pointer"
+                  className="flex items-center justify-between pt-2 border-t text-[11px] font-semibold transition-fast group"
                   style={{
                     borderColor: 'var(--color-border)',
                     color: 'var(--color-accent)',
                   }}
                 >
-                  <span>Open Sources Hub</span>
-                  <ArrowUpRight size={12} />
+                  <span className="group-hover:underline">Open Sources Hub</span>
+                  <ArrowUpRight size={13} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
                 </Link>
               </div>
             </div>

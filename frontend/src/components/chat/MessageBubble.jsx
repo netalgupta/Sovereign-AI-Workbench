@@ -15,6 +15,16 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import {
+  Terminal,
+  Search,
+  Calculator,
+  Wrench,
+  FileText,
+  ShieldCheck,
+  ListTree,
+  CornerDownRight,
+} from 'lucide-react'
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
 import { useChatStore } from '../../store/chatStore'
@@ -104,7 +114,8 @@ function useMessageTypewriter(message) {
 }
 
 /**
- * Blinking cursor shown while streaming is active.
+ * Clean neutral blinking cursor shown while text is being revealed.
+ * Matches body text color with no accent glow.
  */
 function StreamCursor() {
   return (
@@ -114,171 +125,496 @@ function StreamCursor() {
         display: 'inline-block',
         width: '2px',
         height: '13px',
-        background: 'var(--color-accent)',
+        background: 'var(--color-text)',
         borderRadius: '1px',
         verticalAlign: 'text-bottom',
-        marginLeft: '1px',
-        animation: 'breathing-dot 1s ease-in-out infinite',
-        opacity: 0.8,
+        marginLeft: '2px',
+        animation: 'cursor-blink 0.9s steps(2, start) infinite',
       }}
     />
   )
 }
 
-/**
- * @param {{ message: import('../../store/chatStore').Message }} props
- */
+const ACTIVE_THINKING_WORDS = [
+  'Mulling it over',
+  'Fathoming',
+  'Chewing on it',
+  'Percolating',
+  'Turning it over',
+  'Puzzling through it',
+  'Working it out',
+  'Sifting through it',
+  'Piecing it together',
+]
+
+const COMPLETED_THINKING_WORDS = [
+  'Deliberated',
+  'Traced',
+  'Reckoned',
+  'Reasoned',
+  'Synthesised',
+  'Examined',
+  'Evaluated',
+  'Investigated',
+]
+
+function getCompletedWord(messageId = '') {
+  let hash = 0
+  for (let i = 0; i < messageId.length; i++) {
+    hash = (hash * 31 + messageId.charCodeAt(i)) | 0
+  }
+  return COMPLETED_THINKING_WORDS[Math.abs(hash) % COMPLETED_THINKING_WORDS.length]
+}
+
+function truncate(str, maxLen = 40) {
+  if (!str || typeof str !== 'string') return ''
+  return str.length > maxLen ? `${str.slice(0, maxLen - 1)}…` : str
+}
+
+function extractRetrievedSources(tool, citations = []) {
+  const sourcesMap = new Map()
+
+  if (tool?.output) {
+    let passages = []
+    if (typeof tool.output === 'object' && Array.isArray(tool.output.passages)) {
+      passages = tool.output.passages
+    } else if (typeof tool.output === 'string') {
+      try {
+        const parsed = JSON.parse(tool.output)
+        if (Array.isArray(parsed?.passages)) passages = parsed.passages
+      } catch {}
+    }
+
+    passages.forEach((p) => {
+      const doc = p.source_document || p.doc || p.document_name
+      if (doc) {
+        const page = p.page_number ? `p. ${p.page_number}` : (p.section || '')
+        const key = `${doc}:${page}`
+        if (!sourcesMap.has(key)) {
+          sourcesMap.set(key, { doc, page })
+        }
+      }
+    })
+  }
+
+  if (sourcesMap.size === 0 && citations && citations.length > 0) {
+    citations.forEach((c) => {
+      const doc = c.doc || c.source_document || c.document_name || 'Document'
+      const page = c.section || (c.page_number ? `p. ${c.page_number}` : '')
+      const key = `${doc}:${page}`
+      if (!sourcesMap.has(key)) {
+        sourcesMap.set(key, { doc, page })
+      }
+    })
+  }
+
+  return Array.from(sourcesMap.values())
+}
+
+function extractToolResult(tool) {
+  if (!tool?.output) return null
+  let out = tool.output
+  if (typeof out === 'object') {
+    if (out.result !== undefined) out = out.result
+    else if (out.value !== undefined) out = out.value
+    else out = JSON.stringify(out)
+  }
+  return truncate(String(out).replace(/\s+/g, ' ').trim(), 60)
+}
 
 /**
- * The actual pipeline trace for THIS answer.
+ * Hierarchical reasoning tree & live rotating status.
  *
- * The chat used to show a hardcoded "Retrieving sources · 21s" that
- * counted forever with no request behind it, and 484 lines of invented
- * reasoning steps with fabricated timestamps. All of that is deleted.
- *
- * What replaces it is the same information the backend console trace
- * prints, taken from the response: the plan steps the planner actually
- * produced, the tools that actually ran with their real returned
- * output, and the self-verification verdict. Every value here came back
- * from the server for this specific turn -- nothing is generated in the
- * browser, so there is nothing here that can drift from what happened.
- *
- * Collapsed by default: an engineer wants the answer first and the
- * machinery on demand.
+ * Requirements:
+ * - Assistant messages start directly with the thinking status line (no brand labels above)
+ * - Zero colored badges or pills, zero explainer sentences
+ * - Rotating present-participle active word every ~2.4s next to a pulsing dot while in-progress
+ * - Settles into deterministic completed word (Deliberated, Traced, etc.) with duration
+ * - Expands into a Claude Code-style hierarchical monospace tree with ├─ / └─ connectors
+ * - Sub-actions (e.g. retrieved documents) nested one level deeper under tools
+ * - Smooth container expand/collapse animation via collapsible-grid
  */
-function TurnTrace({ message }) {
+function TurnTrace({ message, isStreaming = false }) {
   const [open, setOpen] = useState(false)
+  const [activeWordIndex, setActiveWordIndex] = useState(0)
+
+  // Rotate active word every 2.4s while actively in progress
+  useEffect(() => {
+    if (!isStreaming) return
+    const interval = setInterval(() => {
+      setActiveWordIndex((prev) => (prev + 1) % ACTIVE_THINKING_WORDS.length)
+    }, 2400)
+    return () => clearInterval(interval)
+  }, [isStreaming])
 
   const steps = Array.isArray(message.plan) ? message.plan : []
   const tools = Array.isArray(message.toolCallEvents) ? message.toolCallEvents : []
   const verification = message.verification || null
-  const sources = Array.isArray(message.citations) ? message.citations : []
+  const citations = Array.isArray(message.citations) ? message.citations : []
+  const route = message.route || null
+  const duration =
+    typeof message.elapsedSeconds === 'number' && message.elapsedSeconds > 0
+      ? message.elapsedSeconds
+      : null
 
-  if (!steps.length && !tools.length && !verification) return null
+  // Nothing to render if finished and no trace data was recorded
+  if (
+    !isStreaming &&
+    !steps.length &&
+    !tools.length &&
+    !verification &&
+    !route &&
+    !citations.length &&
+    !duration
+  ) {
+    return null
+  }
 
-  const summary = [
-    steps.length ? `${steps.length} plan step${steps.length === 1 ? '' : 's'}` : null,
-    tools.length ? `${tools.length} tool call${tools.length === 1 ? '' : 's'}` : null,
-    sources.length ? `${sources.length} source${sources.length === 1 ? '' : 's'}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  const completedWord = getCompletedWord(message.id)
+  const durationText = duration ? `${duration.toFixed(1)}s` : null
+
+  // Build Level 1 tree nodes (steps, tools, verification)
+  const level1Nodes = []
+
+  // 1. Plan steps
+  if (steps.length > 0) {
+    steps.forEach((st, idx) => {
+      level1Nodes.push({
+        id: `step-${st.step_id || idx}`,
+        icon: (
+          <ListTree
+            size={12}
+            strokeWidth={1.75}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
+        ),
+        label: `step: ${truncate(st.description || st.step_id || 'unnamed', 48)}`,
+        status: st.status || 'pending',
+        children: [],
+      })
+    })
+  }
+
+  // 2. Tool calls
+  if (tools.length > 0) {
+    tools.forEach((tool, idx) => {
+      const toolName = tool.tool_name || tool.name || 'tool'
+      const args = tool.input_params || tool.arguments
+      const isRunning = tool.status === 'running'
+      const isFailed = tool.status === 'failed'
+      const secs = tool.seconds ? `(${tool.seconds}s)` : ''
+
+      let icon = (
+        <Wrench
+          size={12}
+          strokeWidth={1.75}
+          className="flex-shrink-0"
+          style={{ color: 'var(--color-text-muted)' }}
+        />
+      )
+      let label = toolName
+      const children = []
+
+      if (toolName === 'search_documents') {
+        icon = (
+          <Search
+            size={12}
+            strokeWidth={1.75}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
+        )
+        const query = args?.query || ''
+        label = `search_documents${query ? ` "${truncate(query, 36)}"` : ''}`
+
+        // Level 2: Retrieved documents nested under search_documents
+        const retrieved = extractRetrievedSources(tool, citations)
+        retrieved.forEach((src, sIdx) => {
+          children.push({
+            id: `src-${sIdx}-${src.doc}`,
+            icon: (
+              <FileText
+                size={11}
+                strokeWidth={1.75}
+                className="flex-shrink-0"
+                style={{ color: 'var(--color-text-muted)' }}
+              />
+            ),
+            label: `${src.doc}${src.page ? ` (${src.page})` : ''}`,
+            status: null,
+          })
+        })
+      } else if (toolName === 'evaluate_expression') {
+        icon = (
+          <Calculator
+            size={12}
+            strokeWidth={1.75}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
+        )
+        const expr = args?.expression || ''
+        label = `evaluate_expression${expr ? ` "${truncate(expr, 36)}"` : ''}`
+
+        const resultVal = extractToolResult(tool)
+        if (resultVal) {
+          children.push({
+            id: `eval-res-${idx}`,
+            icon: (
+              <CornerDownRight
+                size={11}
+                strokeWidth={1.75}
+                className="flex-shrink-0"
+                style={{ color: 'var(--color-text-muted)' }}
+              />
+            ),
+            label: `→ ${resultVal}`,
+            status: null,
+          })
+        }
+      } else {
+        const firstArg =
+          args && typeof args === 'object'
+            ? Object.values(args)[0]
+            : typeof args === 'string'
+            ? args
+            : ''
+        if (firstArg) {
+          label = `${toolName} "${truncate(String(firstArg), 32)}"`
+        }
+      }
+
+      let statusStr = null
+      if (isRunning) {
+        statusStr = '● in progress…'
+      } else if (isFailed) {
+        statusStr = 'failed'
+      } else {
+        statusStr = `done${secs ? ` ${secs}` : ''}`
+      }
+
+      level1Nodes.push({
+        id: `tool-${tool.id || idx}`,
+        icon,
+        label,
+        status: statusStr,
+        children,
+      })
+    })
+  } else if (citations.length > 0) {
+    // Citations available without explicit tool calls
+    const children = citations.map((c, sIdx) => {
+      const doc = c.doc || c.source_document || 'Document'
+      const page = c.section || (c.page_number ? `p. ${c.page_number}` : '')
+      return {
+        id: `fallback-src-${sIdx}`,
+        icon: (
+          <FileText
+            size={11}
+            strokeWidth={1.75}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
+        ),
+        label: `${doc}${page ? ` (${page})` : ''}`,
+        status: null,
+      }
+    })
+
+    level1Nodes.push({
+      id: 'fallback-search',
+      icon: (
+        <Search
+          size={12}
+          strokeWidth={1.75}
+          className="flex-shrink-0"
+          style={{ color: 'var(--color-text-muted)' }}
+        />
+      ),
+      label: `search_documents${message.userRequest ? ` "${truncate(message.userRequest, 36)}"` : ''}`,
+      status: `done${durationText ? ` (${durationText})` : ''}`,
+      children,
+    })
+  } else if (isStreaming) {
+    // In-flight placeholder while waiting for first tool event
+    level1Nodes.push({
+      id: 'streaming-pending',
+      icon: (
+        <Search
+          size={12}
+          strokeWidth={1.75}
+          className="flex-shrink-0"
+          style={{ color: 'var(--color-text-muted)' }}
+        />
+      ),
+      label: 'retrieving context',
+      status: '● in progress…',
+      children: [],
+    })
+  }
+
+  // 3. Self-check / verification
+  if (verification) {
+    level1Nodes.push({
+      id: 'verification-node',
+      icon: (
+        <ShieldCheck
+          size={12}
+          strokeWidth={1.75}
+          className="flex-shrink-0"
+          style={{ color: 'var(--color-text-muted)' }}
+        />
+      ),
+      label: 'self-check',
+      status: verification.passed ? 'confirmed against sources' : 'unverified',
+      children: [],
+    })
+  }
 
   return (
-    <div className="mt-1.5 mb-0.5">
+    <div className="mt-0.5 mb-1 text-xs">
+      {/* ── Top-level collapsed status button ────────────────────────── */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none w-fit"
-        style={{ background: 'transparent', border: 'none', color: 'var(--color-text-muted)' }}
-        title={open ? 'Hide pipeline trace' : 'Show what ran for this answer'}
+        className="inline-flex items-center gap-2 cursor-pointer select-none text-left py-0.5 font-mono"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--color-text-muted)',
+        }}
+        title={open ? 'Hide reasoning tree' : 'Show reasoning tree'}
       >
         <span
           aria-hidden="true"
-          style={{
-            display: 'inline-block',
-            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
-            transition: 'transform 150ms',
-          }}
+          className="inline-block text-[11px] leading-none transition-transform duration-150"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}
         >
           ›
         </span>
-        <span>{summary || 'pipeline trace'}</span>
-        {verification && !verification.passed && (
-          <span style={{ color: 'var(--color-accent)' }}>· unverified</span>
+
+        {/* Status dot: continuously breathing/pulsing while in-progress, static/solid when done */}
+        <span
+          aria-hidden="true"
+          className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
+          style={
+            isStreaming
+              ? {
+                  background: 'var(--color-text-muted)',
+                  animation: 'status-breathe 1.5s ease-in-out infinite',
+                }
+              : {
+                  background: 'var(--color-text-muted)',
+                  opacity: 0.65,
+                }
+          }
+        />
+
+        {isStreaming ? (
+          <span>{ACTIVE_THINKING_WORDS[activeWordIndex]}…</span>
+        ) : (
+          <span>
+            {completedWord}
+            {durationText ? ` for ${durationText}` : ''}
+            {verification && !verification.passed ? ' · unverified' : ''}
+          </span>
         )}
       </button>
 
-      {open && (
-        <div
-          className="mt-1.5 ml-1.5 pl-3 flex flex-col gap-2 text-xs"
-          style={{ borderLeft: '2px solid var(--color-border)' }}
-        >
-          {steps.length > 0 && (
-            <div>
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
-                style={{ color: 'var(--color-text-faint)' }}
-              >
-                Plan
-              </div>
-              {steps.map((st, i) => (
-                <div key={st.step_id || st.id || i} className="flex items-start gap-2 py-0.5">
-                  <span
-                    className="font-mono text-[10px] flex-shrink-0 mt-0.5"
-                    style={{ color: 'var(--color-text-faint)' }}
-                  >
-                    {st.assigned_agent || '—'}
-                  </span>
-                  <span className="flex-1" style={{ color: 'var(--color-text)' }}>
-                    {st.description || st.step_id}
-                  </span>
-                  <span
-                    className="text-[10px] flex-shrink-0 mt-0.5"
-                    style={{
-                      color:
-                        st.status === 'done'
-                          ? 'var(--color-text-muted)'
-                          : 'var(--color-accent)',
-                    }}
-                  >
-                    {st.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {tools.length > 0 && (
-            <div>
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
-                style={{ color: 'var(--color-text-faint)' }}
-              >
-                Tools run
-              </div>
-              {tools.map((ev, i) => (
-                <div key={i} className="py-0.5">
-                  <span className="font-mono text-[11px]" style={{ color: 'var(--color-text)' }}>
-                    {ev.tool_name}
-                  </span>
-                  <span className="ml-1.5 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                    {ev.status}
-                  </span>
-                  {ev.output && (
-                    <div
-                      className="font-mono text-[10px] break-words mt-0.5"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
-                      {/* The tool's REAL returned value, not a summary of
-                          it — a trace that paraphrases what a tool
-                          returned cannot be used to check the tool. */}
-                      {JSON.stringify(ev.output).slice(0, 240)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {verification && (
-            <div>
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wide mb-1"
-                style={{ color: 'var(--color-text-faint)' }}
-              >
-                Self-check
-              </div>
-              <div style={{ color: 'var(--color-text)' }}>
-                <span style={{ color: verification.passed ? 'var(--color-text-muted)' : 'var(--color-accent)' }}>
-                  {verification.passed ? 'passed' : 'not confirmed'}
+      {/* ── Hierarchical Reasoning Tree (Claude Code style) ──────────── */}
+      <div className={`collapsible-grid ${open ? 'is-expanded' : ''}`}>
+        <div className="collapsible-inner">
+          <div className="pt-1.5 pb-1 pl-1 flex flex-col font-mono text-[11.5px] leading-relaxed">
+            {/* Level 0: Turn Root */}
+            <div className="flex items-center gap-1.5 py-0.5">
+              <Terminal
+                size={12}
+                strokeWidth={1.75}
+                className="flex-shrink-0"
+                style={{ color: 'var(--color-text-muted)' }}
+              />
+              <span style={{ color: 'var(--color-text)' }}>turn</span>
+              {route && (
+                <span style={{ color: 'var(--color-text-faint)' }}>
+                  ({route.path})
                 </span>
-                {verification.reason ? ` — ${verification.reason}` : ''}
-              </div>
+              )}
+              <span style={{ color: 'var(--color-text-muted)' }}>
+                · {isStreaming ? 'in progress…' : durationText || 'completed'}
+              </span>
             </div>
-          )}
+
+            {/* Level 1 & Level 2 Nodes */}
+            {level1Nodes.map((node, i) => {
+              const isLast1 = i === level1Nodes.length - 1
+              const connector1 = isLast1 ? '└─ ' : '├─ '
+              const childGuide = isLast1 ? '   ' : '│  '
+
+              return (
+                <div key={node.id || i} className="flex flex-col">
+                  {/* Level 1 Node */}
+                  <div className="flex items-center gap-1.5 py-0.5">
+                    <span
+                      className="whitespace-pre select-none flex-shrink-0"
+                      style={{ color: 'var(--color-text-faint)' }}
+                    >
+                      {connector1}
+                    </span>
+                    {node.icon}
+                    <span className="truncate" style={{ color: 'var(--color-text)' }}>
+                      {node.label}
+                    </span>
+                    {node.status && (
+                      <span
+                        className="flex-shrink-0"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        · {node.status}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Level 2 Sub-actions (e.g. retrieved documents) */}
+                  {node.children &&
+                    node.children.map((child, j) => {
+                      const isLast2 = j === node.children.length - 1
+                      const prefix2 = childGuide + (isLast2 ? '└─ ' : '├─ ')
+                      return (
+                        <div
+                          key={child.id || j}
+                          className="flex items-center gap-1.5 py-0.5"
+                        >
+                          <span
+                            className="whitespace-pre select-none flex-shrink-0"
+                            style={{ color: 'var(--color-text-faint)' }}
+                          >
+                            {prefix2}
+                          </span>
+                          {child.icon}
+                          <span
+                            className="truncate"
+                            style={{ color: 'var(--color-text-muted)' }}
+                          >
+                            {child.label}
+                          </span>
+                          {child.status && (
+                            <span
+                              className="flex-shrink-0"
+                              style={{ color: 'var(--color-text-faint)' }}
+                            >
+                              · {child.status}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                </div>
+              )
+            })}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -417,19 +753,14 @@ export function MessageBubble({ message }) {
 
   // ── Assistant message ────────────────────────────────────────────────────
   // No bubble — just text on the cream surface (FRONTEND.md §3.1)
+  // No app/assistant name label above response (starts directly with thinking-status line)
   return (
-    <div className="flex flex-col gap-1 px-6 animate-fade-in" style={{ maxWidth: '84%' }}>
-      {/* Agent name label */}
-      <span className="text-xs font-medium" style={{ color: 'var(--color-accent)' }}>
-        Sovereign Workbench
-      </span>
+    <div className="flex flex-col gap-2 px-6 animate-fade-in" style={{ maxWidth: '84%' }}>
+      {/* 1. Reasoning tree directly at top */}
+      <TurnTrace message={message} isStreaming={Boolean(message.streaming)} />
 
-      {/* Markdown body with streaming typewriter reveal */}
+      {/* 2. Markdown body with streaming typewriter reveal */}
       <div className="relative">
-        {/* `|| message.content` is a second, cheaper guard on the same
-            failure: if displayedContent is ever empty or non-string
-            while content exists, show the content. Nothing about the
-            reveal animation is worth a blank answer. */}
         <MarkdownBody
           content={
             typeof message.displayedContent === 'string' && message.displayedContent
@@ -441,19 +772,10 @@ export function MessageBubble({ message }) {
         {isStreaming && <StreamCursor />}
       </div>
 
-      {/* What actually ran for this answer. Real plan, real tool
-          output, real verdict — from the response, never invented in
-          the browser. */}
-      {!isStreaming && <TurnTrace message={message} />}
       {!isStreaming && <VerifyButton message={message} />}
 
       <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>
         {formatTime(message.timestamp)}
-        {isStreaming && (
-          <span className="ml-1.5 text-[10px]" style={{ color: 'var(--color-accent)' }}>
-            · streaming…
-          </span>
-        )}
       </span>
     </div>
   )

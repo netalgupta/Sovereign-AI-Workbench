@@ -77,6 +77,17 @@ def decide_path(request: str) -> PathDecision:
     if not text:
         return PathDecision("direct", "Empty request.", False)
 
+    # Safety-critical commands to change setpoints, files, or write to external systems
+    # must be intercepted before executing any model or tool step (FR-15 / Hard constraint #4).
+    from backend.orchestrator.graph import classify_action_request
+    action_kind = classify_action_request(text)
+    if action_kind is not None:
+        return PathDecision(
+            "approval",
+            f"Safety Interlock Gate [FR-15 / §3.12]: Intercepted operator-requested {action_kind}.",
+            False,
+        )
+
     # CHEAP INTENTS FIRST. "HolA aMIGO" previously ran the LLM planner
     # (10.5s), a three-step fallback plan about safety envelopes, a
     # corpus search, and a grounding refusal naming the three documents

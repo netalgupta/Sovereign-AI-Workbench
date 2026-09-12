@@ -39,6 +39,9 @@ function DocIcon({ filename }) {
 // ---------------------------------------------------------------------------
 function SourceRow({ citation }) {
   const [isOpen, setIsOpen] = useState(false)
+  const docName = citation.doc || citation.source_document || citation.document_name || 'Document'
+  const sectionName = citation.section || (citation.page_number ? `p. ${citation.page_number}` : '')
+  const passageText = citation.passage || citation.text || citation.excerpt || ''
 
   return (
     <div className="flex flex-col">
@@ -50,23 +53,23 @@ function SourceRow({ citation }) {
         style={{ background: 'transparent', border: 'none' }}
         aria-expanded={isOpen}
       >
-        <DocIcon filename={citation.doc} />
+        <DocIcon filename={docName} />
 
         <span
           className="font-medium text-xs leading-tight"
           style={{ color: 'var(--color-text-muted)' }}
         >
-          {citation.doc}
+          {docName}
         </span>
 
-        {citation.section && (
+        {sectionName && (
           <>
             <span style={{ color: 'var(--color-text-faint)' }}>·</span>
             <span
               className="text-[10px] leading-tight"
               style={{ color: 'var(--color-text-faint)' }}
             >
-              {citation.section}
+              {sectionName}
             </span>
           </>
         )}
@@ -104,7 +107,7 @@ function SourceRow({ citation }) {
                 wordBreak: 'break-word',
               }}
             >
-              {citation.passage}
+              {passageText}
             </div>
 
             {/* Footer link */}

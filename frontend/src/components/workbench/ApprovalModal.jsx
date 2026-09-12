@@ -1,6 +1,5 @@
 import { AlertTriangle, ArrowRight, ShieldAlert, Check } from 'lucide-react'
 import { useChatStore } from '../../store/chatStore'
-import { MOCK_FEED_RATE_APPROVAL_ACTION } from '../../lib/api'
 
 /**
  * ApprovalModal — Safety-critical human approval gate modal per FRONTEND.md §3.12.
@@ -22,28 +21,65 @@ export function ApprovalModal({
 }) {
   const storeIsOpen = useChatStore((s) => s.isApprovalModalOpen)
   const storeAction = useChatStore((s) => s.pendingApprovalAction)
+  const storeApprovalError = useChatStore((s) => s.approvalError)
+  const isResolving = useChatStore((s) => s.isResolvingApproval)
   const resolveApproval = useChatStore((s) => s.resolveApproval)
 
   const isOpen = propIsOpen !== undefined ? propIsOpen : storeIsOpen
-  const action = propAction || storeAction || MOCK_FEED_RATE_APPROVAL_ACTION
+  const action = propAction || storeAction
 
-  const handleCancel = () => {
+  if (!isOpen) return null
+  if (!action) {
+    // Guard: modal is open but no action data was provided. Surface this
+    // honestly rather than rendering fabricated action parameters.
+    return (
+      <div
+        id="approval-gate-modal-backdrop"
+        className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        style={{ background: 'rgba(5, 5, 8, 0.72)', backdropFilter: 'blur(8px)' }}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          className="w-full max-w-[490px] rounded-2xl p-6 flex flex-col items-center gap-4"
+          style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)' }}
+        >
+          <ShieldAlert size={28} style={{ color: 'var(--color-accent)' }} />
+          <p className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
+            No action data available
+          </p>
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            The approval gate was triggered but no action payload arrived from the backend.
+            Close this modal and retry the operation.
+          </p>
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="px-4 py-2 rounded-lg text-xs font-semibold border cursor-pointer"
+            style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const handleCancel = async () => {
     if (propOnClose) {
       propOnClose()
     } else {
-      resolveApproval(false)
+      await resolveApproval(false)
     }
   }
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (propOnConfirm) {
-      propOnConfirm()
+      await propOnConfirm()
     } else {
-      resolveApproval(true)
+      await resolveApproval(true)
     }
   }
-
-  if (!isOpen) return null
 
   return (
     <div
@@ -267,13 +303,32 @@ export function ApprovalModal({
           </div>
         </div>
 
+        {/* Authorization Failure Banner if backend rejection or network error */}
+        {storeApprovalError && (
+          <div
+            id="approval-gate-error-banner"
+            className="w-full mt-3 p-3 rounded-xl flex items-center gap-2.5 text-left border animate-shake"
+            style={{
+              background: 'rgba(239, 68, 68, 0.12)',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              color: '#ef4444',
+            }}
+          >
+            <ShieldAlert size={16} className="flex-shrink-0" />
+            <span className="text-xs font-semibold leading-tight">
+              {storeApprovalError}
+            </span>
+          </div>
+        )}
+
         {/* Explicit Action Buttons ONLY — No click-outside or top-right X dismiss */}
         <div className="w-full mt-5 flex items-center gap-3">
           <button
             type="button"
             id="approval-gate-cancel-btn"
+            disabled={isResolving}
             onClick={handleCancel}
-            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)]"
+            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
             style={{
               background: 'var(--color-surface)',
               borderColor: 'var(--color-border-strong)',
@@ -285,14 +340,15 @@ export function ApprovalModal({
           <button
             type="button"
             id="approval-gate-confirm-btn"
+            disabled={isResolving}
             onClick={handleConfirm}
-            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5"
+            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5 disabled:opacity-60"
             style={{
               background: 'var(--color-accent)',
             }}
           >
             <Check size={14} strokeWidth={2.6} />
-            <span>Authorize &amp; Dispatch</span>
+            <span>{isResolving ? 'Authorizing…' : 'Authorize & Dispatch'}</span>
           </button>
         </div>
       </div>

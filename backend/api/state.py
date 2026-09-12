@@ -262,8 +262,8 @@ class PipelineState:
                 original_len = len(self._chunks)
                 self._chunks = [
                     c for c in self._chunks
-                    if c.metadata.source_document != doc_name
-                    and c.metadata.source_document != target_path
+                    if c.metadata.source_document.lower() != doc_name.lower()
+                    and c.metadata.source_document.lower() != target_path.lower()
                     and not norm_path in str(Path(c.metadata.source_document).resolve()).lower()
                 ]
                 removed_count = original_len - len(self._chunks)
@@ -273,20 +273,20 @@ class PipelineState:
         if self._store and getattr(self._store, "_conn", None):
             try:
                 self._store._conn.execute(
-                    "DELETE FROM chunks WHERE source_document = ? OR source_document LIKE ?",
+                    "DELETE FROM chunks WHERE LOWER(source_document) = LOWER(?) OR LOWER(source_document) LIKE LOWER(?)",
                     (doc_name, f"%{doc_name}%")
                 )
                 self._store._conn.commit()
             except Exception:
                 pass
 
-        # 4. If file is in 07_User_Uploads or explicitly specified, delete from disk
+        # 4. Only delete from disk if the file was physically an app-managed upload in 07_User_Uploads.
+        # User original documents elsewhere on disk must NEVER be deleted.
         file_deleted = False
         try:
-            if p.exists() and p.is_file():
-                if "07_user_uploads" in str(p.resolve()).lower() or p.name in target_path:
-                    p.unlink()
-                    file_deleted = True
+            if p.exists() and p.is_file() and "07_user_uploads" in str(p.resolve()).lower():
+                p.unlink()
+                file_deleted = True
         except Exception:
             pass
 

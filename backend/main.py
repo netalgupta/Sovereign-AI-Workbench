@@ -82,9 +82,13 @@ async def lifespan(app: FastAPI):
         # Actionable, and explicit that the rest of the system is fine.
         # This previously printed a raw docker-py 404 URL, which looked
         # like a crash and told nobody what to do about it.
-        from backend.sandbox.pool import SandboxImageMissing
+        try:
+            from backend.sandbox.pool import SandboxImageMissing
+            is_missing = isinstance(exc, SandboxImageMissing)
+        except Exception:
+            is_missing = False
 
-        if isinstance(exc, SandboxImageMissing):
+        if is_missing:
             logger.warning(
                 "Sandbox DISABLED - no local image.\n%s\n"
                 "Everything else (chat, retrieval, graph, tools) works normally; "

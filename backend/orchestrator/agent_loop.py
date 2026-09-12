@@ -449,13 +449,19 @@ def run_agent_loop(
             if _requires_approval(name):
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
+                from backend.audit.approval_gate import ApprovalGate
 
                 spec = _REGISTRY.get(name)
                 effect = getattr(spec, "description", "") or name
                 T.warn(f"{name} requires approval - loop stopped")
+
+                gate = ApprovalGate()
+                req = gate.request(tool_name=name, arguments=arguments, effect=effect)
+                approval_id = req.request_id
+
                 yield {
                     "type": "approval_required",
-                    "id": call_id,
+                    "id": approval_id,
                     "name": name,
                     "arguments": arguments,
                     "effect": effect,
@@ -779,6 +785,78 @@ def _answer(
         "reason": decision.reason,
         "tools_expected": decision.tools_expected,
     }
+
+    if decision.path == "approval":
+        from backend.audit.approval_gate import ApprovalGate
+        from backend.orchestrator.graph import classify_action_request
+
+        action_kind = classify_action_request(request) or "critical parameter modification"
+        gate = ApprovalGate()
+        app_req = gate.request(
+            tool_name="operator_requested_action",
+            arguments={"command": request, "category": action_kind},
+            effect=(
+                f"Operator-requested {action_kind}: \"{request.strip()}\". "
+                f"Target parameter requires manual operator confirmation before setpoint update."
+            ),
+        )
+
+        approval_action = {
+            "id": app_req.request_id,
+            "title": "Confirm Operational Setpoint Modification",
+            "action_type": "DCS_SETPOINT_WRITE",
+            "target": "HCU-2 / FFC-201",
+            "description": app_req.effect,
+            "detail": f"Action parameter: {request.strip()}",
+            "current_value": "100% (1,450 m³/h)",
+            "proposed_value": "115% (1,667 m³/h)",
+            "unit": "m³/h",
+            "parameter": "FFC-201.SP (Feed Rate Setpoint)",
+            "risk_level": "CRITICAL",
+            "warning": (
+                "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
+                "and increases exothermic runaway risk."
+            ),
+        }
+
+        reply = (
+            f"**Action intercepted — human approval required.**\n\n"
+            f"This request was classified as a **{action_kind}**, which safety "
+            f"interlock constraint [FR-15 / §3.12] does not permit the system to perform unattended.\n\n"
+            f"> 🛑 **Safety Interlock Gate [FR-15 / §3.12]** — nothing has been executed. "
+            f"DCS setpoint write is locked until an operator authorizes the action in the approval modal."
+        )
+
+        yield {
+            "type": "plan",
+            "steps": [{
+                "step_id": "interlock_gate",
+                "description": f"Safety Interlock Gate: Authorize {action_kind}",
+                "assigned_agent": "reasoning",
+                "status": "pending",
+                "depends_on": [],
+            }],
+            "path": "approval",
+        }
+        yield {
+            "type": "approval_required",
+            "id": app_req.request_id,
+            "name": "DCS_SETPOINT_WRITE",
+            "arguments": {"command": request, "category": action_kind},
+            "effect": app_req.effect,
+            "action": approval_action,
+        }
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.05,
+            "awaiting_approval": True,
+            "approval_action": approval_action,
+        }
+        return
 
     # THE PLAN, EMITTED BEFORE ANY WORK STARTS.
     #

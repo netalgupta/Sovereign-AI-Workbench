@@ -533,7 +533,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
               Drag and drop folders or files here
             </span>
             <span className="text-[10px] mt-0.5" style={{ color: 'var(--color-text-faint)' }}>
-              Auto-extracted with OCR & table structure preservation
+              Browser sandboxed transfer. For zero-copy in-place indexing, use Browse or Path below.
             </span>
           </div>
 
