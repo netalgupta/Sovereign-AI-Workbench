@@ -2001,6 +2001,11 @@ def forget_fact(fact_id: str) -> dict:
 class AgentStreamRequest(BaseModel):
     message: str
     session_id: str = "default"
+    # Documents currently enabled in the Sources panel. None means "no
+    # filter" (search everything); an EMPTY LIST means the user switched
+    # everything off, which is a different instruction and is honoured
+    # as one.
+    active_documents: list[str] | None = None
 
 
 @router.post("/chat/stream")
@@ -2046,7 +2051,11 @@ def chat_stream(body: AgentStreamRequest):
             # run_turn, not run_agent_loop: the backend decides which
             # path answers this and emits the same protocol either way,
             # so the UI never has to choose. See path_router.py.
-            for event in run_turn(body.message, session_id=body.session_id):
+            for event in run_turn(
+                body.message,
+                session_id=body.session_id,
+                active_documents=body.active_documents,
+            ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:  # noqa: BLE001
             # A crash mid-stream must reach the client as an event. A
@@ -2069,6 +2078,108 @@ def chat_stream(body: AgentStreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class AddModelRequest(BaseModel):
+    id: str
+    model: str
+    backend: str = "ollama"
+    task_tags: list[str] = []
+
+
+@router.post("/models")
+def add_model(body: AddModelRequest) -> dict:
+    """Append a model to models.yaml and reload the registry (FR-4).
+
+    WHY THIS EXISTS. Only GET was implemented, so the settings page's
+    Add Model form posted into a 405 and showed a success toast anyway.
+    FR-4 -- adding a model without a code change -- is a scripted
+    on-stage moment, and it had no backend at all.
+
+    VALIDATED AGAINST OLLAMA BEFORE IT IS WRITTEN. Two tags in this
+    repo's own registry never existed (`qwen2-vl:7b`, `phi-3.5-mini`)
+    and both were discovered only when something tried to use them --
+    one of them had been silently 404ing the router and the verifier for
+    weeks. A registry that accepts a name nobody checked is how that
+    happens, so a tag Ollama does not have is refused here with the pull
+    command rather than written and discovered later.
+
+    The registry is reloaded in-process afterwards, so the new model is
+    usable immediately. That is the whole point of the demo.
+    """
+    import yaml
+
+    from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+    model_id = body.id.strip()
+    tag = body.model.strip()
+    if not model_id or not tag:
+        raise HTTPException(400, detail="Both 'id' and 'model' are required.")
+
+    registry_path = Path(_DEFAULT_REGISTRY_PATH)
+    try:
+        existing = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, detail=f"Could not read models.yaml: {exc}") from exc
+
+    if model_id in existing:
+        raise HTTPException(
+            409, detail=f"Registry id {model_id!r} already exists."
+        )
+
+    # Refuse a tag Ollama does not have.
+    try:
+        import requests
+
+        res = requests.get("http://localhost:11434/api/tags", timeout=5)
+        res.raise_for_status()
+        pulled = {m["name"] for m in res.json().get("models", [])}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            503,
+            detail=(
+                f"Cannot reach Ollama to verify {tag!r}: {exc}. Refusing to "
+                f"write an unverified model name into the registry."
+            ),
+        ) from exc
+
+    if tag not in pulled and f"{tag}:latest" not in pulled:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Ollama does not have {tag!r}. Pull it first:\n"
+                f"    ollama pull {tag}\n"
+                f"Two tags in this registry never existed and were found only "
+                f"when something tried to use them; names are verified here "
+                f"rather than trusted."
+            ),
+        )
+
+    raw = registry_path.read_text(encoding="utf-8")
+    entry = (
+        f"\n- id: {model_id}\n"
+        f"  backend: {body.backend}\n"
+        f"  model: {tag}\n"
+        f"  task_tags: [{', '.join(body.task_tags)}]\n"
+    )
+    registry_path.write_text(raw.rstrip() + "\n" + entry, encoding="utf-8")
+
+    try:
+        reloaded = load_registry(str(registry_path))
+    except Exception as exc:  # noqa: BLE001
+        # Put the file back rather than leaving the registry unloadable.
+        registry_path.write_text(raw, encoding="utf-8")
+        raise HTTPException(
+            500,
+            detail=f"Entry was invalid and has been rolled back: {exc}",
+        ) from exc
+
+    return {
+        "added": model_id,
+        "model": tag,
+        "registry_size": len(reloaded),
+        "message": f"{model_id} added and the registry reloaded. Usable now.",
+    }
 
 
 # --------------------------------------------------------- verification

@@ -59,12 +59,18 @@ def test_out_of_corpus_question_never_calls_the_llm_at_all(monkeypatch):
     """
     import backend.retrieval.generation as generation_module
     from backend.retrieval.generation import generate_grounded_answer
+    # The stubs below take **_ so that adding a parameter to
+    # retrieve_with_grounding_check does not break them. A double that
+    # pins the exact signature fails on every additive change to the
+    # real function, for a reason unrelated to what the test checks --
+    # which teaches people to avoid adding parameters rather than to
+    # cover them.
     from backend.retrieval.grounded_retrieval import GroundedRetrievalResult
 
     monkeypatch.setattr(
         generation_module,
         "retrieve_with_grounding_check",
-        lambda store, query, top_k: GroundedRetrievalResult(
+        lambda store, query, top_k=5, **_: GroundedRetrievalResult(
             found=False, chunks=[], reason="not found in the provided corpus"
         ),
     )
@@ -136,7 +142,7 @@ def test_citation_resolves_correctly_when_the_answer_is_not_the_top_ranked_chunk
     monkeypatch.setattr(
         generation_module,
         "retrieve_with_grounding_check",
-        lambda store, query, top_k: GroundedRetrievalResult(found=True, chunks=chunks),
+        lambda store, query, top_k=5, **_: GroundedRetrievalResult(found=True, chunks=chunks),
     )
 
     responses.add(

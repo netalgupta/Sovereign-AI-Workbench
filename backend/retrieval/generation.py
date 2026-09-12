@@ -306,6 +306,7 @@ def generate_grounded_answer(
     *,
     search_query: str | None = None,
     conversation_context: str = "",
+    active_documents: list[str] | None = None,
 ) -> GeneratedAnswer:
     """Answer `user_request`, grounded only in what `store` actually contains.
 
@@ -321,6 +322,8 @@ def generate_grounded_answer(
     T.section("RETRIEVAL")
     T.kv("request", repr(user_request))
     T.kv("top_k", top_k)
+    if active_documents is not None:
+        T.kv("active sources", f"{len(active_documents)} enabled (filter ON)")
     try:
         from backend.retrieval.query_builder import explain as _explain_query
 
@@ -345,7 +348,9 @@ def generate_grounded_answer(
         T.kv("resolved query", repr(effective_query))
 
     with T.stage("hybrid search + grounding check"):
-        grounding = retrieve_with_grounding_check(store, effective_query, top_k)
+        grounding = retrieve_with_grounding_check(
+            store, effective_query, top_k, active_documents=active_documents
+        )
 
     try:
         from backend.ingestion.embeddings import active_backend
