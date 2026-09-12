@@ -113,34 +113,122 @@ def _deterministic_embed(texts: list[str], dim: int = 1024) -> np.ndarray:
     return vecs
 
 
+# A failed load is retried after this long, not abandoned for the
+# lifetime of the process. See _get_model.
+_RETRY_AFTER_SECONDS = 60.0
+_last_failure_at: float = 0.0
+_failure_count: int = 0
+
+
+def degraded_reason() -> str | None:
+    """Why embeddings are degraded right now, or None if they are fine.
+
+    Exposed so /api/health and the turn trace can report it. A silent
+    degradation is the worst possible shape for this particular failure
+    -- see the docstring below.
+    """
+    if _active_backend == SEMANTIC_BACKEND:
+        return None
+    # The consequence is stated in BOTH branches. An earlier version
+    # returned "Embedding model not yet loaded" when the failure count
+    # was zero, which is technically true and practically misleading:
+    # if the active backend is the fallback then hash vectors ARE being
+    # used, whatever the reason, and the reader needs to know that and
+    # not just that something is pending.
+    detail = (
+        f"failed to load after {_failure_count} attempt(s)"
+        if _failure_count
+        else "has not loaded"
+    )
+    return (
+        f"The semantic embedding model {detail}; running on hash vectors, "
+        f"which carry NO semantic meaning. Retrieval quality is severely "
+        f"degraded until it loads."
+    )
+
+
 def _get_model():
     """Load the real embedding model, or return None if unavailable.
 
-    Failure to load is reported ONCE, loudly. The previous version
-    swallowed every exception silently, which is how a NameError in this
-    very function went unnoticed while the entire system ran on hash
-    vectors — a degradation invisible in every test that only checked
-    vector SHAPE, since the fallback returns correctly-shaped garbage.
-    """
-    global _model, _active_backend, _load_failed
-    if _model is None and not _load_failed:
-        try:
-            cache_dir = require_cached("embeddings", MODEL_ID)
-            if cache_dir.exists() and any(cache_dir.iterdir()):
-                from sentence_transformers import SentenceTransformer
+    A FAILED LOAD IS RETRIED, NOT ABANDONED.
 
-                _model = SentenceTransformer(str(cache_dir), device=_embedding_device())
-                _active_backend = SEMANTIC_BACKEND
-            else:
-                _load_failed = True
-                _active_backend = FALLBACK_BACKEND
-                _warn_fallback("the model directory is empty")
-        except Exception as exc:  # noqa: BLE001 — reported, never hidden
-            _model = None
+    This used to set `_load_failed = True` permanently on the first
+    failure, so a single transient error degraded the process for its
+    entire lifetime. That happened for real: the server was running
+    while a CUDA torch install replaced torch's DLLs, the load failed
+    once mid-swap, and every query afterwards silently used hash
+    vectors -- correctly shaped, semantically meaningless.
+
+    The observed effect was total. Asked for "assignments and tasks for
+    advay", retrieval returned atherva_srivastava.md and krish_korat.md
+    and the answer described a third person entirely. Adding a single
+    backslash to the query changed the entire result set, because hash
+    vectors have no notion of meaning for a typo to survive.
+
+    None of it looked broken. Every vector had the right shape, every
+    search returned results, every answer had citations. The trace line
+    "embedding backend: deterministic-hash" was the only evidence, and
+    it was one line among hundreds.
+
+    A guard against expensive retry loops is reasonable. "Never retry"
+    is not: transient failures -- a file lock during an install, a
+    momentary allocation failure, a GPU in use -- are exactly the kind
+    that resolve on their own.
+    """
+    global _model, _active_backend, _load_failed, _last_failure_at, _failure_count
+    import time as _time
+
+    if _model is not None:
+        return _model
+
+    if _load_failed and (_time.time() - _last_failure_at) < _RETRY_AFTER_SECONDS:
+        return None
+
+    try:
+        cache_dir = require_cached("embeddings", MODEL_ID)
+        if cache_dir.exists() and any(cache_dir.iterdir()):
+            from sentence_transformers import SentenceTransformer
+
+            _model = SentenceTransformer(str(cache_dir), device=_embedding_device())
+            _active_backend = SEMANTIC_BACKEND
+            if _failure_count:
+                # Recovery is announced. An operator who saw the warning
+                # needs to know it cleared, or they will restart a server
+                # that had already healed.
+                _warn_recovered()
+            _load_failed = False
+            _failure_count = 0
+        else:
             _load_failed = True
+            _last_failure_at = _time.time()
+            _failure_count += 1
             _active_backend = FALLBACK_BACKEND
-            _warn_fallback(f"{type(exc).__name__}: {exc}")
+            _warn_fallback("the model directory is empty")
+    except Exception as exc:  # noqa: BLE001 — reported, never hidden
+        _model = None
+        _load_failed = True
+        _last_failure_at = _time.time()
+        _failure_count += 1
+        _active_backend = FALLBACK_BACKEND
+        _warn_fallback(f"{type(exc).__name__}: {exc}")
     return _model
+
+
+def _warn_recovered() -> None:
+    import warnings
+
+    warnings.warn(
+        f"Embedding model recovered after {_failure_count} failed attempt(s); "
+        f"semantic retrieval is active again.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    try:
+        from backend.observability import turn_log as T
+
+        T.note(T.GREEN("  embedding model RECOVERED - semantic retrieval active"))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _embedding_device() -> str:

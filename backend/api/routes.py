@@ -36,6 +36,16 @@ router = APIRouter(prefix="/api")
 
 # ---------------------------------------------------------------- health
 
+def _embedding_backend_status() -> tuple[str, str | None]:
+    """(backend name, degradation reason or None) without forcing a load."""
+    try:
+        from backend.ingestion.embeddings import active_backend, degraded_reason
+
+        return active_backend(), degraded_reason()
+    except Exception as exc:  # noqa: BLE001
+        return "unknown", f"could not read embedding status: {exc}"
+
+
 @router.get("/health")
 def health() -> dict:
     """Liveness plus what is actually available right now.
@@ -54,6 +64,12 @@ def health() -> dict:
         "corpus_loaded": state.corpus_is_loaded,
         "snapshot_available": state.snapshot() is not None,
         "snapshot_written_at": state.snapshot_age(),
+        # Whether retrieval is actually semantic. This silently fell
+        # back to hash vectors for a whole session after a transient
+        # load failure, and nothing in the API said so.
+        "embedding_backend": _embedding_backend_status()[0],
+        "embeddings_degraded": _embedding_backend_status()[1] is not None,
+        "embeddings_degraded_reason": _embedding_backend_status()[1],
         "graph_available": graph.get("available", False),
         "graph_error": graph.get("error"),
         "images_stored": len(state.image_store.all_records()),
@@ -1395,6 +1411,19 @@ class ChatRequestBody(BaseModel):
     session_id: str = "default"
 
 
+# Machine-readable action type per gate category. Mapped rather than
+# hardcoded, because the previous single literal "DCS_SETPOINT_WRITE"
+# labelled a request to write a Word document as a setpoint change --
+# and action_type is what an audit reader filters on.
+_ACTION_TYPES = {
+    "setpoint change": "SETPOINT_WRITE",
+    "SAP / ERP write": "SAP_WRITE",
+    "outbound send": "OUTBOUND_SEND",
+    "destructive change": "DESTRUCTIVE_CHANGE",
+    "file write": "FILE_WRITE",
+}
+
+
 @router.post("/chat")
 def chat(body: ChatRequestBody) -> dict:
     """Core agentic orchestration endpoint for the workbench chat interface.
@@ -1451,25 +1480,60 @@ def chat(body: ChatRequestBody) -> dict:
         gate = ApprovalGate()
         try:
             req = gate.get(state.final_output_path)
+            # THE PAYLOAD DESCRIBES THE ACTION THAT WAS ACTUALLY
+            # REQUESTED. IT USED TO DESCRIBE A DIFFERENT ONE.
+            #
+            # Every field below except `description` and `id` was a
+            # hardcoded literal about a feed-rate change. Asked to
+            # "Draft a DOCX report on the Hassan incident and save it",
+            # the modal rendered:
+            #
+            #     DCS_SETPOINT_WRITE
+            #     "Confirm Operational Setpoint Modification"
+            #     Target: HCU-2 / FFC-201
+            #     CURRENT 100% (1,450 m3/h) -> PROPOSED 115% (1,667 m3/h)
+            #     "+15.0% Excursion"
+            #     "Operating above 110% reduces catalyst residence time
+            #      (LHSV > 1.8 h-1) and increases exothermic runaway risk"
+            #
+            # for a request to write a Word document. The one honest
+            # line -- "Operator-requested file write" -- came from the
+            # gate itself and sat surrounded by invented flow rates.
+            #
+            # This is the single worst place in the product for that.
+            # It is the screen where a human signs off, and approval
+            # recorded against invented figures produces a signed audit
+            # entry for something nobody approved. Ask an operator
+            # "what did you authorise?" and the honest answer was a
+            # number the system made up. That is worse than having no
+            # gate: the gate is what makes the record trustworthy.
+            #
+            # Nothing here is invented now. Fields the system cannot
+            # know are ABSENT rather than filled with plausible
+            # placeholders -- an empty field reads as unknown, a
+            # plausible one reads as measured.
+            category = req.arguments.get("category") or "operator action"
+            command = req.arguments.get("command") or req.effect
+
             approval_action = {
                 "id": req.request_id,
-                "title": "Confirm Operational Setpoint Modification",
-                "action_type": "DCS_SETPOINT_WRITE",
-                "target": req.arguments.get("target", "HCU-2 / FFC-201"),
+                "title": f"Confirm {category}",
+                "action_type": _ACTION_TYPES.get(category, "OPERATOR_ACTION"),
+                # The operator's own words. The system has not resolved a
+                # device, a file path or a magnitude, and says so rather
+                # than guessing one.
+                "target": None,
                 "description": req.effect,
-                "detail": f"Action parameter: {req.arguments.get('command', req.effect)}",
-                "current_value": "100% (1,450 m³/h)",
-                "proposed_value": "115% (1,667 m³/h)",
-                "unit": "m³/h",
-                "parameter": "FFC-201.SP (Feed Rate Setpoint)",
-                "risk_level": "CRITICAL",
+                "detail": command,
+                "requested_by_operator": command,
+                "resolved_parameters": False,
+                "risk_level": "REQUIRES_REVIEW",
                 "warning": (
-                    "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
-                    "and increases exothermic runaway risk."
-                ),
-                "mitigation_required": (
-                    "Mandatory pre-condition: Quench flow controller (QFC-18) armed and "
-                    "H₂/HC ratio maintained > 1,000 Nm³/m³ before setpoint ramp."
+                    "The workbench has NOT resolved a target device, file "
+                    "path or value for this instruction. Approving records "
+                    "your authorisation for the action exactly as worded "
+                    "above — confirm the specifics yourself before "
+                    "authorising."
                 ),
                 "token": req.token,
             }

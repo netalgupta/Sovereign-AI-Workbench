@@ -352,6 +352,18 @@ def generate_grounded_answer(
         from backend.retrieval.grounded_retrieval import confidence_threshold
 
         T.kv("embedding backend", active_backend())
+
+        # Loud on EVERY degraded turn, not once at startup. An operator
+        # starts the server and walks away; a single warning in the
+        # scrollback is a warning nobody sees. This ran for an entire
+        # session on hash vectors -- correctly shaped, semantically
+        # meaningless -- and the only evidence was one trace line among
+        # hundreds reading "deterministic-hash".
+        from backend.ingestion.embeddings import degraded_reason
+
+        _degraded = degraded_reason()
+        if _degraded:
+            T.error("EMBEDDINGS DEGRADED: " + _degraded)
         T.kv("confidence threshold", f"{confidence_threshold():.3f}")
     except Exception:  # noqa: BLE001 — tracing must never break the turn
         pass
