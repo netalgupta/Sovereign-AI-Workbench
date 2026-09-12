@@ -4,7 +4,7 @@ Written before an auto-compaction so the next context window can resume
 without re-deriving state. **Nothing here is blocked or half-applied.**
 
 Branch `aryan/rag-and-graphrag`. `main` is at the same commit.
-Suite: **381 passed, 1 skipped.** Working tree clean at handoff.
+Suite: **389 passed, 1 skipped.** Working tree clean at handoff.
 
 ---
 
@@ -18,7 +18,7 @@ Suite: **381 passed, 1 skipped.** Working tree clean at handoff.
 | TOOLS.md rows | 72, all owned, 35 built |
 | Embedding model | `bge-large-en-v1.5` on **cuda:0** |
 | Reasoning model | `qwen2.5:7b` (registry id `reasoning-model`) |
-| Typical turn | 17-25s warm; greetings ~3.5s; capability 0.008s |
+| Typical turn | 17-25s warm; greetings/closings/capability **under 0.02s** |
 
 ### Servers must be restarted after a branch switch
 A `git checkout` across 79 commits rewrites hundreds of files under
@@ -58,12 +58,30 @@ Embeddings 99% CPU → **41%**, 64 embeddings in 0.09s.
 
 ## 3. Open items, in the order I would take them
 
-### a. Greeting latency — 3.5s, unexplained
-`decide_path` and `classify` measure **0.0001s**, so the time is
-elsewhere in `run_turn`. Capability returns in 0.008s through the same
-instant path, which makes greeting/closing being slower backwards and
-means it is not the shared code. **Not diagnosed.** 46.5s → 3.5s is
-already won; this is the remainder.
+### a. ~~Greeting latency~~ — CLOSED, `4ee534f`
+Two causes, both found by probing the endpoint instead of the helper:
+
+1. **The triage never ran on the path the product uses.** It was wired
+   into `decide_path()`, which only `/api/chat/stream` consults; the
+   frontend posts to `/api/chat`, which enters the LangGraph
+   orchestrator. "Hola Amigo" still cost **50.80s**. Every intent test
+   passed the whole time, because they all tested `classify()` rather
+   than an endpoint. Triage now lives in `router_node` — the one graph
+   both paths share.
+2. **`_emit_plan` ran above the instant-path check.** A greeting is not
+   a "simple lookup" (no question opener), so it fell through to the LLM
+   planner and spent 10.5s planning a turn about to be answered from a
+   constant. Capability looked *faster* only because "what can you do"
+   starts with "what" and matched the opener.
+
+Warm, both endpoints: greeting **0.003s / 0.014s**, closing
+**0.001s / 0.008s**, capability **0.387s / 0.008s**.
+
+The four graph-level tests were run against the previous commit and all
+four fail there — worth repeating, because `_emit_plan` catches
+`Exception`, so a raising stub degrades to a one-step plan and every
+shape assertion still passes. Asserting the planner was **not called**
+is what makes that test real.
 
 ### b. Agentic path under-extracts on lookups
 The loop retrieves correctly and then fails to pull the value out.
