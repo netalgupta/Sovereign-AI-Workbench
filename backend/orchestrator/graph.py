@@ -151,6 +151,130 @@ def is_action_approval_request(msg: str) -> bool:
 
 # ── Graph Nodes ─────────────────────────────────────────────────────────────
 
+_CONVERSION_RE = re.compile(
+    r"\bconvert\s+(.+?)\s+(?:to|into|in)\s+([A-Za-z\u00b0/*^\d]+)\s*[.?!]*$",
+    re.I,
+)
+
+
+def _computed_answer(request: str) -> dict[str, Any] | None:
+    """Answer a bare calculation with an EXECUTED tool call, or None.
+
+    Hard constraint #3: no number may come from a model doing arithmetic
+    in its head. So this does not shortcut the calculation -- it
+    shortcuts the RETRIEVAL, and still runs the same registered tool the
+    dispatcher would have run, recording a real ToolCallEvent so the
+    trace shows the call that produced the figure.
+
+    Returns None when nothing here is computable, which sends the
+    request back to the full pipeline. That direction is deliberate: an
+    unanswered calculation costs seconds, an unsourced number costs
+    trust.
+    """
+    from backend.observability import turn_log as T
+
+    expression = extract_arithmetic_expression(request)
+    if expression is not None:
+        tool_name = "evaluate_expression"
+        arguments: dict[str, Any] = {"expression": expression}
+    else:
+        # "convert 5 bar to kPa" carries no bare operator between two
+        # numbers, so the arithmetic matcher does not see it. Pint does.
+        match = _CONVERSION_RE.search(request)
+        if match is None:
+            return None
+        tool_name = "evaluate_unit_expression"
+        arguments = {
+            "expression": match.group(1).strip(),
+            "target_unit": match.group(2).strip(),
+        }
+
+    T.section("DIRECT CALCULATION")
+    T.kv("tool", tool_name)
+    T.kv("arguments", str(arguments))
+    try:
+        result = call_tool_as("math_tool", tool_name, arguments)
+    except Exception as exc:  # noqa: BLE001
+        # A failed calculation is reported as failed. It is not handed to
+        # a model to have a go at instead.
+        T.warn(f"{tool_name} failed: {type(exc).__name__}: {exc}")
+        return {
+            "draft_output": (
+                f"I could not evaluate that with the calculation tools: {exc}\n\n"
+                f"I do not compute numbers myself, so there is no answer to "
+                f"give here."
+            ),
+            "plan": [
+                PlanStep(
+                    step_id="calculate",
+                    description=f"Evaluate {str(arguments.get('expression', request))[:100]}",
+                    assigned_agent="math",
+                    status="failed",
+                )
+            ],
+            "tool_call_log": [
+                ToolCallEvent(
+                    tool_name=tool_name,
+                    input_params=arguments,
+                    output={"error": str(exc)},
+                    status="failed",
+                )
+            ],
+        }
+
+    # THE TWO TOOLS RETURN DIFFERENT SHAPES, and guessing wrongly does
+    # not fail -- it prints the model object. CalcResult carries
+    # `result`; UnitCalcResult carries `result_magnitude` +
+    # `result_unit`. Probing for the wrong attribute fell through to
+    # str(result) and rendered
+    #
+    #     **5 bar = expression='5 bar' result_magnitude=500.0 ...**
+    #
+    # a pydantic repr presented to an operator as an answer. Read by
+    # field name, and if neither shape is present say so rather than
+    # stringify whatever came back.
+    value = getattr(result, "result", None)
+    if value is None:
+        magnitude = getattr(result, "result_magnitude", None)
+        if magnitude is None:
+            T.warn(f"{tool_name} returned an unrecognised shape: {type(result).__name__}")
+            return None
+        unit = getattr(result, "result_unit", "") or ""
+        value = f"{magnitude} {unit}".strip()
+    shown = arguments.get("expression", request)
+    T.kv("result", str(value))
+
+    steps = getattr(result, "steps", None) or []
+    detail = "\n".join(f"- {line}" for line in list(steps)[:6])
+    reply = f"**{shown} = {value}**\n\n"
+    if detail:
+        reply += detail + "\n\n"
+    reply += (
+        f"Computed by `{tool_name}`, not by the language model -- every number "
+        f"this workbench states comes from an executed tool."
+    )
+
+    return {
+        "draft_output": reply,
+        "plan": [
+            PlanStep(
+                step_id="calculate",
+                description=f"Evaluate {str(shown)[:100]}",
+                assigned_agent="math",
+                status="done",
+            )
+        ],
+        "tool_call_log": [
+            ToolCallEvent(
+                tool_name=tool_name,
+                input_params=arguments,
+                output={"result": str(value)},
+                status="done",
+            )
+        ],
+    }
+
+
 def router_node(state: AgentState) -> dict[str, Any]:
     """Classify task and intercept critical actions for safety approval."""
     req = state.original_request
@@ -196,6 +320,61 @@ def router_node(state: AgentState) -> dict[str, Any]:
             "final_output_path": app_req.request_id,
         }
 
+    # WHAT KIND OF REQUEST IS THIS, asked before any expensive machinery.
+    #
+    # THIS WAS WIRED IN THE WRONG PLACE ONCE ALREADY, and the way it was
+    # wrong is why it lives here now. Triage was added to
+    # path_router.decide_path(), which only /api/chat/stream consults.
+    # The frontend posts to /api/chat, which enters THIS graph -- so
+    # "Hola Amigo" still ran the LLM planner (10.1s), a three-step
+    # fallback plan about "operational parameters and safety envelopes",
+    # a hybrid search, and a grounding refusal naming the three
+    # documents that came closest to matching a Spanish greeting. 50.80
+    # seconds to say "not found". A fix on a path the product does not
+    # take is not a fix; it is a second implementation of the same
+    # decision, and the two disagreed immediately.
+    #
+    # router_node is the entry point of the one graph every non-stream
+    # turn passes through, so putting it here means there is a single
+    # answer to "what is this message" rather than one per endpoint.
+    #
+    # Vetoes on any plant vocabulary (see intent.py), so a message that
+    # deserves a citation can never be short-circuited here.
+    from backend.orchestrator.intent import (
+        CLOSING_REPLY,
+        GREETING_REPLY,
+        capability_reply,
+        classify,
+    )
+
+    intent = classify(req)
+
+    if intent.kind in ("greeting", "closing", "capability"):
+        reply_for = {
+            "greeting": GREETING_REPLY,
+            "closing": CLOSING_REPLY,
+            "capability": capability_reply,
+        }[intent.kind]
+        return {
+            "draft_output": reply_for() if callable(reply_for) else reply_for,
+            "plan": [
+                PlanStep(
+                    step_id=intent.kind,
+                    description=intent.reason,
+                    assigned_agent="reasoning",
+                    status="done",
+                )
+            ],
+        }
+
+    if intent.kind == "arithmetic":
+        computed = _computed_answer(req)
+        if computed is not None:
+            return computed
+        # Nothing the tools could actually evaluate. Falls through to the
+        # full pipeline rather than letting a model answer: hard
+        # constraint #3 has no "it was only a small sum" exception.
+
     return {}
 
 
@@ -232,34 +411,60 @@ def planner_node(state: AgentState) -> dict[str, Any]:
     except Exception as _plan_exc:  # noqa: BLE001
         T.warn(f"planner failed ({type(_plan_exc).__name__}); using the "
                f"deterministic fallback plan")
-        # Fallback to standard deterministic multi-step plan if offline/Ollama unavailable
-        try:
-            task_type = classify_task(state.original_request)
-        except Exception:
-            task_type = "reasoning"
+
+        # THE FALLBACK USED TO COST MORE THAN THE PLANNER IT REPLACES.
+        #
+        # It called classify_task() here -- an LLM call to fast-router,
+        # WITH A RETRY, so up to two. Measured on "Wassup buddy": the
+        # planner failed after 9.69s, and the turn still took 47.14s.
+        # The missing ~37 seconds were this call, because reasoning-model
+        # was resident and fast-router had to be swapped in on an 8 GB
+        # card.
+        #
+        # Its entire contribution was choosing between "math" and
+        # "reasoning" as the label on step-2. A model call, a model
+        # swap, and 37 seconds, to pick a string. The local arithmetic
+        # matcher answers the same question for free and is the same
+        # check the math branch itself uses to decide whether there is
+        # anything to compute.
+        has_arithmetic = extract_arithmetic_expression(state.original_request) is not None
+
+        # AND THE STEPS IT INVENTED WERE NOT REAL.
+        #
+        # step-2 "Verify engineering calculations and safety envelopes"
+        # and step-3 "Synthesize verified findings into grounded
+        # briefing" both dispatch to the `reasoning` agent, whose branch
+        # in dispatch_node is `step.status = "done"` -- a no-op. So the
+        # trace printed
+        #
+        #     step-2  reasoning  done  Verify engineering calculations...
+        #
+        # for a message where nothing whatsoever was verified. That is
+        # the same defect as the fabricated approval payload: a record
+        # of work that did not happen, in the log an operator would use
+        # to understand what the system did. The synthesis is done by
+        # synthesize_node, which is not a plan step at all.
+        #
+        # What is left is what actually runs.
         fallback_steps = [
             PlanStep(
-                step_id="step-1",
-                description="Retrieve operational parameters and technical specifications",
+                step_id="retrieve",
+                description=f"Retrieve passages for: {state.original_request.strip()[:110]}",
                 assigned_agent="retrieval",
                 status="pending",
                 depends_on=[],
-            ),
-            PlanStep(
-                step_id="step-2",
-                description="Verify engineering calculations and safety envelopes",
-                assigned_agent="math" if task_type == "math" else "reasoning",
-                status="pending",
-                depends_on=["step-1"],
-            ),
-            PlanStep(
-                step_id="step-3",
-                description="Synthesize verified findings into grounded briefing",
-                assigned_agent="reasoning",
-                status="pending",
-                depends_on=["step-2"],
-            ),
+            )
         ]
+        if has_arithmetic:
+            fallback_steps.append(
+                PlanStep(
+                    step_id="calculate",
+                    description="Evaluate the arithmetic in the request with the math tool",
+                    assigned_agent="math",
+                    status="pending",
+                    depends_on=[],
+                )
+            )
         return {"plan": fallback_steps, "current_step_index": 0}
 
 
@@ -762,7 +967,11 @@ def build_orchestrator_graph():
 
     # Conditional branching from router
     def router_branch(state: AgentState):
-        if state.awaiting_human_approval:
+        # draft_output set this early means the router answered the turn
+        # itself -- an approval interception, a greeting, or a completed
+        # calculation. Running the planner on top of that replaces a
+        # finished answer with a plan for work already done.
+        if state.awaiting_human_approval or state.draft_output:
             return END
         return "planner"
 
