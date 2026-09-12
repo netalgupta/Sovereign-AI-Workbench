@@ -66,6 +66,8 @@ const BACKEND_OWNED_ROUTES = new Set([
   '/api/sources',
   '/api/sources/scan',
   '/api/sources/upload',
+  '/api/sources/dialog/folder',
+  '/api/sources/dialog/files',
   '/api/models',
   '/api/system-info',
 ])
@@ -643,20 +645,14 @@ function systemAndModelsPlugin() {
               let documents = []
 
               if (stat.isFile()) {
-                const targetBaseDir = path.resolve(cwd, 'MRPL_RAG_Test_Corpus', '07_User_Uploads')
-                if (!fs.existsSync(targetBaseDir)) {
-                  fs.mkdirSync(targetBaseDir, { recursive: true })
-                }
                 const fileName = path.basename(resolved)
-                const destFile = path.resolve(targetBaseDir, fileName)
-                fs.copyFileSync(resolved, destFile)
 
-                // Trigger chunking and embedding in FastAPI backend
+                // Trigger chunking and embedding in FastAPI backend in-place
                 try {
                   const ingestRes = await fetch('http://127.0.0.1:8000/api/sources/ingest', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: destFile }),
+                    body: JSON.stringify({ path: resolved }),
                   })
                   if (ingestRes.ok) {
                     const data = await ingestRes.json()
@@ -668,9 +664,23 @@ function systemAndModelsPlugin() {
                 }
 
                 global.__configuredSourceDirs = loadConfiguredDirs().dirs
-                saveConfiguredDirs(global.__configuredSourceDirs)
+                const normResolved = path.normalize(resolved).toLowerCase()
+                const fileId = `file_${crypto.createHash('sha256').update(normResolved).digest('hex').slice(0, 10)}`
+                const exists = global.__configuredSourceDirs.some(
+                  (d) => path.normalize(d.path).toLowerCase() === normResolved
+                )
+                if (!exists) {
+                  global.__configuredSourceDirs.push({
+                    id: fileId,
+                    name: fileName,
+                    path: resolved,
+                    isFile: true,
+                    isPreset: false,
+                    enabled: true,
+                  })
+                  saveConfiguredDirs(global.__configuredSourceDirs)
+                }
 
-                const fileId = `file_${crypto.createHash('sha256').update(path.normalize(destFile).toLowerCase()).digest('hex').slice(0, 10)}`
                 res.setHeader('Content-Type', 'application/json')
                 res.end(
                   JSON.stringify({
@@ -681,10 +691,10 @@ function systemAndModelsPlugin() {
                     added: {
                       id: fileId,
                       name: fileName,
-                      path: destFile,
+                      path: resolved,
                       isFile: true,
                     },
-                    message: `File "${fileName}" registered: ${totalChunks} chunks created, embedded, and indexed into FAISS.`,
+                    message: `File "${fileName}" indexed in-place: ${totalChunks} chunks created, embedded, and indexed into FAISS.`,
                   })
                 )
                 return
