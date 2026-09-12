@@ -48,7 +48,17 @@ RUN apt-get update \
 COPY --from=builder /deps /usr/local/lib/python3.11/site-packages
 
 # Non-root user -- matches the `user="1000:1000"` set in pool.py.
-RUN useradd -u 1000 -m sandboxuser
+# The nikolaik/python-nodejs base already ships a user at UID 1000
+# ("pn"), so `useradd -u 1000` fails with exit code 4 (UID in use) and
+# the whole build dies at this line. That is why mrpl-sandbox:combined
+# has never existed on any machine -- and why pool.py's fallback quietly
+# turned into a Docker Hub pull attempt.
+#
+# Reuse whatever user holds UID 1000 if there is one, and create
+# sandboxuser only if the slot is free. UID 1000 itself is what matters:
+# pool.py runs containers as `1000:1000`, so the id must exist and must
+# not be root. The NAME is irrelevant to that.
+RUN if getent passwd 1000 >/dev/null; then         echo "UID 1000 already present as $(getent passwd 1000 | cut -d: -f1); reusing it";     else         useradd -u 1000 -m sandboxuser;     fi
 
 WORKDIR /sandbox
 CMD ["sleep", "infinity"]

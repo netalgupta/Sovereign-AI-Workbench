@@ -22,6 +22,7 @@ import json
 
 import requests
 
+from backend.models.ollama_client import default_options
 from backend.models.registry import resolve_model_name
 from backend.utils.llm_output import strip_code_fences
 
@@ -71,8 +72,19 @@ _RETRY_SUFFIX = "\nOutput ONLY the JSON array, no other text."
 def _call_router_model(prompt: str, model_name: str) -> str:
     response = requests.post(
         f"{_OLLAMA_HOST}/api/generate",
-        json={"model": model_name, "prompt": prompt, "stream": False},
-        timeout=30,
+        # options carries num_gpu so this call gets GPU placement like
+        # the others. This site keeps its own requests.post rather than
+        # using ollama_client.generate, because the error handling below
+        # decodes Ollama's JSON error body ("model 'x' not found"),
+        # which is far more useful than a bare 404 and is what surfaced
+        # the phi-3.5-mini tag bug.
+        json={
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": default_options(),
+        },
+        timeout=120,
     )
     try:
         response.raise_for_status()

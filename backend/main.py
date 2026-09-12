@@ -15,10 +15,16 @@ reason: the frontend and backend run on the same machine, so there is
 never a legitimate cross-origin caller from anywhere else.
 """
 
-import logging
-from contextlib import asynccontextmanager
+# FIRST, before anything that might import torch/tensorflow/paddle.
+# TF_CPP_MIN_LOG_LEVEL and friends are read by those libraries' C++
+# layers AT IMPORT TIME, so this cannot be tidied in with the imports
+# below -- moving it down silently stops it working.
+from backend.observability.quiet_startup import quiet as _quiet_startup
+
+_quiet_startup()
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +40,20 @@ async def lifespan(app: FastAPI):
         from backend.sandbox import pool
         pool.start()
     except Exception as exc:
-        logger.warning("Could not start sandbox pool: %s", exc)
+        # Actionable, and explicit that the rest of the system is fine.
+        # This previously printed a raw docker-py 404 URL, which looked
+        # like a crash and told nobody what to do about it.
+        from backend.sandbox.pool import SandboxImageMissing
+
+        if isinstance(exc, SandboxImageMissing):
+            logger.warning(
+                "Sandbox DISABLED - no local image.\n%s\n"
+                "Everything else (chat, retrieval, graph, tools) works normally; "
+                "only the code-execution agent is unavailable.",
+                exc,
+            )
+        else:
+            logger.warning("Could not start sandbox pool: %s: %s", type(exc).__name__, exc)
     yield
     try:
         from backend.sandbox import pool

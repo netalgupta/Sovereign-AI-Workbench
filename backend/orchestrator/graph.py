@@ -436,7 +436,29 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
         return {}
 
     from backend.api.state import get_state
+    from backend.retrieval.corpus_questions import (
+        answer_corpus_question,
+        is_corpus_question,
+    )
     from backend.retrieval.generation import generate_grounded_answer
+
+    # "What documents do you have?" / "summarise your data" are questions
+    # about the COLLECTION, not about any document's contents, and chunk
+    # retrieval cannot answer them -- the answer is not written down
+    # anywhere, it is a property of the index.
+    #
+    # Both previous behaviours were wrong. Before the hybrid gate the
+    # question was refused at cosine 0.5228, which reads as the product
+    # not knowing what it holds. After it, the query scrapes in on the
+    # single generic term "data" and summarises five arbitrary chunks --
+    # worse, because that looks like an answer.
+    #
+    # Answered from the registry instead: real names, counts and sizes,
+    # nothing generated, so nothing can be fabricated. The detector is
+    # deliberately narrow and vetoes on any domain subject, so a content
+    # question never takes this path and skips grounding.
+    if is_corpus_question(state.original_request):
+        return {"draft_output": answer_corpus_question(state.original_request)}
 
     try:
         store, _ = get_state().ensure_corpus()
@@ -454,16 +476,48 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
         }
 
     if not answer.found:
-        return {
-            "draft_output": (
-                "**Not found in the loaded corpus.**\n\n"
-                "Nothing in the indexed documents clears the grounding confidence "
-                f"threshold for: *\"{state.original_request}\"*\n\n"
-                "This is a refusal, not a failure. Answering without a source is "
-                "the one thing this workbench will not do. Add the relevant "
-                "document under Sources, or rephrase using terms that appear in it."
-            )
-        }
+        # A refusal that only says "no" is indistinguishable from a broken
+        # product when the corpus visibly contains the topic. Report the
+        # margin and name what came closest, so the user can tell a real
+        # gap from a phrasing problem and fix the latter themselves.
+        lines = [
+            "**Not found in the loaded corpus.**",
+            "",
+            "Nothing in the indexed documents clears the grounding confidence "
+            f'threshold for: *"{state.original_request}"*',
+        ]
+        if answer.threshold:
+            lines += [
+                "",
+                f"Closest match scored `{answer.best_similarity}` against a "
+                f"required `{answer.threshold}`.",
+            ]
+        if answer.near_miss_documents:
+            lines += [
+                "",
+                "These documents came closest, but not close enough to answer from:",
+                "",
+            ]
+            lines += [f"- `{name}`" for name in answer.near_miss_documents]
+            lines += [
+                "",
+                "If one of these is what you meant, try naming it, or use the "
+                "wording it uses. Short or abbreviated questions often miss: "
+                '"tell me abt inspection" falls below the bar where "tell me '
+                'about the inspection report" clears it.',
+            ]
+        else:
+            lines += [
+                "",
+                "Add the relevant document under Sources, or rephrase using "
+                "terms that appear in it.",
+            ]
+        lines += [
+            "",
+            "This is a refusal, not a failure. Answering without a source is the "
+            "one thing this workbench will not do.",
+        ]
+        return {"draft_output": "\n".join(lines)}
 
     reply = answer.answer_text
     if answer.invalid_citations_stripped:
@@ -606,6 +660,15 @@ def get_orchestrator_graph():
 
 def run_agent_turn(message: str, session_id: str) -> AgentState:
     """Execute a single agentic turn given a user message and session id."""
+    import time as _time
+
+    from backend.observability import turn_log as T
+
+    T.rule("", "=")
+    T.section(f"AGENT TURN — session {session_id}")
+    T.kv("message", repr(message))
+    _t0 = _time.perf_counter()
+
     graph = get_orchestrator_graph()
     initial_state = AgentState(
         session_id=session_id,
@@ -615,4 +678,25 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
         retrieved_context=[],
     )
     result_dict = graph.invoke(initial_state)
-    return AgentState.model_validate(result_dict)
+    final = AgentState.model_validate(result_dict)
+
+    T.section("TURN SUMMARY")
+    T.kv("elapsed", f"{_time.perf_counter() - _t0:.2f}s")
+    T.kv("plan steps", len(final.plan))
+    for st in final.plan:
+        T.note(f"    {st.step_id:<10} {st.assigned_agent:<10} {st.status:<8} {st.description[:46]}")
+    T.kv("tool calls", len(final.tool_call_log))
+    for ev in final.tool_call_log:
+        T.note(f"    {ev.tool_name:<22} {ev.status:<8} {str(ev.output)[:60]}")
+    T.kv("sources used", len(final.retrieved_context))
+    T.kv("awaiting approval", final.awaiting_human_approval)
+    if final.verification_result:
+        v = final.verification_result
+        T.kv("verification", (T.GREEN("PASSED") if v.passed else T.YELLOW("NOT CONFIRMED"))
+             + f" — {v.reason[:70]}")
+    else:
+        T.kv("verification", T.DIM("not run"))
+    T.rule("", "=")
+    T._emit()
+
+    return final

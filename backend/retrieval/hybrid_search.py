@@ -9,7 +9,7 @@ k=60) and this card's over-fetch factor (2x) specifically so retrieval
 quality is comparable across runs, not re-tuned ad hoc per query.
 """
 
-from rank_bm25 import BM25Okapi
+from backend.retrieval import lexical
 
 from backend.ingestion.embeddings import embed_texts
 from backend.retrieval.vector_store import VectorStore
@@ -49,12 +49,27 @@ def rrf_fuse(store: VectorStore, query: str, top_k: int) -> dict[int, float]:
     dense_hits = store.dense_search(query_embedding, top_k=min(top_k * 2, len(faiss_ids)))
     dense_rank = {faiss_id: rank for rank, (faiss_id, _score) in enumerate(dense_hits, start=1)}
 
-    # Sparse: BM25Okapi, whitespace-tokenized, exact per CARD 09 — no
-    # stemming/lemmatization, to keep behavior predictable.
-    tokenized_corpus = [text.split() for text in corpus_texts]
-    bm25 = BM25Okapi(tokenized_corpus)
-    bm25_scores = bm25.get_scores(query.split())
-    sparse_order = sorted(range(len(faiss_ids)), key=lambda i: bm25_scores[i], reverse=True)
+    # Sparse: BM25Okapi over NORMALISED tokens, and a cached index.
+    #
+    # This was `[text.split() for text in corpus_texts]` indexed and
+    # `bm25.get_scores(query.split())` queried -- raw whitespace splits
+    # on both sides. The index therefore held "Inspection", "Report:",
+    # "CCR-1," and "(SOP-114-Rev3)" with their capitals and attached
+    # punctuation, and a user typing "inspection" matched none of them.
+    # Half the hybrid retriever was silently inert; dense search covered
+    # for it convincingly enough that nothing looked broken.
+    #
+    # backend/retrieval/lexical.py tokenizes both sides identically
+    # (lowercased, punctuation stripped, identifiers like SOP-114-Rev3
+    # and TC-201A kept whole) and caches the index instead of rebuilding
+    # it on every single query.
+    bm25_scores = lexical.scores(all_rows, query)
+    if len(bm25_scores) == 0:
+        sparse_order = []
+    else:
+        sparse_order = sorted(
+            range(len(faiss_ids)), key=lambda i: bm25_scores[i], reverse=True
+        )
     sparse_rank = {faiss_ids[i]: rank for rank, i in enumerate(sparse_order, start=1)}
 
     candidate_ids = set(dense_rank) | set(sparse_rank)

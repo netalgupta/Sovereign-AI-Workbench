@@ -34,6 +34,7 @@ verifier.
 import json
 from enum import Enum
 
+from backend.models.ollama_client import generate as ollama_generate
 from backend.models.registry import resolve_model_name
 from backend.orchestrator.state import AgentState, VerificationResult
 from backend.utils.llm_output import strip_code_fences
@@ -76,15 +77,16 @@ def build_verification_prompt(original_request: str, draft_output: str) -> str:
 
 
 def _call_verifier_model(prompt: str, model_name: str) -> str:
-    import requests
-
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={"model": model_name, "prompt": prompt, "stream": False},
+    
+    # Routed through ollama_client so the GPU placement option
+    # (num_gpu) applies here too. It previously did not: each of
+    # the four call sites built its own request body, so an option
+    # added in one place silently missed the others.
+    return ollama_generate(
+        model_name,
+        prompt,
         timeout=180,
     )
-    response.raise_for_status()
-    return response.json()["response"]
 
 
 def parse_verification(raw: str) -> VerificationResult:

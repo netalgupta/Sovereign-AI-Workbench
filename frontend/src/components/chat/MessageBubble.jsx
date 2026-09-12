@@ -57,6 +57,42 @@ function useMessageTypewriter(message) {
     // naturally continue draining the newly appended characters.
   }, [message.content, message.streaming, message.displayedContent, message.id, message.role, setDisplayedContent])
 
+  // FAILSAFE: the reveal animation must never be able to hide the answer.
+  //
+  // The typewriter above is a presentation nicety. It is also the only
+  // thing standing between a received reply and the screen, and when it
+  // stalls the result is a blank bubble stuck on "streaming..." with no
+  // error anywhere -- which is exactly what shipped. The backend was
+  // returning 200 OK with a correct grounded answer and the user saw
+  // nothing, repeatedly, across several different attempted fixes.
+  //
+  // Rather than keep guessing at which interaction of batching, refs and
+  // effect ordering stalls it, this makes the failure mode impossible:
+  // if content exists and nothing has been revealed shortly after it
+  // arrived, the whole thing is shown at once. A missing animation is a
+  // cosmetic regression; a missing answer is the product not working.
+  useEffect(() => {
+    if (message.role === 'user') return
+    if (!message.content) return
+    if (message.displayedContent === message.content) return
+
+    const failsafe = setTimeout(() => {
+      // Re-read from the store rather than trusting this closure, which
+      // may be describing a render from before the drain started.
+      const live = useChatStore.getState().messages.find((m) => m.id === message.id)
+      if (!live || !live.content) return
+      if (live.displayedContent === live.content) return
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+      revealedRef.current = live.content.length
+      setDisplayedContent(message.id, live.content)
+    }, 1200)
+
+    return () => clearTimeout(failsafe)
+  }, [message.content, message.displayedContent, message.id, message.role, setDisplayedContent])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -138,7 +174,17 @@ export function MessageBubble({ message }) {
 
       {/* Markdown body with streaming typewriter reveal */}
       <div className="relative">
-        <MarkdownBody content={message.displayedContent || ''} />
+        {/* `|| message.content` is a second, cheaper guard on the same
+            failure: if displayedContent is ever empty or non-string
+            while content exists, show the content. Nothing about the
+            reveal animation is worth a blank answer. */}
+        <MarkdownBody
+          content={
+            typeof message.displayedContent === 'string' && message.displayedContent
+              ? message.displayedContent
+              : message.content || ''
+          }
+        />
         {/* Blinking cursor while draining */}
         {isStreaming && <StreamCursor />}
       </div>

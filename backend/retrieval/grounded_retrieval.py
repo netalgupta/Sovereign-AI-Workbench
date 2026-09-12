@@ -11,6 +11,7 @@ depends on.
 from pydantic import BaseModel
 
 from backend.ingestion.embeddings import embed_texts
+from backend.retrieval import lexical
 from backend.retrieval.hybrid_search import RetrievedChunk, rrf_fuse
 from backend.retrieval.vector_store import VectorStore
 
@@ -113,6 +114,39 @@ class GroundedRetrievalResult(BaseModel):
     chunks: list[RetrievedChunk]
     reason: str | None = None
 
+    # WHAT A REFUSAL NOW CARRIES, AND WHY.
+    #
+    # The gate is correct to refuse "Tell me abt inspection" -- measured
+    # best cosine falls below the floor, while the same question written
+    # out ("Tell me about the inspection report") clears it comfortably
+    # and returns the right document. Lowering the threshold to catch the
+    # shorthand is exactly how this gate died the first time: out-of-
+    # corpus similarity bottoms out at 0.344, so any floor loose enough
+    # to admit a vague query admits Pride and Prejudice too.
+    #
+    # But a bare "not found" against a corpus that plainly contains an
+    # inspection report reads as the product being broken, and the user
+    # has no way to tell a genuine miss from a phrasing problem. So the
+    # refusal reports WHAT IT ALMOST MATCHED -- document names and the
+    # margin -- without quoting any of their content.
+    #
+    # That distinction is the whole point: naming a file is not a claim
+    # about what is in it, so nothing ungrounded is asserted, and the
+    # user gets the one piece of information that lets them fix their
+    # query themselves.
+    best_similarity: float = 0.0
+    threshold: float = 0.0
+    near_miss_documents: list[str] = []
+
+    # Which signal let this through: "dense" (embedding similarity),
+    # "lexical" (the query's own rare terms are present), or "neither"
+    # (refused). Recorded because a hybrid gate that cannot say WHICH
+    # half admitted an answer is untunable -- you cannot tell a
+    # correctly-rescued query from a threshold that has drifted loose.
+    admitted_by: str = "neither"
+    lexical_matched: list[str] = []
+    lexical_unknown: list[str] = []
+
 
 def retrieve_with_grounding_check(
     store: VectorStore, query: str, top_k: int = 5
@@ -140,9 +174,57 @@ def retrieve_with_grounding_check(
     dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
     best_similarity = max((score for _fid, score in dense_hits), default=0.0)
 
-    if best_similarity < confidence_threshold():
+    threshold = confidence_threshold()
+
+    # THE GATE IS HYBRID, because the retriever is.
+    #
+    # It used to consult dense cosine alone. That makes the refusal
+    # decision blind to the evidence the sparse half exists to provide:
+    # a query whose exact, rare terms appear verbatim in a document
+    # could still be refused for having an unlucky embedding. Measured:
+    # "Tell me abt inspection" scores 0.5228 against a 0.60 floor and is
+    # refused, with an inspection report sitting in the corpus.
+    #
+    # Relaxing the dense floor is the wrong repair and has already
+    # failed here once: out-of-corpus similarity bottoms out near 0.344,
+    # so any floor loose enough for vague phrasing also passes "What is
+    # the plot of Pride and Prejudice?" -- which is precisely how this
+    # gate became dead code before.
+    #
+    # So a second, INDEPENDENT signal decides instead: do the user's own
+    # words occur in the corpus with enough discriminating weight to be
+    # what the question is about? See lexical.lexical_evidence -- it
+    # discards out-of-vocabulary terms rather than counting them as
+    # misses, which is what separates a typo from a topic the corpus
+    # genuinely does not cover.
+    #
+    # Either signal may admit an answer; BOTH must fail to refuse. The
+    # safety property is preserved because an out-of-domain question
+    # fails both: its embedding is far, and its words are absent.
+    evidence = lexical.lexical_evidence(store.all_chunk_texts(), query)
+    dense_ok = best_similarity >= threshold
+    if not dense_ok and not evidence.strong:
+        # Name the documents that came closest, so the refusal is
+        # actionable. Names only -- never their text, which has not
+        # cleared the grounding bar and must not be presented as an
+        # answer by the back door.
+        near_miss: list[str] = []
+        for faiss_id, _score in dense_hits:
+            stored = store.get_by_faiss_id(faiss_id)
+            if stored and stored.source_document not in near_miss:
+                near_miss.append(stored.source_document)
+            if len(near_miss) == 3:
+                break
         return GroundedRetrievalResult(
-            found=False, chunks=[], reason="not found in the provided corpus"
+            found=False,
+            chunks=[],
+            reason="not found in the provided corpus",
+            best_similarity=round(best_similarity, 4),
+            admitted_by="neither",
+            lexical_matched=evidence.matched,
+            lexical_unknown=evidence.unknown,
+            threshold=threshold,
+            near_miss_documents=near_miss,
         )
 
     ranked_ids = sorted(fused, key=lambda fid: fused[fid], reverse=True)[:top_k]
@@ -159,4 +241,12 @@ def retrieve_with_grounding_check(
                 score=fused[faiss_id],
             )
         )
-    return GroundedRetrievalResult(found=True, chunks=chunks)
+    return GroundedRetrievalResult(
+        found=True,
+        chunks=chunks,
+        best_similarity=round(best_similarity, 4),
+        threshold=threshold,
+        admitted_by="dense" if dense_ok else "lexical",
+        lexical_matched=evidence.matched,
+        lexical_unknown=evidence.unknown,
+    )

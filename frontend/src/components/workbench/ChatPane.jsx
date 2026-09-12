@@ -20,6 +20,7 @@ import {
   Search,
   Play,
   ShieldAlert,
+  MessageSquare,
 } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
@@ -27,166 +28,23 @@ import { useChatStore } from '../../store/chatStore'
 import { sendMessage } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
-import { SourcesUsedList } from '../../integrations/citations'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 
 // Set of 12 phrases for completed thinking block word rotation
-const ROTATION_PHRASES = [
-  'Deliberated',
-  'Worked through it',
-  'Traced',
-  'Chewed on it',
-  'Reckoned',
-  'Puzzled it out',
-  'Untangled it',
-  'Sorted through it',
-  'Mulled it over',
-  'Worked it out',
-  'Pieced it together',
-  'Ran it down',
-]
 
 /**
  * Format rotation phrase with pipeline steps count and timing.
  * Formats grammatically without redundant "through" or awkward doubling.
  */
-function formatThinkingHeader(phrase, stepCount = 4, duration = '4.7s') {
-  switch (phrase) {
-    case 'Worked through it':
-      return `Worked through ${stepCount} pipeline steps · ${duration} total`
-    case 'Sorted through it':
-      return `Sorted through ${stepCount} pipeline steps · ${duration} total`
-    case 'Traced':
-      return `Traced through ${stepCount} pipeline steps · ${duration} total`
-    case 'Deliberated':
-      return `Deliberated through ${stepCount} pipeline steps · ${duration} total`
-    default:
-      return `${phrase} · ${stepCount} pipeline steps · ${duration} total`
-  }
-}
 
 // Inline live-thinking trace data definitions
 // Inline live-thinking trace data definitions
-const ACTIVE_TRACE_ITEMS = [
-  { time: '10:20:05.10', text: 'Router mapped intent: [quench_control, bed_temperature_stabilization, hcu_2]' },
-  { time: '10:20:05.34', text: 'FAISS hybrid search on MRPL corpus (dense BGE-Large + sparse BM25)' },
-  { time: '10:20:05.80', text: 'Retrieved 3 sections: SOP-114-Rev3 §4.2 (WABT Limits & Bed Quench Rates)' },
-  { time: '10:20:06.15', text: 'Cross-encoder reranking completed: score >= 0.88 (2 candidate procedures isolated)' },
-  { time: '10:20:06.60', text: 'Sandboxed context buffered: 2,120 tokens in zero-egress local memory' },
-]
 
-const COMPLETED_REASONING_STEPS_1 = [
-  {
-    id: 'step-1-verification',
-    label: 'Checked constraints',
-    duration: '0.9s',
-    category: 'verification',
-    icon: FileCheck,
-    trace: [
-      { time: '10:14:04.10', text: 'Ingested plant safety parameter matrix: SOP-114-Rev3 & DCS interlock FFC-201' },
-      { time: '10:14:04.45', text: 'Evaluated boundary threshold: ΔP_max <= 420 m³/h at current feed-rate' },
-      { time: '10:14:04.98', text: 'Safety margin confirmed: +18.2% operational headroom (status: PASS)' },
-    ],
-  },
-  {
-    id: 'step-2-computation',
-    label: 'Ran analysis',
-    duration: '1.8s',
-    category: 'computation',
-    icon: Calculator,
-    trace: [
-      { time: '10:14:02.30', text: 'SymPy AST compiled for volumetric flow conversion formula' },
-      { time: '10:14:02.85', text: 'Evaluated differential pressure equation: ΔP = k · Q^1.85' },
-      { time: '10:14:04.05', text: 'Dimensional consistency verified across metric unit parameters' },
-    ],
-  },
-  {
-    id: 'step-3-retrieval',
-    label: 'Retrieved sources',
-    duration: '1.2s',
-    category: 'retrieval',
-    icon: Search,
-    trace: [
-      { time: '10:14:01.40', text: 'FAISS vector search against MRPL Engineering Corpus' },
-      { time: '10:14:01.88', text: 'Dense embeddings matched 3 chunks from SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx' },
-      { time: '10:14:02.10', text: 'Retrieved 2 chunks from Aromatic_Complex_Benzene_Safety_Circular.docx' },
-    ],
-  },
-  {
-    id: 'step-4-planning',
-    label: 'Planned task graph',
-    duration: '0.8s',
-    category: 'planning',
-    icon: Layers,
-    trace: [
-      { time: '10:14:00.60', text: 'Router parsed intent: engineering parameter validation for Unit HCU-2' },
-      { time: '10:14:00.95', text: 'Constructed DAG execution plan: 5 sequential verification phases' },
-    ],
-  },
-]
 
-const COMPLETED_REASONING_STEPS_2 = [
-  {
-    id: 'step-2-1-telemetry',
-    label: 'Queried sensor trends',
-    duration: '0.8s',
-    trace: [
-      { time: '10:18:12.10', text: 'Fetched historical time-series from PSA_Hydrogen_Purity_Trend_Log.xlsx (Weeks 1-12)' },
-      { time: '10:18:12.45', text: 'Parsed thermocouple array TC-201A through TC-201F across 4 shifts' },
-    ],
-  },
-  {
-    id: 'step-2-2-limits',
-    label: 'Evaluated operating envelope',
-    duration: '0.6s',
-    trace: [
-      { time: '10:18:12.80', text: 'Current average: 382°C vs upper limit 400°C (headroom: 18°C, WABT limit 410°C)' },
-      { time: '10:18:13.10', text: 'Rate of change: +0.4°C/hr (well below thermal excursion threshold of +2.0°C/hr)' },
-    ],
-  },
-  {
-    id: 'step-2-3-synthesis',
-    label: 'Synthesized telemetry summary',
-    duration: '0.5s',
-    trace: [
-      { time: '10:18:13.40', text: 'Generated verification citation [4] pointing to row-level sensor telemetry log' },
-    ],
-  },
-]
 
 // Mock citation data for the STATIC demo turns (pre-loaded session)
 // Grounded in actual MRPL_RAG_Test_Corpus documents
-const DEMO_CITATIONS = [
-  {
-    id: 1,
-    doc: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
-    section: 'Section 4.2 — Feed Rate Operating Limits & WABT End-of-Run',
-    passage:
-      'The design-basis feed rate for Hydrocracking Unit 2 (HCU-2) shall not exceed 110 % of nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Sustained feed elevation accelerates bed fouling; WABT trigger limit is 410 °C. Exceedance triggers DCS interlock FFC-201.',
-  },
-  {
-    id: 2,
-    doc: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
-    section: 'Section 2.1 — High-Temperature Catalyst Runaway Prevention',
-    passage:
-      'At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable. H₂/HC ratio must be maintained above 1,000 Nm³/m³ across Beds 1-3 to suppress runaway. Continuous monitoring required.',
-  },
-  {
-    id: 3,
-    doc: 'Novolen_Batch_QA_Report_Aug2026.pdf',
-    section: 'Section 3.1 — Downstream Fractionation Column Flooding Criteria',
-    passage:
-      'At feed rates above 110 % of design capacity, flooding probability increases to 34 % based on the correlation: F_factor = u_v × √ρ_v. Immediate operator intervention is required per MOC procedure.',
-  },
-  {
-    id: 4,
-    doc: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
-    section: 'Sheet 1 (Weeks 1–12) — Thermocouple Array TC-201 (4 Shifts)',
-    passage:
-      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C. Rolling average: 381.95 °C. Upper limit: 400 °C. Rate-of-change: +0.4 °C/hr. PSA-3 purity drift cross-referenced.',
-  },
-]
 
 export function ChatPane() {
   const messages = useChatStore((s) => s.messages)
@@ -215,25 +73,21 @@ export function ChatPane() {
   const [selectedModel, setSelectedModel] = useState('Model registry')
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
 
-  // ── Word Rotation for Completed Thinking Blocks ─────────────────────────
-  // Pick two distinct words for the two completed messages in the session
-  const [phraseMsg1, setPhraseMsg1] = useState(() => {
-    return ROTATION_PHRASES[Math.floor(Math.random() * ROTATION_PHRASES.length)]
-  })
-  const [phraseMsg2, setPhraseMsg2] = useState(() => {
-    const remaining = ROTATION_PHRASES.filter((p) => p !== 'Untangled it')
-    return remaining[Math.floor(Math.random() * remaining.length)]
-  })
-
-  // ── Inline Live-Thinking States ──────────────────────────────────────────
-  // 1. Mid-response active turn (single line dot + present-participle + elapsed)
-  const [isMidResponse, setIsMidResponse] = useState(true)
+  // ── Inline Live-Thinking State ───────────────────────────────────────────
+  //
+  // isMidResponse used to be useState(TRUE) with a timer seeded at 8 and
+  // incremented forever. So every session opened already showing
+  // "Retrieving sources - 21s", climbing, with no request behind it and
+  // no way for it to finish. It was not reporting anything; it was an
+  // animation. That is worse than no indicator, because it makes a real
+  // in-flight request indistinguishable from idle.
+  //
+  // Now derived from isPending -- an actual /api/chat call in flight --
+  // and the elapsed counter starts at 0 when that call starts.
   const [isMidResponseExpanded, setIsMidResponseExpanded] = useState(false)
-  const [liveElapsed, setLiveElapsed] = useState(8)
+  const [liveElapsed, setLiveElapsed] = useState(0)
 
   // 2. Completed message thinking blocks expansion state
-  const [isCompleted1Expanded, setIsCompleted1Expanded] = useState(false)
-  const [isCompleted2Expanded, setIsCompleted2Expanded] = useState(false)
   const [expandedCompletedSteps, setExpandedCompletedSteps] = useState({})
 
   // ── Node Click -> Scroll & Expand Tool Event Trace ───────────────────────
@@ -242,12 +96,10 @@ export function ChatPane() {
     if (!targetId) return
 
     const timer = setTimeout(() => {
-      if (COMPLETED_REASONING_STEPS_1.some((s) => s.id === targetId)) {
-        setIsCompleted1Expanded(true)
-      }
-      if (COMPLETED_REASONING_STEPS_2.some((s) => s.id === targetId)) {
-        setIsCompleted2Expanded(true)
-      }
+      // (The two fixed COMPLETED_REASONING_STEPS arrays these checked
+      // against described the deleted demo turns. Real steps arrive on
+      // the message itself, and expandedCompletedSteps below still
+      // opens whichever step id was linked to.)
 
       setExpandedCompletedSteps((prev) => ({ ...prev, [targetId]: true }))
 
@@ -273,13 +125,15 @@ export function ChatPane() {
     return () => clearTimeout(timer)
   }, [searchParams, setSearchParams])
 
-  // Live timer for active mid-response thinking
+  // Live timer, running ONLY while a request is genuinely in flight.
+  // Previously this interval ran unconditionally for the lifetime of the
+  // component, which is what made the counter climb on an idle screen.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setLiveElapsed((prev) => prev + 1)
-    }, 1000)
+    if (!isPending) return
+    setLiveElapsed(0)
+    const timer = setInterval(() => setLiveElapsed((prev) => prev + 1), 1000)
     return () => clearInterval(timer)
-  }, [])
+  }, [isPending])
 
   // Auto-scroll chat container to bottom when new messages arrive
   useEffect(() => {
@@ -293,7 +147,10 @@ export function ChatPane() {
 
   // Expose test automation hooks
   useEffect(() => {
-    window.__workbenchSetThinkingMidResponse = (active) => setIsMidResponse(active)
+    // __workbenchSetThinkingMidResponse is gone: the live indicator is
+    // now derived from a real in-flight request, so there is no flag to
+    // set. A test that could switch it on without a request was only
+    // ever testing the animation.
     window.__workbenchSetThinkingExpanded = (expanded) => setIsMidResponseExpanded(expanded)
     window.__workbenchSetCompletedPhrases = (p1, p2) => {
       if (p1) setPhraseMsg1(p1)
@@ -371,9 +228,17 @@ export function ChatPane() {
       // Add the assistant message with streaming=true so MessageBubble
       // starts the typewriter reveal. appendStreamChunk pushes the full
       // text into the queue (mock: one chunk; real SSE: called per chunk).
+      // Carry the REAL execution trace onto the message so the
+      // thinking-block UI has something true to render. These components
+      // are genuinely useful -- the problem was never the rendering, it
+      // was that they were fed literals baked into the JSX.
       const msgId = addMessage('assistant', '', {
         streaming: true,
         citations: res.citations || [],
+        toolCallEvents: res.tool_call_events || [],
+        plan: res.plan || [],
+        verification: res.verification || null,
+        elapsedSeconds: liveElapsed,
       })
       appendStreamChunk(msgId, res.reply)
       finishStreaming(msgId)
@@ -587,489 +452,61 @@ export function ChatPane() {
           id="chat-messages-container"
           className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6"
         >
-          {/* ── TURN 1: User Query 1 ───────────────────────────────────── */}
-          <div className="flex justify-end">
-            <div
-              className="rounded-md px-4 py-2.5 text-xs leading-relaxed max-w-[72%] shadow-xs"
-              style={{
-                background: 'var(--color-chat-bubble-user)',
-                border: '1px solid var(--color-chat-bubble-user-border)',
-                color: 'var(--color-text)',
-              }}
-            >
-              <div>What are the key risks in increasing feed rate in the HCU beyond 110%?</div>
+          {/* THE THREE HARDCODED DEMO TURNS WERE DELETED HERE.
+              ~480 lines of JSX that rendered on every single visit,
+              before and regardless of any real conversation:
+
+                - a user asking about reactor inlet temperature
+                - an answer stating "The current reactor inlet
+                  temperature is 382 C, safely within the normal
+                  operating range (360-400 C) with an 18 C safety
+                  margin"
+                - a six-row THERMOCOUPLE ARRAY table (TC-201A..F, each
+                  with a reading, a 400 C limit and a green "Normal")
+                - a second user turn asking about quenching rate
+                - and TURN 3: a "Retrieving sources" spinner with a
+                  live-counting elapsed timer that resolved to nothing,
+                  ever, because there was no request behind it
+
+              None of it was data. The temperatures, the sensor tags,
+              the limits and the green Normal statuses were literals in
+              this file. On a refinery workbench that is six fabricated
+              instrument readings and a safety verdict on them,
+              rendered in the product's own voice, in the chat
+              transcript, indistinguishable from a real answer -- and
+              it was the first thing anyone saw.
+
+              The spinner was its own problem: a permanent "Retrieving
+              sources - 21s" with no request behind it, which is why
+              every session appeared to be mid-work at the moment it
+              opened, and why a real reply looked like just another one
+              of these.
+
+              Demo scaffolding renders in a demo. This renders in the
+              product. */}
+
+          {messages.length === 0 && !isPending && (
+            <div className="flex-1 flex flex-col items-center justify-center text-center py-12 animate-fade-in">
               <div
-                className="flex items-center justify-end gap-1 mt-1 text-[10px]"
-                style={{ color: 'var(--color-accent)' }}
+                className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"
+                style={{ background: 'var(--color-accent-tint)', color: 'var(--color-accent)' }}
               >
-                <span>10:14 AM</span>
-                <CheckCheck size={13} strokeWidth={2.2} />
+                <MessageSquare size={22} />
               </div>
-            </div>
-          </div>
-
-          {/* ── TURN 1: Assistant Response with Completed Thinking Block ── */}
-          <div className="flex flex-col gap-3 max-w-[88%] text-xs leading-relaxed" style={{ color: 'var(--color-text)' }}>
-            {/* Inline Thinking Block (FLUSH TEXT sitting directly in flow, no card/border container!) */}
-            <div className="flex flex-col">
-              {/* Summary Toggle Line (Flush inline text, no border, no background fill) */}
-              <button
-                type="button"
-                onClick={() => setIsCompleted1Expanded(!isCompleted1Expanded)}
-                className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
-                style={{ background: 'transparent', border: 'none' }}
-                title="Click to review reasoning process steps"
-              >
-                <div
-                  className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  style={{ background: 'var(--color-text-faint)' }}
-                />
-                <span className="font-medium" style={{ color: 'var(--color-text-muted)' }}>
-                  {formatThinkingHeader(phraseMsg1, 4, '4.7s')}
-                </span>
-                <ChevronRight
-                  size={12}
-                  strokeWidth={2.2}
-                  className="transition-transform duration-200 ml-0.5"
-                  style={{
-                    transform: isCompleted1Expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                    color: 'var(--color-text-faint)',
-                  }}
-                />
-              </button>
-
-              {/* Stacked Step Lines (Flush inline text, no border container) */}
-              <div className={`collapsible-grid ${isCompleted1Expanded ? 'is-expanded' : ''}`}>
-                <div className="collapsible-inner">
-                  <div
-                    className="pl-3.5 my-1.5 flex flex-col gap-1.5"
-                    style={{ borderLeft: '2px solid var(--color-border)' }}
-                  >
-                    {COMPLETED_REASONING_STEPS_1.map((step) => {
-                      const isStepOpen = !!expandedCompletedSteps[step.id]
-                      return (
-                        <div key={step.id} id={step.id} data-tool-event-id={step.id} className="flex flex-col scroll-mt-12 transition-all rounded-xs">
-                          <button
-                            type="button"
-                            onClick={() => toggleCompletedStep(step.id)}
-                            className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
-                            style={{ background: 'transparent', border: 'none' }}
-                          >
-                            <div
-                              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                              style={{ background: 'var(--color-text-faint)' }}
-                            />
-                            <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                              {step.label}
-                            </span>
-                            <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                            <span className="font-mono text-[10px]" style={{ color: 'var(--color-text-faint)' }}>
-                              {step.duration}
-                            </span>
-                            <ChevronRight
-                              size={11}
-                              strokeWidth={2}
-                              className="transition-transform duration-200 ml-0.5"
-                              style={{
-                                transform: isStepOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-                                color: 'var(--color-text-faint)',
-                              }}
-                            />
-                          </button>
-
-                          {/* Recessed Monospace Trace Details (Indented flush text) */}
-                          <div className={`collapsible-grid ${isStepOpen ? 'is-expanded' : ''}`}>
-                            <div className="collapsible-inner">
-                              <div
-                                className="pl-3 my-1 font-mono text-[10px] leading-relaxed flex flex-col gap-1"
-                                style={{ color: 'var(--color-text)' }}
-                              >
-                                {step.trace.map((item, i) => (
-                                  <div key={i} className="flex items-start gap-1.5">
-                                    <span className="opacity-60 flex-shrink-0">{item.time}</span>
-                                    <span className="break-words flex-1">{item.text}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-
-                    {/* Sources used — below pipeline steps, same indent/border */}
-                    <SourcesUsedList citations={DEMO_CITATIONS} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Answer Text — plain, no inline citation markers */}
-            <p className="leading-relaxed">
-              Increasing the feed rate in the HCU beyond 110% can lead to several operational and safety
-              risks, including reduced catalyst life, higher temperatures, and potential off-spec products.
-            </p>
-
-            {/* Bullet points */}
-            <div className="flex flex-col gap-1.5">
-              <span className="font-semibold">Based on SOP-114-Rev3 & Aromatic Safety Circular:</span>
-              <div className="flex flex-col gap-1 pl-2">
-                <div>1. Elevated reactor temperatures and potential catalyst thermal runaway (WABT trigger &gt; 410 °C)</div>
-                <div>2. Increased H₂ consumption leading to makeup compressor capacity limits (K-201)</div>
-                <div>3. Higher chance of downstream fractionation column flooding</div>
-              </div>
-            </div>
-
-            {/* Code Block — real syntax highlighting (§3.1) */}
-            <div
-              className="rounded-md overflow-hidden shadow-xs border flex flex-col"
-              style={{ borderColor: 'var(--color-code-border)' }}
-            >
-              {/* Header bar: plain-text language + filename + action buttons */}
-              <div
-                className="flex items-center justify-between px-3.5 py-2 border-b text-xs select-none"
-                style={{
-                  borderColor: 'var(--color-code-border)',
-                  background: 'var(--color-overlay)',
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs" style={{ color: 'var(--color-text-muted)' }}>python</span>
-                  <span style={{ color: 'var(--color-text-faint)' }}>•</span>
-                  <span className="font-mono text-xs font-medium" style={{ color: 'var(--color-text)' }}>feed_rate_guard.py</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => showToast('Sandboxed code execution — coming in Day 5', 'info')}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
-                    style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
-                  >
-                    <Play size={11} strokeWidth={2.2} style={{ color: 'var(--color-accent)' }} />
-                    <span>Run</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={copyToClipboard}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
-                    style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
-                  >
-                    {copiedCode ? (
-                      <><Check size={11} strokeWidth={2.5} style={{ color: 'var(--color-success)' }} /><span style={{ color: 'var(--color-success)' }}>Copied!</span></>
-                    ) : (
-                      <><Copy size={11} strokeWidth={2} /><span>Copy</span></>
-                    )}
-                  </button>
-                </div>
-              </div>
-              {/* Real syntax-highlighted Python code */}
-              <SyntaxHighlighter
-                language="python"
-                style={document.documentElement.dataset.theme === 'dark' ? oneDark : oneLight}
-                customStyle={{
-                  margin: 0,
-                  borderRadius: 0,
-                  fontSize: '11px',
-                  background: 'var(--color-code-bg)',
-                  padding: '12px 14px',
-                  lineHeight: 1.6,
-                }}
-                codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
-              >
-                {CODE_SNIPPET}
-              </SyntaxHighlighter>
-            </div>
-
-            {/* Calculation Trace Viewer integration boundary — owned by Kanishka (FRONTEND.md §3.8) */}
-            <CalcTraceCard />
-          </div>
-
-          {/* ── TURN 2: User Query 2 ───────────────────────────────────── */}
-          <div className="flex justify-end mt-1">
-            <div
-              className="rounded-md px-4 py-2.5 text-xs leading-relaxed max-w-[72%] shadow-xs"
-              style={{
-                background: 'var(--color-chat-bubble-user)',
-                border: '1px solid var(--color-chat-bubble-user-border)',
-                color: 'var(--color-text)',
-              }}
-            >
-              <div>Can you check the latest trend data for reactor inlet temp and verify against plant limits?</div>
-              <div
-                className="flex items-center justify-end gap-1 mt-1 text-[10px]"
-                style={{ color: 'var(--color-accent)' }}
-              >
-                <span>10:18 AM</span>
-                <CheckCheck size={13} strokeWidth={2.2} />
-              </div>
-            </div>
-          </div>
-
-          {/* ── TURN 2: Assistant Response 2 with SECOND ROTATION WORD ─── */}
-          <div className="flex flex-col gap-3 max-w-[88%] text-xs leading-relaxed" style={{ color: 'var(--color-text)' }}>
-            {/* Second Completed Thinking Block (Showing distinct rotated phrase) */}
-            <div className="flex flex-col">
-              <button
-                type="button"
-                onClick={() => setIsCompleted2Expanded(!isCompleted2Expanded)}
-                className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
-                style={{ background: 'transparent', border: 'none' }}
-                title="Click to review reasoning process steps"
-              >
-                <div
-                  className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  style={{ background: 'var(--color-text-faint)' }}
-                />
-                <span className="font-medium" style={{ color: 'var(--color-text-muted)' }}>
-                  {formatThinkingHeader(phraseMsg2, 3, '1.9s')}
-                </span>
-                <ChevronRight
-                  size={12}
-                  strokeWidth={2.2}
-                  className="transition-transform duration-200 ml-0.5"
-                  style={{
-                    transform: isCompleted2Expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                    color: 'var(--color-text-faint)',
-                  }}
-                />
-              </button>
-
-              {/* Stacked Step Lines for Message 2 */}
-              <div className={`collapsible-grid ${isCompleted2Expanded ? 'is-expanded' : ''}`}>
-                <div className="collapsible-inner">
-                  <div
-                    className="pl-3.5 my-1.5 flex flex-col gap-1.5"
-                    style={{ borderLeft: '2px solid var(--color-border)' }}
-                  >
-                    {COMPLETED_REASONING_STEPS_2.map((step) => {
-                      const isStepOpen = !!expandedCompletedSteps[step.id]
-                      return (
-                        <div key={step.id} id={step.id} data-tool-event-id={step.id} className="flex flex-col scroll-mt-12 transition-all rounded-xs">
-                          <button
-                            type="button"
-                            onClick={() => toggleCompletedStep(step.id)}
-                            className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
-                            style={{ background: 'transparent', border: 'none' }}
-                          >
-                            <div
-                              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                              style={{ background: 'var(--color-text-faint)' }}
-                            />
-                            <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                              {step.label}
-                            </span>
-                            <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                            <span className="font-mono text-[10px]" style={{ color: 'var(--color-text-faint)' }}>
-                              {step.duration}
-                            </span>
-                            <ChevronRight
-                              size={11}
-                              strokeWidth={2}
-                              className="transition-transform duration-200 ml-0.5"
-                              style={{
-                                transform: isStepOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-                                color: 'var(--color-text-faint)',
-                              }}
-                            />
-                          </button>
-
-                          <div className={`collapsible-grid ${isStepOpen ? 'is-expanded' : ''}`}>
-                            <div className="collapsible-inner">
-                              <div
-                                className="pl-3 my-1 font-mono text-[10px] leading-relaxed flex flex-col gap-1"
-                                style={{ color: 'var(--color-text)' }}
-                              >
-                                {step.trace.map((item, i) => (
-                                  <div key={i} className="flex items-start gap-1.5">
-                                    <span className="opacity-60 flex-shrink-0">{item.time}</span>
-                                    <span className="break-words flex-1">{item.text}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-
-                    {/* Sources used — Turn 2 citations (sensor data) */}
-                    <SourcesUsedList citations={[DEMO_CITATIONS[3]]} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Answer — plain text, no inline citation markers */}
-            <p className="leading-relaxed">
-              The current reactor inlet temperature is <span className="font-semibold">382°C</span>, safely
-              within the normal operating range (360–400°C) with an 18°C safety margin.
-            </p>
-
-            {/* Markdown table demo — proves §3.1 table rendering works */}
-            <div className="mt-1">
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wide mb-1.5"
+              <h3 className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
+                Ask about your sources
+              </h3>
+              <p
+                className="text-xs max-w-md mt-1.5 leading-relaxed"
                 style={{ color: 'var(--color-text-muted)' }}
               >
-                Thermocouple Array — Last 4 Shifts
-              </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table
-                  style={{
-                    width: '100%',
-                    borderCollapse: 'collapse',
-                    fontSize: '11px',
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-md)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <thead>
-                    <tr style={{ background: 'var(--color-surface)' }}>
-                      {['Sensor', 'Reading (°C)', 'Limit (°C)', 'Status'].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            padding: '5px 10px',
-                            textAlign: 'left',
-                            fontWeight: 600,
-                            fontSize: '10px',
-                            letterSpacing: '0.03em',
-                            color: 'var(--color-text-muted)',
-                            borderBottom: '1px solid var(--color-border)',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ['TC-201A', '381.4', '400', '✓ Normal'],
-                      ['TC-201B', '382.1', '400', '✓ Normal'],
-                      ['TC-201C', '383.0', '400', '✓ Normal'],
-                      ['TC-201D', '380.9', '400', '✓ Normal'],
-                      ['TC-201E', '382.6', '400', '✓ Normal'],
-                      ['TC-201F', '381.7', '400', '✓ Normal'],
-                    ].map((row, i) => (
-                      <tr
-                        key={i}
-                        style={{ borderBottom: '1px solid var(--color-border)' }}
-                      >
-                        {row.map((cell, j) => (
-                          <td
-                            key={j}
-                            style={{
-                              padding: '4px 10px',
-                              color: j === 3 ? 'var(--color-success)' : 'var(--color-text)',
-                              fontFamily: j === 0 ? 'var(--font-mono)' : 'inherit',
-                              fontWeight: j === 0 ? 500 : 400,
-                            }}
-                          >{cell}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          {/* ── TURN 3: User Query 3 (Actively being processed) ───────── */}
-          <div className="flex justify-end mt-1">
-            <div
-              className="rounded-md px-4 py-2.5 text-xs leading-relaxed max-w-[72%] shadow-xs"
-              style={{
-                background: 'var(--color-chat-bubble-user)',
-                border: '1px solid var(--color-chat-bubble-user-border)',
-                color: 'var(--color-text)',
-              }}
-            >
-              <div>Should we increase the quenching rate or adjust the column reflux to stabilize?</div>
-              <div
-                className="flex items-center justify-end gap-1 mt-1 text-[10px]"
-                style={{ color: 'var(--color-accent)' }}
-              >
-                <span>10:20 AM</span>
-                <CheckCheck size={13} strokeWidth={2.2} />
-              </div>
-            </div>
-          </div>
-
-          {/* ── TURN 3: Active Mid-Response Live-Thinking Block (FLUSH TEXT, NO CARD/BORDER) ── */}
-          {isMidResponse && (
-            <div className="max-w-[88%] flex flex-col">
-              {/* Single Collapsed Line: Breathing Dot + Status Word + Live Elapsed Time (Flush inline text) */}
-              <button
-                type="button"
-                onClick={() => setIsMidResponseExpanded(!isMidResponseExpanded)}
-                className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                }}
-                title={isMidResponseExpanded ? 'Click to collapse reasoning trace' : 'Click to expand reasoning trace'}
-              >
-                {/* Breathing dot */}
-                <div className="relative flex items-center justify-center w-2 h-2 flex-shrink-0">
-                  <span
-                    className="w-2 h-2 rounded-full animate-breathing-dot"
-                    style={{
-                      background: 'var(--color-accent)',
-                      color: 'var(--color-accent)',
-                    }}
-                  />
-                </div>
-
-                <span className="font-semibold text-xs leading-tight" style={{ color: 'var(--color-text)' }}>
-                  Retrieving sources
-                </span>
-                <span className="text-[10px]" style={{ color: 'var(--color-text-faint)' }}>·</span>
-                <span className="font-mono text-[11px]" style={{ color: 'var(--color-accent)' }}>
-                  {liveElapsed}s
-                </span>
-
-                <ChevronRight
-                  size={13}
-                  strokeWidth={2.2}
-                  className="transition-transform duration-200 ml-0.5 flex-shrink-0"
-                  style={{
-                    transform: isMidResponseExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                    color: 'var(--color-text-muted)',
-                  }}
-                />
-              </button>
-
-              {/* Inline Recessed Monospace Trace (Flush indented guide line, no box card) */}
-              <div className={`collapsible-grid ${isMidResponseExpanded ? 'is-expanded' : ''}`}>
-                <div className="collapsible-inner">
-                  <div
-                    className="pl-3.5 my-1.5 font-mono text-[11px] leading-relaxed flex flex-col gap-1.5"
-                    style={{
-                      borderLeft: '2px solid var(--color-border)',
-                      color: 'var(--color-text)',
-                    }}
-                  >
-                    {ACTIVE_TRACE_ITEMS.map((item, idx) => (
-                      <div key={idx} className="flex items-start gap-2">
-                        <span
-                          className="text-[9px] opacity-60 flex-shrink-0 select-none mt-0.5"
-                          style={{ color: 'var(--color-text-muted)' }}
-                        >
-                          {item.time}
-                        </span>
-                        <span className="break-words flex-1" style={{ color: 'var(--color-text)' }}>
-                          {item.text}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* In mid-response, the reply text is NOT rendered yet per prompt spec */}
+                Answers are grounded in the documents listed under Sources, with a
+                citation for each claim. If nothing in the corpus supports an
+                answer, this will say so rather than guess.
+              </p>
             </div>
           )}
+
 
           {/* Dynamic Messages — streaming typewriter + markdown + citation chips */}
           {messages.map((m) => (
