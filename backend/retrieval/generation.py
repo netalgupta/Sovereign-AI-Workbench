@@ -298,6 +298,63 @@ def _call_reasoning_model(prompt: str, model_name: str) -> str:
     return ollama_generate(model_name, prompt, timeout=600)
 
 
+# A SIGNATURE IS NOT A CLAIM THE CORPUS CAN SUPPORT.
+#
+# Asked to draft an approval note, the model ended it with
+#
+#     Signed,
+#     R. Kamath
+#     Marketing Ops Manager, HQ
+#
+# That name appears in a depot correspondence document in the corpus.
+# The model did not invent the person -- it took a real signatory from
+# an unrelated letter and signed a document THEY had not seen, which is
+# worse than an invented name: it is attributable, and it looks
+# verifiable.
+#
+# Citation validation cannot catch this. The block carries no citation
+# marker, so there is nothing to validate, and the text around it may be
+# perfectly grounded. Nothing downstream can tell a quoted signature
+# from a manufactured one.
+#
+# So it is removed and REPORTED, never silently dropped: the fact that
+# the model tried to sign something is a signal about that answer.
+_SIGNATURE_BLOCK = re.compile(
+    r"(?:^|\n)[ \t]*"
+    r"(?:"
+    # A sign-off alone on its line: "Signed," / "**Signed,**" / "Sd/-".
+    # The comma may sit inside or outside the bold markers, because both
+    # spellings have been observed from the same model.
+    r"(?:\*\*)?(?:signed|sd/-|yours\s+(?:sincerely|faithfully|truly))"
+    r"[ \t]*[,:]?[ \t]*(?:\*\*)?[ \t]*[,:]?[ \t]*\n"
+    r"|"
+    # An attribution with the name on the same line: "Approved by: X".
+    r"(?:\*\*)?(?:approved|authorised|authorized|signed)\s+by(?:\*\*)?[ \t]*:[ \t]*\S"
+    r")"
+    r"(?:.{0,160}\n?){0,3}$",
+    re.I,
+)
+
+
+def strip_signature_block(text: str) -> tuple[str, str | None]:
+    """Remove a trailing signature from an answer.
+
+    Returns (cleaned, removed_block or None).
+    """
+    match = _SIGNATURE_BLOCK.search(text or "")
+    if not match:
+        return text, None
+    removed = match.group(0).strip()
+    cleaned = text[: match.start()].rstrip()
+    cleaned += (
+        "\n\n> **A signature was removed from this answer.** The model ended it "
+        "by signing on someone's behalf. This system does not sign, approve or "
+        "authorise anything on a person's behalf -- approval is a human action, "
+        "recorded through the approval gate."
+    )
+    return cleaned, removed
+
+
 def generate_grounded_answer(
     store: VectorStore,
     user_request: str,
@@ -466,8 +523,12 @@ def generate_grounded_answer(
                "likely cited in prose instead of [n]")
     T.block("ANSWER", validation.cleaned_text)
 
+    cleaned_text, signature = strip_signature_block(validation.cleaned_text)
+    if signature:
+        T.warn(f"removed a signature block from the answer: {signature[:60]!r}")
+
     answer = GeneratedAnswer(
-        answer_text=validation.cleaned_text,
+        answer_text=cleaned_text,
         found=True,
         sources=grounding.chunks,
         invalid_citations_stripped=validation.invalid_citation_numbers,

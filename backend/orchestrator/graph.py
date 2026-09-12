@@ -120,8 +120,38 @@ _WRITE_ACTION_PATTERNS = [
     (r"\b(send|email|e-mail|mail|dispatch|forward|transmit|submit|share)\b",
      "outbound send"),
     (r"\b(delete|erase|wipe|purge|drop|truncate|overwrite)\b", "destructive change"),
-    (r"\b(save|write|export|generate|draft)\b.{0,30}?\b(file|report|document|docx|"
-     r"xlsx|pdf|to\s+disk)\b", "file write"),
+    # MEASURED: this pattern let 5 of 7 real drafting requests through
+    # ungated, including "Draft an approval note on the CCR1
+    # regeneration cycle inspection findings and save it". It required
+    # a noun from a short list to fall within 30 characters of the
+    # verb, so any request that names its subject before its format
+    # missed -- which is how people actually write them.
+    #
+    # What happened when one missed is the reason this is a constraint
+    # violation and not a usability bug: the request was answered as an
+    # ordinary question, and the model WROTE the approval note in chat,
+    # ending it with
+    #
+    #     Signed,
+    #     R. Kamath
+    #     Marketing Ops Manager, HQ
+    #
+    # a person it invented, over content drawn from an unrelated depot
+    # correspondence document. An unapproved, unsourced, signed
+    # approval note is exactly the artifact hard constraint #4 exists to
+    # prevent, and the gate simply did not see the request.
+    #
+    # The verb list is PRODUCTION verbs only. "Summarise the log" and
+    # "show me the report" are reads and stay ungated; "generate a
+    # summary document" is a deliverable and does not.
+    (r"\b(draft|write|compose|prepare|produce|generate|create|make|export|save)\b"
+     r".{0,70}?"
+     r"\b(file|report|document|docx|doc|word|xlsx|excel|spreadsheet|sheet|csv|"
+     r"pdf|ppt|pptx|presentation|deck|slides|note|memo|letter|minutes|briefing|"
+     r"checklist|approval|to\s+disk)\b", "file write"),
+    # "...and save it" / "...then export this" -- the instruction to
+    # persist, independent of what is being persisted.
+    (r"\b(save|export|write|download)\s+(it|this|that|them)\b", "file write"),
 ]
 _COMPILED_WRITE_ACTIONS = [(re.compile(p, re.I), label) for p, label in _WRITE_ACTION_PATTERNS]
 
@@ -305,26 +335,67 @@ def router_node(state: AgentState) -> dict[str, Any]:
         # It now describes the action category actually detected and
         # quotes the operator's own words, and asserts nothing about
         # magnitudes it cannot know.
+        # RESOLVE THE INSTRUCTION TO A REAL TOOL CALL BEFORE ASKING.
+        #
+        # This used to register the approval under the tool name
+        # "operator_requested_action", which is not a registered tool.
+        # The modal appeared, the operator approved, and
+        # execute_approved() raised KeyError -- consent obtained for an
+        # effect that was wired to nothing. That is the worst shape a
+        # safety control can take: the ceremony completes, the audit
+        # entry exists, and the authorised action cannot happen.
+        #
+        # Now the instruction is resolved first, so the person approves
+        # the actual filename, the actual sections, and the actual
+        # sources those sections rest on -- and approving runs exactly
+        # that, because the gate hashes the arguments it displayed.
+        from backend.orchestrator.action_resolver import resolve as resolve_action
+
+        resolved = resolve_action(req, action_kind, session_id=state.session_id)
+
         gate = ApprovalGate()
         app_req = gate.request(
-            tool_name="operator_requested_action",
-            arguments={"command": req, "category": action_kind},
-            effect=(
-                f"Operator-requested {action_kind}, from the instruction: "
-                f"\"{req.strip()}\". The concrete target and magnitude have NOT "
-                f"been resolved by the system and must be confirmed by the operator."
+            tool_name=resolved.tool_name or "unsupported_action",
+            arguments=(
+                resolved.arguments
+                if resolved.executable
+                else {"command": req, "category": action_kind}
             ),
+            effect=resolved.effect,
         )
-        reply = (
-            f"**Action intercepted — human approval required.**\n\n"
+
+        lines = [
+            "**Action intercepted — human approval required.**",
+            "",
             f"This request was classified as a **{action_kind}**, which hard "
-            f"constraint #4 does not permit the system to perform unattended.\n\n"
-            f"> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been executed. "
-            f"The workbench has not resolved a target device, value, or file for "
-            f"this instruction; approving records your authorisation for the "
-            f"action as you described it.\n\n"
-            f"Confirm or cancel in the approval dialog."
-        )
+            f"constraint #4 does not permit the system to perform unattended.",
+            "",
+        ]
+        if resolved.executable:
+            lines += [
+                "> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                "executed yet. Approving carries this out:",
+                "",
+            ]
+            lines += [f"- {line}" for line in resolved.preview]
+            lines += [
+                "",
+                "Confirm or cancel in the approval dialog.",
+            ]
+        else:
+            # No connector exists. Said here, at the point of asking,
+            # rather than discovered after consent was recorded.
+            lines += [
+                "> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                "executed, and nothing can be:",
+                "",
+                resolved.reason,
+                "",
+                "Approving records your authorisation for the action as you "
+                "described it. It does not cause the action.",
+            ]
+        reply = "\n".join(lines)
+
         return {
             "draft_output": reply,
             "awaiting_human_approval": True,

@@ -67,3 +67,4 @@ frontend/standalone/workbench_console.html
 backend/evaluation/configured_sources.json
 
 backend/memory/*.db
+outputs/
