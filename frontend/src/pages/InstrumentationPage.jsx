@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, CheckCircle2, FolderSearch,
-  Image as ImageIcon, Layers, Network, Scatter3D, Wifi, WifiOff,
+  Image as ImageIcon, Layers, Network, Radio, Scatter3D, Wifi, WifiOff,
 } from 'lucide-react'
 import { api } from '../lib/pipelineApi'
 import { ForceGraph } from '../components/graph/ForceGraph'
 import { nodeName, getNodeColor } from '../components/graph/graphTheme'
 import { VectorScatter, SimilarityHeatmap } from '../components/graph/VectorViews'
 import { Spinner } from '../components/ui/Spinner'
+import { AgentStreamView } from '../components/stream/AgentStreamView'
+import { useAgentStream } from '../components/stream/useAgentStream'
 
 /**
  * InstrumentationPage — everything happening inside the pipeline, in one place.
@@ -36,6 +38,7 @@ const TABS = [
   ['chunks', 'Chunks', Layers],
   ['images', 'Images', ImageIcon],
   ['sources', 'Sources', FolderSearch],
+  ['stream', 'Agent Stream', Radio],
 ]
 
 function Stat({ label, value, sub, tone }) {
@@ -107,6 +110,10 @@ export function InstrumentationPage() {
   const [chunkFilter, setChunkFilter] = useState('')
   const [newSourcePath, setNewSourcePath] = useState('')
   const [scanResult, setScanResult] = useState(null)
+
+  // Agent Stream tab state
+  const stream = useAgentStream()
+  const [streamMessage, setStreamMessage] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -618,18 +625,87 @@ export function InstrumentationPage() {
                       </td>
                       <td className="px-3 py-1.5 font-mono tabular-nums"
                           style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
-                        {(d.byte_size / 1024).toFixed(0)} KB
-                      </td>
-                      <td className="px-3 py-1.5 font-mono"
-                          style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
-                        {d.registered_on}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                         {(d.byte_size / 1024).toFixed(0)} KB
+                       </td>
+                       <td className="px-3 py-1.5 font-mono"
+                           style={{ color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-border)' }}>
+                         {d.registered_on}
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+           </>
+         )}
+
+        {tab === 'stream' && (
+          <div className="flex flex-col min-h-0" style={{ height: 'calc(100vh - 160px)' }}>
+            <Provenance source="live" warning="Requires backend at /api/chat/stream" />
+            <p className="text-xs mb-3 leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
+              Send a message to watch the agent reason token-by-token, see every tool call
+              with its <b style={{ color: 'var(--color-text)' }}>exact arguments</b> (a safety
+              control — shown before execution so you can catch a wrong input), and
+              understand which retrieval path the router chose and why.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (streamMessage.trim()) {
+                  stream.reset()
+                  stream.start(streamMessage.trim())
+                }
+              }}
+              className="flex gap-2 mb-4"
+            >
+              <input
+                value={streamMessage}
+                onChange={(e) => setStreamMessage(e.target.value)}
+                placeholder="Ask anything grounded in the corpus…"
+                className="flex-1 px-3 py-2 text-sm rounded-md border outline-none"
+                style={{
+                  background: 'var(--color-bg-subtle)',
+                  borderColor: 'var(--color-border)',
+                  color: 'var(--color-text)',
+                }}
+              />
+              <button
+                type="submit"
+                disabled={stream.status === 'streaming' || !streamMessage.trim()}
+                className="px-4 py-2 text-sm font-medium rounded-md border"
+                style={{
+                  background: 'var(--color-accent-soft, #f5ede8)',
+                  borderColor: 'var(--color-accent)',
+                  color: 'var(--color-accent)',
+                  opacity: stream.status === 'streaming' || !streamMessage.trim() ? 0.6 : 1,
+                }}
+              >
+                {stream.status === 'streaming' ? 'Working…' : 'Stream →'}
+              </button>
+              {stream.status !== 'idle' && (
+                <button
+                  type="button"
+                  onClick={stream.reset}
+                  className="px-3 py-2 text-sm rounded-md border"
+                  style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+                >
+                  Clear
+                </button>
+              )}
+            </form>
+            <div
+              className="flex-1 rounded-lg border overflow-hidden min-h-0"
+              style={{ borderColor: 'var(--color-border)' }}
+            >
+              <AgentStreamView
+                events={stream.events}
+                narration={stream.narration}
+                route={stream.route}
+                status={stream.status}
+                error={stream.error}
+              />
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>
