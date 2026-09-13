@@ -47,7 +47,40 @@ async function withFallback(apiPath, snapshotPath, shape = (d) => d) {
       } catch {}
     }
 
-    if (!snapshotPath) return { ...shape({}), source: 'unavailable', live: false }
+    // EXPORTED SNAPSHOTS ARE OFF BY DEFAULT.
+    //
+    // /pipeline/*.json are exports of a corpus as it stood when someone
+    // last ran export_frontend_assets.py. They are real data, and they
+    // are dated -- graph.json and chunks.json are committed, so every
+    // clone carries one machine's corpus from one moment.
+    //
+    // The old behaviour fell back to them silently whenever the backend
+    // was unreachable, labelling the result `source: 'snapshot'`. The
+    // label is correct and it is not enough: /sources and /graph then
+    // render a full, plausible knowledge base, and the only thing
+    // separating that from the live system is one small badge. A judge
+    // looking at a populated graph while the backend is down is being
+    // shown a different machine's data.
+    //
+    // So the default is now an honest empty state that says the backend
+    // is unreachable. Set VITE_ALLOW_SNAPSHOTS=true to get the old
+    // behaviour deliberately -- useful for frontend work with no
+    // backend running, which is the only case it was ever good for.
+    const allowSnapshots =
+      import.meta.env?.VITE_ALLOW_SNAPSHOTS === 'true' ||
+      (typeof window !== 'undefined' && window.__ALLOW_PIPELINE_SNAPSHOTS === true)
+
+    if (!snapshotPath || !allowSnapshots) {
+      return {
+        ...shape({}),
+        source: 'unavailable',
+        live: false,
+        unavailableReason:
+          'The backend is not reachable. Nothing is shown from an exported ' +
+          'snapshot, because a snapshot is another machine\'s corpus at ' +
+          'another moment and would be indistinguishable from live data here.',
+      }
+    }
     try {
       const response = await fetch(snapshotPath)
       if (!response.ok) throw new Error('no snapshot')

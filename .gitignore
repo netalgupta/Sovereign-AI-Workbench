@@ -68,3 +68,16 @@ backend/evaluation/configured_sources.json
 
 backend/memory/*.db
 outputs/
+
+# Per-machine runtime state and exported snapshots.
+#
+# deleted_sources.json is a tombstone list so deleted files do not
+# reappear on re-scan. It was COMMITTED, carrying absolute paths from
+# two different machines (e:\hackathons\... and c:\sih\...), so one
+# person's deletions were being applied on another person's box.
+#
+# pipeline/*.json are exports of a corpus at one moment on one machine.
+# Committing them means every clone ships someone else's knowledge base,
+# which /sources and /graph would render as though it were local.
+backend/evaluation/deleted_sources.json
+frontend/public/pipeline/*.json

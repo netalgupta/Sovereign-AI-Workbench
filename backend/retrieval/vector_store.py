@@ -75,6 +75,8 @@ class VectorStore:
         self._generation = 0
         self._texts_cache: list | None = None
         self._texts_cache_gen = -1
+        self._records_cache: list | None = None
+        self._records_cache_gen = -1
 
     def add_chunks(self, chunks: list[IngestedChunk], embeddings: np.ndarray) -> None:
         if len(chunks) != embeddings.shape[0]:
@@ -226,6 +228,41 @@ class VectorStore:
         self._texts_cache = rows
         self._texts_cache_gen = self._generation
         return rows
+
+    def all_chunk_records(self) -> list[dict]:
+        """Every chunk with its metadata, as dicts.
+
+        all_chunk_texts() returns (faiss_id, text) because that is what
+        BM25 needs. Anything that filters by SOURCE -- revision
+        tracking, correspondence summarisation, per-document analysis --
+        needs the metadata too, and doing that as
+        get_by_faiss_id() in a loop is one query per chunk.
+
+        Cached on the same generation counter as all_chunk_texts, so a
+        re-ingest invalidates it and nothing can serve a view of a
+        corpus that has moved.
+        """
+        if self._records_cache is not None and self._records_cache_gen == self._generation:
+            return self._records_cache
+        cursor = self._conn.execute(
+            "SELECT faiss_id, text, source_document, document_type, page_number, "
+            "chunk_index, ingestion_date FROM chunks ORDER BY faiss_id"
+        )
+        records = [
+            {
+                "faiss_id": row[0],
+                "text": row[1],
+                "source_document": row[2],
+                "document_type": row[3],
+                "page_number": row[4],
+                "chunk_index": row[5],
+                "ingestion_date": row[6],
+            }
+            for row in cursor.fetchall()
+        ]
+        self._records_cache = records
+        self._records_cache_gen = self._generation
+        return records
 
     def __len__(self) -> int:
         return self.index.ntotal

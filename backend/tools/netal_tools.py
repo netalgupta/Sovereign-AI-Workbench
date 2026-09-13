@@ -12,10 +12,101 @@ from __future__ import annotations
 import json
 import pathlib
 import re
-import urllib.request
 from typing import Optional
 
 from backend.tools.registry import tool
+
+
+
+
+def _corpus_rows() -> list[dict]:
+    """Every ingested chunk with its metadata, or [] when none.
+
+    ONE ACCESSOR, because three tools in this file each reached for the
+    corpus their own way and all three reached for a function that does
+    not exist (`get_vector_store`). The real path is api.state, which is
+    also what generation.py and the retrieval stack use -- going through
+    it means these tools see exactly the corpus the answers are grounded
+    in, rather than a second view that can drift.
+
+    Never raises. A tool that cannot see the corpus reports "not found",
+    which is a usable answer; one that raises takes the whole turn down.
+    """
+    try:
+        from backend.api.state import get_state
+
+        store, _ = get_state().ensure_corpus()
+        # Records, not (id, text) tuples: every tool in this file filters
+        # by source_document, which the tuple form does not carry.
+        return store.all_chunk_records()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+
+def _corpus_store():
+    """The live VectorStore, or None.
+
+    Separate from _corpus_rows() because retrieval needs the store
+    object itself, not its rows.
+    """
+    try:
+        from backend.api.state import get_state
+
+        store, _ = get_state().ensure_corpus()
+        return store
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _chunk_metadata(faiss_id: int):
+    """The stored chunk behind a faiss id, or None."""
+    try:
+        from backend.api.state import get_state
+
+        store, _ = get_state().ensure_corpus()
+        return store.get_by_faiss_id(faiss_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _load_graph() -> tuple[dict | None, str]:
+    """(graph, source) read IN-PROCESS, not over HTTP.
+
+    This used to urlopen http://127.0.0.1:8000/api/graph -- the server
+    asking itself a question. That is wrong three ways: it deadlocks on
+    a single-worker server (the request cannot be served while the
+    handler that issued it is blocked), it fails whenever the tool is
+    called from a test or a script with no server running, and it makes
+    a local tool look like a network call in a product whose entire
+    claim is that it makes none. Loopback is not an egress violation,
+    but a reviewer reading urllib.request in the backend has to stop and
+    check, and that cost is real.
+
+    Calls the same function the endpoint calls, then falls back to the
+    exported snapshot.
+    """
+    try:
+        from backend.api.routes import get_graph
+
+        graph = get_graph()
+        if graph.get("nodes"):
+            return graph, graph.get("source", "live")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # The snapshot lives under frontend/public so the UI can fetch it;
+    # the old path here pointed at a directory that does not exist.
+    snapshot = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "frontend" / "public" / "pipeline" / "graph.json"
+    )
+    if snapshot.exists():
+        try:
+            return json.loads(snapshot.read_text(encoding="utf-8")), "snapshot"
+        except Exception:  # noqa: BLE001
+            return None, "unavailable"
+    return None, "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -48,10 +139,12 @@ def get_document_revision(document_name: str) -> dict:
     Returns:
         found, revisions list with is_latest flag, warning if superseded doc found.
     """
-    from backend.retrieval.vector_store import get_vector_store
-
-    store = get_vector_store()
-    if store is None or not store.chunks:
+    # THE CORPUS IS REACHED THROUGH api.state, not through a module
+    # function. `get_vector_store` does not exist and never did, so this
+    # tool raised ImportError on its first line of real work -- see
+    # _corpus_rows() for why the accessor is centralised here.
+    rows = _corpus_rows()
+    if not rows:
         return {
             "found": False,
             "document_name": document_name,
@@ -63,7 +156,7 @@ def get_document_revision(document_name: str) -> dict:
 
     query_lower = document_name.lower().replace("-", " ").replace("_", " ")
     matching_chunks = [
-        c for c in store.chunks
+        c for c in rows
         if query_lower in (c.get("source_document") or "").lower().replace("-", " ").replace("_", " ")
         or query_lower in (c.get("text") or "")[:300].lower()
     ]
@@ -164,10 +257,12 @@ def summarise_correspondence(
     Returns summary, action_items, approval_required, participants, citations.
     """
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
-    from backend.retrieval.vector_store import get_vector_store
-
-    store = get_vector_store()
-    if store is None or not store.chunks:
+    # THE CORPUS IS REACHED THROUGH api.state, not through a module
+    # function. `get_vector_store` does not exist and never did, so this
+    # tool raised ImportError on its first line of real work -- see
+    # _corpus_rows() for why the accessor is centralised here.
+    rows = _corpus_rows()
+    if not rows:
         return {
             "found": False,
             "document": document_or_query,
@@ -180,7 +275,7 @@ def summarise_correspondence(
         }
 
     query = f"{document_or_query} {focus}" if focus else document_or_query
-    result = retrieve_with_grounding_check(store, query)
+    result = retrieve_with_grounding_check(_corpus_store(), query)
 
     if not result.found or not result.chunks:
         return {
@@ -268,26 +363,9 @@ def graph_analytics(
             "note": "Install networkx to use this tool.",
         }
 
-    # Load graph — try live backend, fall back to snapshot
-    graph_data = None
-    source_label = "snapshot"
-    try:
-        req = urllib.request.Request(
-            "http://127.0.0.1:8000/api/graph",
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            raw = json.loads(resp.read())
-            if raw.get("nodes"):
-                graph_data = raw
-                source_label = "live"
-    except Exception:
-        pass
-
-    if graph_data is None:
-        snapshot = pathlib.Path(__file__).resolve().parents[2] / "pipeline" / "graph.json"
-        if snapshot.exists():
-            graph_data = json.loads(snapshot.read_text())
+    # Read in-process. See _load_graph() for why this is not an HTTP
+    # call to our own server any more.
+    graph_data, source_label = _load_graph()
 
     if graph_data is None or not graph_data.get("nodes"):
         return {
@@ -419,10 +497,12 @@ def summarise_depot_correspondence(
 ) -> dict:
     """Retrieve and summarise multi-depot correspondence. Specialises tool 18 for MRPL depots."""
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
-    from backend.retrieval.vector_store import get_vector_store
-
-    store = get_vector_store()
-    if store is None or not store.chunks:
+    # THE CORPUS IS REACHED THROUGH api.state, not through a module
+    # function. `get_vector_store` does not exist and never did, so this
+    # tool raised ImportError on its first line of real work -- see
+    # _corpus_rows() for why the accessor is centralised here.
+    rows = _corpus_rows()
+    if not rows:
         return {
             "found": False,
             "locations_covered": [],
@@ -444,7 +524,7 @@ def summarise_depot_correspondence(
 
     for loc_key, loc_desc in targets.items():
         query = f"{loc_desc} correspondence {focus or ''}".strip()
-        result = retrieve_with_grounding_check(store, query)
+        result = retrieve_with_grounding_check(_corpus_store(), query)
         if not result.found or not result.chunks:
             continue
         found_locs.append(loc_key)
