@@ -257,7 +257,7 @@ export function ChatPane() {
 
       const toolFor = (name) => {
         const ext = (name || '').toLowerCase().split('.').pop()
-        if (['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)) return 'extract_printed_text'
+        if (['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)) return 'detect_defects'
         if (['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)) return 'transcribe_voice_note'
         return 'source_ingest'
       }
@@ -280,7 +280,19 @@ export function ChatPane() {
             pipelineEvents.push({
               tool_name: tool,
               status: 'done',
-              output: result.full_text !== undefined ? { full_text: String(result.full_text).slice(0, 6000) } : result,
+              // Keep every overlay-relevant field. The DefectOverlay mounts
+              // only when the event carries `detections` AND an
+              // `image_url`/`imageUrl`; a pipeline event that stripped
+              // down to full_text alone would render no boxes.
+              output: {
+                ...(result.full_text !== undefined
+                  ? { full_text: String(result.full_text).slice(0, 6000) }
+                  : {}),
+                ...(result.detections !== undefined ? { detections: result.detections } : {}),
+                ...(result.image_url !== undefined ? { image_url: result.image_url } : {}),
+                ...(result.imageUrl !== undefined ? { imageUrl: result.imageUrl } : {}),
+                ...(result.findings !== undefined ? { findings: result.findings } : {}),
+              },
             })
           }
           setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))

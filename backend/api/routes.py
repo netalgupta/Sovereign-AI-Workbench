@@ -281,6 +281,55 @@ def get_image_bytes(image_id: str) -> Response:
     return Response(content=data, media_type=record.content_type)
 
 
+# Image extensions a browser can render as an inspection photo.
+_IMAGE_SUFFIX_TO_MEDIA = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+}
+
+
+@router.get("/inspection/image")
+def get_inspection_image(path: str = Query(..., description="Image path, relative to the corpus root")) -> Response:
+    """Serve one inspection image read-only, for the DefectOverlay.
+
+    The defect/anomaly tool returns boxes with an `image_url` pointing
+    here; the browser fetches THIS endpoint, never the filesystem path
+    directly. Hard constraint #4 holds by construction: this is a GET
+    that only reads a file already on disk.
+
+    CONTAINMENT IS LOAD-BEARING, not politeness. An endpoint that serves
+    a caller-chosen path is an arbitrary file reader unless it confines
+    that path to the corpus root and rejects anything outside it. Path is
+    resolved and re-checked AFTER normalization so `..` traversal cannot
+    escape the root; a relative path is resolved against the corpus dir,
+    and an absolute path must still land inside it.
+    """
+    from backend.api.state import DEFAULT_CORPUS_DIR
+
+    corpus_root = Path(DEFAULT_CORPUS_DIR).resolve()
+
+    candidate = Path(path)
+    full = (candidate if candidate.is_absolute() else corpus_root / candidate).resolve()
+    try:
+        full.relative_to(corpus_root)
+    except ValueError:
+        raise HTTPException(400, detail="path escapes the corpus root")
+
+    if not full.is_file():
+        raise HTTPException(404, detail=f"no such image: {path}")
+
+    media = _IMAGE_SUFFIX_TO_MEDIA.get(full.suffix.lower())
+    if media is None:
+        raise HTTPException(400, detail=f"not an inspectable image suffix: {full.suffix}")
+
+    return Response(content=full.read_bytes(), media_type=media)
+
+
 class ImageRequest(BaseModel):
     request: str
     image_ids: list[str] = []

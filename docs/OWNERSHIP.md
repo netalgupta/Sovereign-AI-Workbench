@@ -124,6 +124,7 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Document ingestion pipeline | Aryan | Kanishka (upload UI) |
 | Watched folders / priority queue | Aryan | Netal |
 | OCR (printed + scanned) | Aryan | Sahil |
+| Defect/anomaly detection (row 7) | **Sahil** (tool + overlay) | Sahil |
 | Voice transcription | Aryan | Sahil |
 | Image storage + retrieval | Aryan | Netal |
 | Page preview from the user's own file | Aryan (API) | **Netal** |

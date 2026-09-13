@@ -131,6 +131,26 @@ def register_all() -> None:
     except ImportError:
         pass
 
+    try:
+        from backend.tools.vision.defect_detection import detect_defects
+
+        tool(
+            name="detect_defects",
+            description=(
+                "Detect defect/anomaly regions on an inspection image and return "
+                "overlay-ready bounding boxes (OCR-box based today; label = the "
+                "recognized text, severity = OCR confidence band). The frontend "
+                "DefectOverlay renders these boxes over the image. Use for photos "
+                "and scans of plant equipment where region annotations are wanted. "
+                "Fully offline."
+            ),
+            category="vision",
+            priority="🟡",
+            tools_md_row=7,
+        )(detect_defects)
+    except ImportError:
+        pass
+
     # ---- audio -----------------------------------------------------------
 
     try:

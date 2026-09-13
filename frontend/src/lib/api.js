@@ -172,10 +172,10 @@ export async function getToolsMetadata() {
 }
 
 /**
- * Route an uploaded attachment through the OCR/vision pipeline.
- * Images -> extract_printed_text (OCR, not an estimate). Audio ->
- * transcribe_voice_note. Other types (PDF/DOCX/XLSX) are handled solely by
- * corpus ingestion, so no tool call is needed here.
+ * Route an uploaded attachment through the OCR/defect pipeline.
+ * Images -> detect_defects (row 7: overlay-ready boxes labeled from OCR,
+ * fully offline). Audio -> transcribe_voice_note. Other types (PDF/DOCX/
+ * XLSX) are handled solely by corpus ingestion, so no tool call is needed.
  *
  * @param {{ name: string }} item
  * @param {string} savedPath - server-side path returned by the upload
@@ -185,7 +185,7 @@ export async function analyseAttachment(item, savedPath) {
   const ext = (item.name || '').toLowerCase().split('.').pop()
   const isImage = ['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)
   const isAudio = ['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)
-  if (isImage) return callTool('extract_printed_text', { image_path: savedPath })
+  if (isImage) return callTool('detect_defects', { image_path: savedPath })
   if (isAudio) return callTool('transcribe_voice_note', { audio_path: savedPath })
   return null
 }
