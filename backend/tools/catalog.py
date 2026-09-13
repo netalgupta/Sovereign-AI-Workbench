@@ -187,6 +187,29 @@ def register_all() -> None:
 
     from backend.sandbox.executor import run_in_sandbox
 
+    # ---- compliance (MRPL-specific, TOOLS.md row 56) --------------------
+
+    from backend.tools.spec_compliance import check_spec_compliance
+
+    tool(
+        name="check_spec_compliance",
+        description=(
+            "Compare lab readings against their product spec limits and flag "
+            "exceedances and near-limit readings. Status is COMPUTED from the "
+            "reading and the limit, unit-aware, never copied from a status "
+            "column the document already carries -- and where the document "
+            "states a status of its own, a disagreement is reported, because a "
+            "sheet marked OK on a reading that exceeds its limit is a failure "
+            "that already passed review. A reading whose units cannot be "
+            "reconciled with its limit is reported as uncomparable rather than "
+            "compared."
+        ),
+        category="mrpl",
+        priority="🟡",
+        computes_numbers=True,
+        tools_md_row=56,
+    )(check_spec_compliance)
+
     # ---- ingestion routing (FR-7, TOOLS.md row 9) -----------------------
 
     from backend.ingestion.document_classifier import classify_document
