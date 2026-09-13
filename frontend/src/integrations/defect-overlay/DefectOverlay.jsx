@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useState } from 'react'
 import { Scan, AlertTriangle, ShieldAlert } from 'lucide-react'
 
 const SEVERITY = {
@@ -78,34 +78,25 @@ export default function DefectOverlay({
   const [activeId, setActiveId] = useState(selectedDetectionId || null)
   const [image, setImage] = useState(null)
 
-  useEffect(() => setActiveId(selectedDetectionId), [selectedDetectionId])
-
-  const boxes = useMemo(
-    () =>
-      Array.isArray(detections)
-        ? detections.map((d) => ({ detection: d, geom: boxToPercent(d?.box, image) }))
-        : [],
-    [detections, image]
-  )
+  const boxes = Array.isArray(detections)
+    ? detections.map((d) => ({ detection: d, geom: boxToPercent(d?.box, image) }))
+    : []
 
   const hasDetections = boxes.length > 0
 
-  const sevCounts = useMemo(() => {
-    const counts = {}
-    for (const d of Array.isArray(detections) ? detections : []) {
-      const sev = d.severity || 'medium'
-      counts[sev] = (counts[sev] || 0) + 1
-    }
-    return counts
-  }, [detections])
+  const sevCounts = {}
+  for (const d of Array.isArray(detections) ? detections : []) {
+    const sev = d.severity || 'medium'
+    sevCounts[sev] = (sevCounts[sev] || 0) + 1
+  }
 
-  const highest = useMemo(() => {
-    const order = ['critical', 'high', 'medium', 'low']
-    for (const key of order) {
-      if (sevCounts[key]) return { key, count: sevCounts[key] }
+  let highest = null
+  for (const key of ['critical', 'high', 'medium', 'low']) {
+    if (sevCounts[key]) {
+      highest = { key, count: sevCounts[key] }
+      break
     }
-    return null
-  }, [sevCounts])
+  }
 
   // Empty state — no fabricated overlay when there is no real model output.
   if (!imageUrl || !hasDetections) {

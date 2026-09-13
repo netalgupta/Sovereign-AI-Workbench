@@ -30,6 +30,8 @@ import {
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
 import { useChatStore } from '../../store/chatStore'
+import { getToolsMetadata } from '../../lib/api'
+import { DefectOverlay } from '../../integrations/defect-overlay'
 
 const TYPEWRITER_SPEED_MS = 18
 
@@ -263,6 +265,19 @@ function TurnTrace({ message, isStreaming = false }) {
     return () => clearInterval(interval)
   }, [isStreaming])
 
+  // name -> { is_estimate, category }, fetched once from /api/tools so the
+  // trace can visibly label model-estimate outputs (e.g. describe_chart_image,
+  // measured at 10 fabricated values across 2/6 charts in CHART_STRESS_REPORT.md).
+  const [toolMeta, setToolMeta] = useState(null)
+
+  useEffect(() => {
+    let mounted = true
+    getToolsMetadata().then((meta) => mounted && setToolMeta(meta))
+    return () => {
+      mounted = false
+    }
+  }, [])
+
   const steps = Array.isArray(message.plan) ? message.plan : []
   const tools = Array.isArray(message.toolCallEvents) ? message.toolCallEvents : []
   const verification = message.verification || null
@@ -294,6 +309,9 @@ function TurnTrace({ message, isStreaming = false }) {
 
   const completedWord = getCompletedWord(message.id)
   const durationText = duration ? `${duration.toFixed(1)}s` : null
+
+  const isEstimatingTool = (name) => Boolean(toolMeta?.[name]?.is_estimate)
+  const hasEstimate = tools.some((ev) => isEstimatingTool(ev.tool_name || ev.name))
 
   // Build Level 1 tree nodes (steps, tools, verification)
   const level1Nodes = []
@@ -533,6 +551,7 @@ function TurnTrace({ message, isStreaming = false }) {
         icon,
         label,
         status: statusStr,
+        estimate: isEstimatingTool(toolName),
         children,
       })
     })
@@ -699,6 +718,15 @@ function TurnTrace({ message, isStreaming = false }) {
                     <span className="truncate" style={{ color: 'var(--color-text)' }}>
                       {node.label}
                     </span>
+                    {node.estimate && (
+                      <span
+                        className="ml-1 px-1 py-px rounded text-[9px] font-bold uppercase tracking-wide"
+                        style={{ background: '#f59e0b22', color: '#f59e0b' }}
+                        title="This output is a vision-model estimate, not a verified measurement (CHART_STRESS_REPORT.md measured fabricated numeric readings)."
+                      >
+                        estimate
+                      </span>
+                    )}
                     {node.status && (
                       <span
                         className="flex-shrink-0"
@@ -749,6 +777,16 @@ function TurnTrace({ message, isStreaming = false }) {
           </div>
         </div>
       </div>
+      {hasEstimate && (
+        <p
+          className="mt-1 text-[10px] leading-snug"
+          style={{ color: '#b45309', maxWidth: '46ch' }}
+        >
+          Values above marked <strong>estimate</strong> come from a vision model
+          reading the image — treat them as approximate, never as a verified
+          measurement.
+        </p>
+      )}
     </div>
   )
 }
@@ -850,6 +888,44 @@ function VerifyButton({ message }) {
   )
 }
 
+/**
+ * Mounts the DefectOverlay viewer for any tool event in this turn whose real
+ * output carried `detections` (+ an image). Rendered only from actual backend
+ * output; absent detections render nothing here so the overlay's own empty
+ * state never appears inside a conversation that has no findings.
+ */
+function DetectionCards({ message }) {
+  const events = Array.isArray(message.toolCallEvents) ? message.toolCallEvents : []
+  const withDetections = events.filter(
+    (ev) =>
+      ev.output &&
+      Array.isArray(ev.output.detections) &&
+      ev.output.detections.length > 0 &&
+      (ev.output.image_url || ev.output.imageUrl)
+  )
+  if (!withDetections.length) return null
+
+  const seen = new Set()
+  return (
+    <div className="mt-1">
+      {withDetections.map((ev) => {
+        const imageUrl = ev.output.image_url || ev.output.imageUrl
+        if (seen.has(imageUrl)) return null
+        seen.add(imageUrl)
+        return (
+          <DefectOverlay
+            key={imageUrl}
+            imageUrl={imageUrl}
+            detections={ev.output.detections}
+            findings={Array.isArray(ev.output.findings) ? ev.output.findings : []}
+            showLabels
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 export function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   const isStreaming =
@@ -905,6 +981,10 @@ export function MessageBubble({ message }) {
         {/* Blinking cursor while draining */}
         {isStreaming && <StreamCursor />}
       </div>
+
+      {/* Real detection overlay from tool output (rendered only when the
+          backend actually returned detections for an image). */}
+      {!isStreaming && <DetectionCards message={message} />}
 
       {!isStreaming && <VerifyButton message={message} />}
 

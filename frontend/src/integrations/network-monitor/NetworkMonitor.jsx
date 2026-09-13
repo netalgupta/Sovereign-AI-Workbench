@@ -47,8 +47,6 @@ const UNKNOWN = '#f59e0b'
  * @param {import('./contract').NetworkMonitorProps & { hostExternalCount?: number, hostNote?: string }} props
  */
 export default function NetworkMonitor({
-  status: propStatus = 'checking',
-  externalCount: propExternalCount,
   connections: propConnections = [],
   metrics: propMetrics,
   mode = 'bar',
@@ -58,6 +56,7 @@ export default function NetworkMonitor({
   const [data, setData] = useState(null)
   const [error, setError] = useState(false)
   const [lastExternalAt, setLastExternalAt] = useState(null)
+  const [now, setNow] = useState(0)
   const prevCountRef = useRef(0)
 
   useEffect(() => {
@@ -74,6 +73,7 @@ export default function NetworkMonitor({
         if (!active) return
         setError(false)
         setData(payload)
+        setNow(Date.now())
         const ext = typeof payload.externalCount === 'number' ? payload.externalCount : -1
         if (ext > 0 && prevCountRef.current === 0) setLastExternalAt(Date.now())
         prevCountRef.current = ext
@@ -109,7 +109,7 @@ export default function NetworkMonitor({
   const conns = (error ? [] : data?.connections || propConnections).map(normalizeConn)
   const metrics = error ? null : data?.metrics || propMetrics || null
   const elapsedText =
-    lastExternalAt == null ? null : fmtElapsed(Math.floor((Date.now() - lastExternalAt) / 1000))
+    lastExternalAt == null || !now ? null : fmtElapsed(Math.floor((now - lastExternalAt) / 1000))
 
   const handleOpenFull = () => {
     if (onViewFullMonitor) onViewFullMonitor()
