@@ -252,10 +252,54 @@ class WorkerPool:
         container = self.client.containers.run(resolved_img, **container_kwargs)
         return Worker(name=name, container=container)
 
+    @staticmethod
+    def _already_gone(exc: Exception) -> bool:
+        """Is this exception "the container does not exist"?
+
+        Checked by TYPE first, falling back to the message only if the
+        docker package's exception classes cannot be imported. Matching
+        on "404" or "No such container" alone would also swallow a 404
+        from an unrelated endpoint, and silently succeeding at a removal
+        that did not happen leaks a sandbox.
+        """
+        try:
+            from docker.errors import NotFound
+
+            if isinstance(exc, NotFound):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return "No such container" in str(exc)
+
     def _destroy(self, w: Worker):
+        """Remove a worker's container. Already-gone is success.
+
+        A container that does not exist is the state this function is
+        trying to reach, so Docker's 404 is not an error -- but it was
+        logged with logger.exception, which prints a full traceback per
+        worker. On shutdown that is four tracebacks in a row, and under
+        `uvicorn --reload` it is four per file save:
+
+            ERROR pool.py:259 - failed removing container sandbox-worker-0
+            docker.errors.NotFound: 404 Client Error ...
+            No such container: 8c5cd984...
+
+        It happens routinely and means nothing -- Docker reaps containers
+        on exit, a previous reload already removed them, or the daemon
+        restarted. The cost is not the noise itself but what it hides: a
+        log where the normal case is a wall of tracebacks is a log where
+        nobody notices the real one.
+
+        Anything OTHER than a missing container is still reported in
+        full, because failing to remove a container that IS there leaks
+        a sandbox.
+        """
         try:
             w.container.remove(force=True)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            if self._already_gone(exc):
+                logger.debug("container %s was already removed", w.name)
+                return
             logger.exception("failed removing container %s", w.name)
 
     def _respawn(self, w: Worker):

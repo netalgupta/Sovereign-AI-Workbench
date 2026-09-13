@@ -22,6 +22,7 @@ a citation pointing at a document that has since been edited.
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -34,7 +35,22 @@ SNAPSHOT_PATH = Path("backend/evaluation/inspection_data.json")
 # expensive to compute. Gitignored per-machine state -- committing a
 # corpus export is what made one person's 13 documents hydrate
 # everybody's backend.
-CORPUS_CACHE_PATH = Path("backend/evaluation/corpus_cache.json")
+# ONE GITIGNORED FOLDER FOR EVERYTHING DERIVED.
+#
+# This is what NotebookLM and Claude Projects do: the index is BUILT
+# ONCE and kept until the user removes the source. Deriving it again on
+# every start is work nobody asked for -- and until this existed, every
+# `uvicorn --reload` file save cost a full re-ingest.
+#
+# Everything in here is reproducible from the sources, so it is safe to
+# delete and it never belongs in git. It is deleted only when the user
+# deletes it, or when the sources it was built from have changed.
+WORKBENCH_DIR = Path(".workbench")
+CORPUS_CACHE_PATH = WORKBENCH_DIR / "corpus_chunks.json"
+# The FAISS index itself. Without this, hydration still had to re-embed
+# all 231 chunks on every boot -- 24.8 seconds of GPU work to rebuild
+# something that had not changed.
+CORPUS_INDEX_PATH = WORKBENCH_DIR / "corpus.faiss"
 IMAGE_SNAPSHOT_PATH = Path("backend/evaluation/image_data.json")
 METRICS_PATHS = {
     "retrieval_metrics": Path("backend/evaluation/retrieval_metrics.json"),
@@ -43,6 +59,18 @@ METRICS_PATHS = {
     "refusal": Path("backend/evaluation/refusal_after_fix.json"),
     "boilerplate": Path("backend/evaluation/boilerplate_precision_comparison.json"),
 }
+
+
+def _empty_index(dim: int):
+    """A fresh empty FAISS index of the same type the store uses.
+
+    Needed because add_chunks() writes into whatever index is attached,
+    and when hydrating from a saved index we want its SQLite side
+    populated without its vectors being appended to themselves.
+    """
+    import faiss
+
+    return faiss.IndexFlatIP(dim)
 
 
 class PipelineState:
@@ -134,6 +162,14 @@ class PipelineState:
         try:
             payload = {
                 "written_at": datetime.now().isoformat(timespec="seconds"),
+                # THE FILES THAT WERE SCANNED, not the ones that produced
+                # chunks. Deriving this from chunk metadata made the
+                # cache permanently invalid: a .pptx or an unreadable
+                # README yields no chunks, so its name never appears,
+                # so the check said "stale" forever and EVERY restart
+                # re-ingested for 68 seconds. Under `uvicorn --reload`
+                # that is every file save.
+                "scanned_files": sorted(self._configured_file_names()),
                 "chunks": [
                     {
                         "text": c.text,
@@ -150,6 +186,7 @@ class PipelineState:
             CORPUS_CACHE_PATH.write_text(
                 json.dumps(payload), encoding="utf-8"
             )
+            self._write_index()
         except Exception:  # noqa: BLE001
             pass
 
@@ -177,6 +214,60 @@ class PipelineState:
             for e in entries
             if e.get("enabled", True) and e.get("path")
         ]
+
+    def _write_index(self) -> None:
+        """Persist the FAISS index next to the chunk cache."""
+        try:
+            import faiss
+
+            faiss.write_index(self._store.index, str(CORPUS_INDEX_PATH))
+        except Exception:  # noqa: BLE001 - a missing cache costs time, not truth
+            pass
+
+    def _load_index(self, expected: int) -> bool:
+        """Load the saved index, or return False.
+
+        GUARDED ON COUNT, and this guard is the whole reason the vectors
+        can be cached at all. The index is a bare array of vectors whose
+        POSITION is the only link to a chunk -- faiss id 7 means
+        "chunks[7]" and nothing else. An index holding a different
+        number of vectors than the chunk list has is not slightly wrong,
+        it is silently returning the text of one passage for the
+        embedding of another, with citations attached.
+
+        This repository has produced exactly that failure before, from
+        hash embeddings that satisfied every shape assertion. So a
+        mismatch throws the file away and re-embeds; being slow is
+        recoverable, and confidently citing the wrong passage is not.
+        """
+        if not CORPUS_INDEX_PATH.exists():
+            return False
+        try:
+            import faiss
+
+            index = faiss.read_index(str(CORPUS_INDEX_PATH))
+            if index.ntotal != expected:
+                logging.getLogger(__name__).warning(
+                    "Cached index holds %d vectors for %d chunks; discarding it "
+                    "and re-embedding rather than risking a mismatched citation.",
+                    index.ntotal, expected,
+                )
+                return False
+            self._store.index = index
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _configured_file_names(self) -> set[str]:
+        """Every filename under every enabled source folder."""
+        names: set[str] = set()
+        for folder in self._configured_folders() or []:
+            if not folder.exists():
+                continue
+            for path in folder.rglob("*"):
+                if path.is_file() and not path.name.startswith("."):
+                    names.add(path.name)
+        return names
 
     def corpus_snapshot_is_current(self) -> bool:
         """Does the exported CORPUS still describe the configured sources?
@@ -222,21 +313,21 @@ class PipelineState:
             if not folders:
                 return True
 
-            configured_names: set[str] = set()
-            for folder in folders:
-                if not folder.exists():
-                    continue
-                for path in folder.rglob("*"):
-                    if path.is_file() and not path.name.startswith("."):
-                        configured_names.add(path.name)
-
+            configured_names = self._configured_file_names()
             if not configured_names:
                 return True
 
             data = json.loads(cache_path.read_text(encoding="utf-8"))
-            snapshot_names = {
-                c.get("source_document") for c in data.get("chunks", [])
-            }
+            # A cache written by this class records exactly which files
+            # it looked at. The older inspector export does not, so fall
+            # back to the document names in its chunks -- weaker, and the
+            # only thing available for that file.
+            scanned = data.get("scanned_files")
+            snapshot_names = (
+                set(scanned)
+                if scanned
+                else {c.get("source_document") for c in data.get("chunks", [])}
+            )
 
             missing = configured_names - snapshot_names
             if missing:
@@ -311,8 +402,27 @@ class PipelineState:
                             )
                             self._chunks.append(IngestedChunk(text=rc.get("text", ""), metadata=meta))
                         if self._chunks:
-                            vecs = embed_texts([c.text for c in self._chunks])
-                            self._store.add_chunks(self._chunks, vecs)
+                            # THE SAVED INDEX FIRST. Re-embedding 231
+                            # unchanged chunks cost 24.8 seconds on every
+                            # boot -- GPU work to rebuild something that
+                            # had not changed. add_chunks() still runs so
+                            # the SQLite side is populated; the vectors
+                            # are then swapped for the cached ones.
+                            vecs = None
+                            if self._load_index(len(self._chunks)):
+                                import numpy as np
+
+                                saved = self._store.index
+                                vecs = np.zeros(
+                                    (len(self._chunks), saved.d), dtype="float32"
+                                )
+                                self._store.index = _empty_index(saved.d)
+                                self._store.add_chunks(self._chunks, vecs)
+                                self._store.index = saved
+                            else:
+                                vecs = embed_texts([c.text for c in self._chunks])
+                                self._store.add_chunks(self._chunks, vecs)
+                                self._write_index()
                     except Exception:
                         pass
                 else:
