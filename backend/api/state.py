@@ -331,16 +331,18 @@ class PipelineState:
 
             missing = configured_names - snapshot_names
             if missing:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "Ingestion snapshot is stale: %d configured document(s) are not "
-                    "in it (e.g. %s). Re-ingesting from the configured folders "
-                    "instead of serving the snapshot.",
-                    len(missing),
-                    ", ".join(sorted(missing)[:3]),
-                )
+                # NO LOGGING HERE. This is a QUESTION, asked by several
+                # callers, and only one of them re-ingests. Logging
+                # "Re-ingesting from the configured folders" from inside
+                # the check meant every /api/chunks and /api/corpus
+                # request printed a line announcing work that was not
+                # happening -- a log that describes something other than
+                # what the program did is worse than no log.
+                #
+                # The caller that actually rebuilds says so, once.
+                self._last_staleness = sorted(missing)
                 return False
+            self._last_staleness = []
             return True
         except Exception:  # noqa: BLE001
             return False
@@ -439,6 +441,15 @@ class PipelineState:
                     from backend.evaluation.ingest_corpus import ingest_corpus
                     from backend.ingestion.embeddings import embed_texts
 
+                    missing = getattr(self, "_last_staleness", None)
+                    logging.getLogger(__name__).info(
+                        "Building the corpus index from the configured folders%s. "
+                        "This happens once; the result is cached in %s and reused "
+                        "until the sources change.",
+                        f" ({len(missing)} new document(s), e.g. {', '.join(missing[:3])})"
+                        if missing else "",
+                        WORKBENCH_DIR,
+                    )
                     folders = self._configured_folders() or [Path(self.corpus_dir)]
                     collected: list = []
                     seen: set = set()

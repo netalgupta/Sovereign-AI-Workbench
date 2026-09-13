@@ -466,11 +466,25 @@ export function SourcesPage() {
       >
         <div className="flex items-center gap-1 overflow-x-auto py-0.5">
           {[
-            { id: 'files', label: 'Corpus & Files', icon: HardDrive, count: corpusData.sources?.length || 29 },
-            { id: 'graph', label: 'Knowledge Graph', icon: Network, count: graph?.nodes?.length || 101 },
-            { id: 'images', label: 'Images & Ground Truth', icon: ImageIcon, count: images ? images.length : 15 },
-            { id: 'vectors', label: 'Vectors (Embedding Space)', icon: Compass, count: '1024-dim' },
-            { id: 'chunks', label: 'Retriever Chunks', icon: Layers, count: chunks?.chunks?.length || 21 },
+            // COUNTS COME FROM DATA OR THEY ARE NOT SHOWN.
+            //
+            // These read `|| 29`, `|| 101`, `: 15`, `|| 21` -- and those
+            // are not neutral defaults, they are the exact figures from
+            // the old committed snapshot. So before the fetches landed
+            // (or whenever one failed) the page displayed a corpus that
+            // did not exist, on the one screen whose entire job is to
+            // show what the retriever actually holds.
+            //
+            // An em-dash says "not known yet". A number says "this is
+            // how many there are", and it has to be true.
+            { id: 'files', label: 'Corpus & Files', icon: HardDrive, count: corpusData?.sources?.length ?? '—' },
+            { id: 'graph', label: 'Knowledge Graph', icon: Network, count: graph?.nodes?.length ?? '—' },
+            { id: 'images', label: 'Images & Ground Truth', icon: ImageIcon, count: images?.length ?? '—' },
+            // Read from the vectors themselves rather than asserted: the
+            // dimension is a property of the embedding model, and this
+            // said 1024 even with no model loaded.
+            { id: 'vectors', label: 'Vectors (Embedding Space)', icon: Compass, count: chunks?.embedding_dim ? `${chunks.embedding_dim}-dim` : '—' },
+            { id: 'chunks', label: 'Retriever Chunks', icon: Layers, count: chunks?.chunks?.length ?? '—' },
           ].map((t) => {
             const isActive = activeTab === t.id
             const Icon = t.icon
@@ -848,7 +862,27 @@ export function SourcesPage() {
               </div>
 
               <div className="text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>
-                <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{graph?.nodes?.length || 0}</span> nodes · <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{graph?.relationships?.length || 0}</span> relationships in Neo4j
+                {/* SAY WHERE THIS CAME FROM. This read "... in Neo4j"
+                    unconditionally. Measured with the container running
+                    and the DATABASE EMPTY -- 0 nodes, 0 relationships --
+                    while the page displayed "101 nodes · 115
+                    relationships in Neo4j" from the exported snapshot.
+                    The graph was real once; it is not what Neo4j holds
+                    now, and claiming otherwise is the same defect as a
+                    citation pointing at a document that has changed.
+                    The API already reports `source`; the page ignored
+                    it. */}
+                <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{graph?.nodes?.length || 0}</span> nodes · <span className="font-semibold" style={{ color: 'var(--color-text)' }}>{graph?.relationships?.length || 0}</span> relationships
+                {graph?.source === 'snapshot' ? (
+                  <span style={{ color: 'var(--color-warning, #a8760f)' }}>
+                    {' '}from an exported snapshot — Neo4j is empty or unreachable.
+                    Rebuild: <code>py -3 -m backend.evaluation.build_graph</code>
+                  </span>
+                ) : graph?.source === 'live' ? (
+                  <span> in Neo4j</span>
+                ) : (
+                  <span style={{ color: 'var(--color-text-faint)' }}> — source unknown</span>
+                )}
               </div>
             </div>
 
@@ -1049,7 +1083,7 @@ export function SourcesPage() {
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-1.5">
                 {[
-                  { id: 'all', label: `All Images (${images ? images.length : 15})` },
+                  { id: 'all', label: `All Images (${images?.length ?? 0})` },
                   { id: 'scans', label: 'Corpus Scans' },
                   { id: 'stress', label: 'Stress Charts' },
                   { id: 'fabricated', label: 'Fabricated Only' },
@@ -1174,7 +1208,7 @@ export function SourcesPage() {
                   <div className="flex items-center justify-between px-1 text-[11px] font-mono text-muted">
                     <span className="truncate max-w-[220px]" title={currentImage.filename}>{currentImage.filename}</span>
                     <span className="text-[10px] px-2 py-0.5 rounded font-semibold" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
-                      {currentImage.filename.endsWith('.png') ? 'Raster Diagram' : 'Vector Chart'}
+                      {String(currentImage.filename ?? '').endsWith('.png') ? 'Raster Diagram' : 'Vector Chart'}
                     </span>
                   </div>
                 </div>

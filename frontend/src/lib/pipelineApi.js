@@ -115,7 +115,36 @@ export const api = {
 
   images: () =>
     withFallback('/api/images', '/pipeline/images.json', (d) => ({
-      images: (Array.isArray(d) ? d : d.images) ?? [],
+      // NORMALISED, because the live API and the exported snapshot do
+      // not agree on field names and the UI was written against the
+      // snapshot.
+      //
+      //   snapshot: filename, data_uri, size_kb, vision_description
+      //   live API: image_id, url,      byte_size, description
+      //
+      // The Images tab rendered a blank page on every click for that
+      // reason -- currentImage.filename.endsWith('.png') on a payload
+      // with no `filename` throws a TypeError, React unmounts the tree,
+      // and the user sees nothing at all with no error on screen.
+      //
+      // Normalising here rather than at each of the ~15 render sites
+      // means a future field rename breaks one function instead of
+      // silently blanking a page again.
+      images: ((Array.isArray(d) ? d : d.images) ?? []).map((im) => ({
+        ...im,
+        filename: im.filename ?? im.image_id ?? 'image',
+        size_kb:
+          im.size_kb ??
+          (typeof im.byte_size === 'number'
+            ? Math.round(im.byte_size / 1024)
+            : undefined),
+        vision_description: im.vision_description ?? im.description,
+        // The live API flags an estimate on its own field; the UI reads
+        // ground_truth. An estimate labelled as measured is the one
+        // thing this must not lose (CHART_STRESS_REPORT.md).
+        description_is_estimate:
+          im.description_is_estimate ?? im.scored?.is_estimate ?? false,
+      })),
     })),
 
   metrics: () => tryApi('/api/metrics').catch(() => null),
