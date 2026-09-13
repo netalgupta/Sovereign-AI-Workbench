@@ -151,6 +151,14 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Network monitor `/monitor` | Sahil |
 | Multimodal upload + preview | Sahil |
 | Defect/annotation overlay | Sahil |
+| Defect detection MODEL (row 7, YOLOv8) | **Sahil** |
+
+> **Row 7 moved from Aryan to Sahil**, model included. The model and the
+> overlay are one deliverable; splitting them made the bounding-box
+> format a dependency in both directions and left nothing built on
+> either side. Brief, including the three hazards that make this
+> different from an ordinary model integration:
+> `docs/Assignments/Sahil_Defect_Detection_Handoff.md`.
 
 ---
 
