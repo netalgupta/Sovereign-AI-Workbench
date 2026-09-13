@@ -24,6 +24,8 @@ import {
   ShieldCheck,
   ListTree,
   CornerDownRight,
+  Brain,
+  AlertTriangle,
 } from 'lucide-react'
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
@@ -279,6 +281,12 @@ function TurnTrace({ message, isStreaming = false }) {
     !verification &&
     !route &&
     !citations.length &&
+    // A turn whose only trace data is what memory recalled still has
+    // something to show — and it is exactly the turn where the user
+    // most needs to know why the answer referred to something they did
+    // not mention in it.
+    !message.memory?.recalled &&
+    !message.memory?.degraded &&
     !duration
   ) {
     return null
@@ -308,6 +316,85 @@ function TurnTrace({ message, isStreaming = false }) {
         children: [],
       })
     })
+  }
+
+  // 1b. What memory contributed.
+  //
+  // Placed BEFORE the tools because it is what shaped them: a rewritten
+  // follow-up changes the search that the next node runs. Counts and
+  // names only -- never the remembered text itself, which contains
+  // prior answers, and prior answers contain numbers. Putting those on
+  // screen under a heading like "Memory" invites a reader to treat a
+  // remembered figure as a current one.
+  const memory = message.memory
+  if (memory && (memory.recalled || memory.degraded)) {
+    const memoryChildren = []
+
+    if (memory.degraded) {
+      memoryChildren.push({
+        id: 'mem-degraded',
+        icon: <AlertTriangle size={11} strokeWidth={1.75} className="flex-shrink-0"
+                             style={{ color: 'var(--color-warning, #a8760f)' }} />,
+        label: `unavailable — answered without history (${truncate(memory.degraded, 48)})`,
+        status: null,
+      })
+    }
+    if (memory.resolved_terms?.length) {
+      memoryChildren.push({
+        id: 'mem-resolved',
+        icon: <CornerDownRight size={11} strokeWidth={1.75} className="flex-shrink-0"
+                               style={{ color: 'var(--color-text-muted)' }} />,
+        label: `follow-up resolved with: ${memory.resolved_terms.join(', ')}`,
+        status: null,
+      })
+    }
+    memory.focus_documents?.slice(0, 3).forEach((doc, i) => {
+      memoryChildren.push({
+        id: `mem-doc-${i}`,
+        icon: <FileText size={11} strokeWidth={1.75} className="flex-shrink-0"
+                        style={{ color: 'var(--color-text-muted)' }} />,
+        label: `in focus: ${truncate(doc, 44)}`,
+        status: null,
+      })
+    })
+    if (memory.focus_entities?.length) {
+      memoryChildren.push({
+        id: 'mem-entities',
+        icon: <CornerDownRight size={11} strokeWidth={1.75} className="flex-shrink-0"
+                               style={{ color: 'var(--color-text-muted)' }} />,
+        label: `entities: ${memory.focus_entities.slice(0, 4).join(', ')}`,
+        status: null,
+      })
+    }
+    if (memory.earlier_turns > 0) {
+      memoryChildren.push({
+        id: 'mem-digest',
+        icon: <CornerDownRight size={11} strokeWidth={1.75} className="flex-shrink-0"
+                               style={{ color: 'var(--color-text-muted)' }} />,
+        label: `${memory.earlier_turns} earlier turn(s) condensed (questions and documents only)`,
+        status: null,
+      })
+    }
+    if (memory.durable_facts > 0) {
+      memoryChildren.push({
+        id: 'mem-facts',
+        icon: <CornerDownRight size={11} strokeWidth={1.75} className="flex-shrink-0"
+                               style={{ color: 'var(--color-text-muted)' }} />,
+        label: `${memory.durable_facts} durable fact(s) applied to how the answer is written`,
+        status: null,
+      })
+    }
+
+    if (memoryChildren.length > 0) {
+      level1Nodes.push({
+        id: 'memory',
+        icon: <Brain size={12} strokeWidth={1.75} className="flex-shrink-0"
+                     style={{ color: 'var(--color-text-muted)' }} />,
+        label: 'memory',
+        status: memory.degraded ? 'failed' : 'done',
+        children: memoryChildren,
+      })
+    }
   }
 
   // 2. Tool calls

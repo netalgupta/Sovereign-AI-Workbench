@@ -81,6 +81,9 @@ class AgentState(BaseModel):
     # from a constant" -- the two look identical in the text and mean
     # opposite things when interpreting what came before.
     route: str | None = None
+    # What memory contributed, for the UI. Counts and names only -- the
+    # context block itself stays off screen (see TurnMemory.summary()).
+    memory_summary: dict = Field(default_factory=dict)
 
     def ready_steps(self) -> list[PlanStep]:
         """Steps whose dependencies are all satisfied and which have not run.

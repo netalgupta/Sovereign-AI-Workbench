@@ -1128,6 +1128,9 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
         memory_context=memory.context_block,
         search_query=memory.search_query,
     )
+    # Stashed so /api/chat can report the same thing the stream emits.
+    # Two endpoints describing memory differently is how they drift.
+    initial_state.memory_summary = memory.summary()
     result_dict = graph.invoke(initial_state)
     final = AgentState.model_validate(result_dict)
 

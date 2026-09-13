@@ -305,6 +305,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
     onStart,
     onPlan,
     onRoute,
+    onMemory,
     onToolCall,
     onToolResult,
     onTextDelta,
@@ -313,7 +314,10 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
     onError,
   } = callbacks
 
-  const { activeDocuments = [] } = options
+  // Defaulting to [] here would tell the backend "every source is
+  // switched off" for any caller that does not pass the option at all.
+  // null is the only safe default: no filter.
+  const { activeDocuments = null } = options
 
   let liveError = null
   let receivedAnyEvent = false
@@ -328,7 +332,10 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
       body: JSON.stringify({
         message,
         session_id: sessionId || 'default',
-        active_documents: activeDocuments,
+        // Sent only when it is a real answer. null is omitted so the
+        // backend applies no filter, rather than being told the user
+        // deselected everything.
+        active_documents: Array.isArray(activeDocuments) ? activeDocuments : null,
       }),
       signal: controller.signal,
     })
@@ -366,6 +373,9 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                     break
                   case 'route':
                     onRoute?.(event)
+                    break
+                  case 'memory':
+                    onMemory?.(event)
                     break
                   case 'tool_call':
                     onToolCall?.(event)

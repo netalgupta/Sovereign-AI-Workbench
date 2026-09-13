@@ -670,6 +670,18 @@ def run_turn(
         if memory.focus_documents:
             T.kv("focus documents", memory.focus_documents[:3])
 
+    # WHAT THE SYSTEM REMEMBERED, AS AN EVENT.
+    #
+    # Memory changed what was retrieved -- a follow-up gets rewritten,
+    # focus documents steer the search -- and none of that was visible.
+    # An answer that differs because of something remembered two turns
+    # ago, with no indication that anything was remembered, is the kind
+    # of behaviour a user reads as the system being inconsistent.
+    #
+    # Emitted before any work so the UI can show it while the turn runs,
+    # and carrying counts rather than contents; see TurnMemory.summary().
+    yield {"type": "memory", **memory.summary()}
+
     reply_text = ""
     citations: list = []
     documents: list = []

@@ -57,10 +57,39 @@ class TurnMemory:
     # the right turn and the live window can exclude the question itself.
     user_message_id: str | None = None
     degraded: str | None = None
+    # How many earlier turns are represented only by the digest, and how
+    # many durable facts were applied. Counts rather than contents: see
+    # summary() for why the contents stay off screen.
+    condensed_turns: int = 0
+    durable_fact_count: int = 0
 
     @property
     def has_context(self) -> bool:
         return bool(self.context_block)
+
+    def summary(self) -> dict:
+        """What memory contributed to this turn, for the UI.
+
+        WHAT THIS DELIBERATELY DOES NOT INCLUDE: the context block
+        itself. It contains prior answers, and prior answers contain
+        numbers -- putting them on screen under a heading like "Memory"
+        invites a reader to treat a remembered figure as a current one,
+        which is the same mistake the block's own "NOT a source" label
+        exists to prevent. What is shown is what memory DID: which
+        documents are in focus, which entities, what the follow-up was
+        rewritten to, how many earlier turns were condensed, and whether
+        durable facts were applied.
+        """
+        return {
+            "recalled": bool(self.context_block),
+            "focus_documents": list(self.focus_documents),
+            "focus_entities": list(self.focus_entities),
+            "resolved_terms": list(self.added_terms),
+            "search_query": self.search_query,
+            "earlier_turns": self.condensed_turns,
+            "durable_facts": self.durable_fact_count,
+            "degraded": self.degraded,
+        }
 
 
 def open_turn(session_id: str, request: str, *, persist: bool = True) -> TurnMemory:
@@ -107,6 +136,7 @@ def open_turn(session_id: str, request: str, *, persist: bool = True) -> TurnMem
             store.set_digest(session_id, digest.to_dict())
         if not digest.is_empty:
             blocks.append(digest.context_block())
+            memory.condensed_turns = digest.turns
 
         if not window.is_empty:
             resolved = resolver.resolve(request, window)
@@ -117,9 +147,11 @@ def open_turn(session_id: str, request: str, *, persist: bool = True) -> TurnMem
             memory.focus_documents = list(window.focus_documents)
             memory.focus_entities = list(window.focus_entities)
 
-        durable = get_long_term().context_block()
+        long_term = get_long_term()
+        durable = long_term.context_block()
         if durable:
             blocks.append(durable)
+            memory.durable_fact_count = len(long_term.all_facts(limit=12))
 
         # Offer the user's own message for durable storage. Most are not
         # facts and are rejected; nothing is inferred or guessed.

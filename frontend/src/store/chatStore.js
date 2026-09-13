@@ -41,8 +41,22 @@ export const useChatStore = create((set, get) => ({
   // ── Active Documents (Source Filtering) ───────────────────────────────────
   // Built from the Sources panel — names of files currently toggled ON.
   // Passed as active_documents to every /api/chat/stream call.
-  activeDocuments: [],
-  setActiveDocuments: (docs) => set({ activeDocuments: docs }),
+  // null means "NOT YET KNOWN -- do not filter", and it is NOT the same
+  // as [] which means "the user switched every source off". The backend
+  // draws that distinction deliberately (grounded_retrieval.py), and
+  // collapsing it here is a race with a baffling symptom:
+  //
+  //   the store starts empty, the sidebar only fills it once
+  //   /api/corpus resolves, and a message sent before that -- or any
+  //   time that fetch fails -- told the backend every source was
+  //   switched off. The user then sees "you have disabled all sources"
+  //   having touched nothing.
+  //
+  // So the initial value is null, and only a real answer from the
+  // sources panel ever makes it an array.
+  activeDocuments: null,
+  setActiveDocuments: (docs) =>
+    set({ activeDocuments: Array.isArray(docs) ? docs : null }),
 
   setDraft: (draft) => set({ draft }),
   setPlan: (plan) => set({ plan }),

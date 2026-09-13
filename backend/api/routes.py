@@ -1732,6 +1732,7 @@ def chat(body: ChatRequestBody) -> dict:
         "plan": plan,
         "tool_call_events": tool_call_events,
         "session_id": state.session_id,
+        "memory": state.memory_summary or None,
         "awaiting_human_approval": state.awaiting_human_approval,
         "approval_action": approval_action,
         # The self-verification verdict (AGENTS_SPEC §5) was computed and

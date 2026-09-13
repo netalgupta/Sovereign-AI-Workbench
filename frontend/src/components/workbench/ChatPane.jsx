@@ -247,6 +247,16 @@ export function ChatPane() {
           setPlan(steps)
           updateMessage(msgId, { plan: steps, planPath: planEv.path || '' })
         },
+        onMemory: (memEv) => {
+          // What the system remembered, attached to the turn it shaped.
+          // Memory changes what gets RETRIEVED -- a follow-up is
+          // rewritten, focus documents steer the search -- and none of
+          // that was visible. An answer that differs because of
+          // something remembered two turns ago, with no sign that
+          // anything was remembered, reads as the system being
+          // inconsistent.
+          updateMessage(msgId, { memory: memEv })
+        },
         onRoute: (routeEv) => {
           updateMessage(msgId, { route: routeEv })
         },
@@ -344,11 +354,6 @@ export function ChatPane() {
       setIsPending(false)
     }
   }
-
-  // Pass active_documents from the sources panel to every stream call.
-  // Sidebar writes enabled source names into chatStore.activeDocuments.
-  const _sendMessageStreamWithDocs = (text, sessionId, callbacks) =>
-    sendMessageStream(text, sessionId, callbacks, { activeDocuments })
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
