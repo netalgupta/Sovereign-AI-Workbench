@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   MoreHorizontal,
-  Paperclip,
   Globe,
   Send,
   ChevronRight,
@@ -25,10 +24,11 @@ import {
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
-import { sendMessageStream } from '../../lib/api'
+import { sendMessageStream, uploadFilesToCorpus, analyseAttachment } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
+import { MultimodalUpload } from '../../integrations/multimodal-upload'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 
 // Set of 12 phrases for completed thinking block word rotation
@@ -64,6 +64,10 @@ export function ChatPane() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
+
+  // Files queued via the MultimodalUpload integration (§3.13). Each item's
+  // status/progress is driven ONLY by the real upload/OCR steps below.
+  const [attachments, setAttachments] = useState([])
 
   // Top tabs: Chat / Notebooks / Artifacts
   const [activeTab, setActiveTab] = useState('chat')
@@ -213,10 +217,90 @@ export function ChatPane() {
     suggest_mitigation(cool_quench=True)`
 
   const handleSend = async () => {
-    if (!draft.trim() || isPending || awaitingHumanApproval) return
     const text = draft.trim()
+    const hasAttachments = attachments.length > 0
+    if ((!text && !hasAttachments) || isPending || awaitingHumanApproval) return
     setDraft('')
-    addMessage('user', text)
+
+    // ── Attachment pipeline before sending (real upload + OCR/vision) ──
+    // Uploads write the file into the corpus (so grounded answers can cite
+    // it), then images/audio run through the registered vision tools. Every
+    // tool event below carries genuine backend output; a failure becomes a
+    // visible 'failed' event instead of a silent pretend success.
+    let pipelineEvents = []
+    if (hasAttachments) {
+      setAttachments((prev) => prev.map((a) => ({ ...a, status: 'uploading', progress: 10 })))
+
+      const saved = new Map()
+      try {
+        const up = await uploadFilesToCorpus(attachments)
+        ;(up.saved || []).forEach((s) => {
+          const p = s.path || s.fullPath || ''
+          if (p) saved.set(s.name, p)
+        })
+        pipelineEvents.push({
+          tool_name: 'source_ingest',
+          status: 'done',
+          output: {
+            count: up.count,
+            total_chunks: up.total_chunks,
+            message: up.message || '',
+          },
+        })
+      } catch (err) {
+        pipelineEvents.push({
+          tool_name: 'source_ingest',
+          status: 'failed',
+          error: String(err?.message || err).slice(0, 240),
+        })
+      }
+
+      const toolFor = (name) => {
+        const ext = (name || '').toLowerCase().split('.').pop()
+        if (['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)) return 'extract_printed_text'
+        if (['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)) return 'transcribe_voice_note'
+        return 'source_ingest'
+      }
+
+      for (const a of attachments) {
+        const path = saved.get(a.name)
+        if (!path) {
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'error' } : i)))
+          continue
+        }
+        setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'processing' } : i)))
+        try {
+          const tool = toolFor(a.name)
+          if (tool === 'source_ingest') {
+            setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))
+            continue
+          }
+          const result = await analyseAttachment(a, path)
+          if (result) {
+            pipelineEvents.push({
+              tool_name: tool,
+              status: 'done',
+              output: result.full_text !== undefined ? { full_text: String(result.full_text).slice(0, 6000) } : result,
+            })
+          }
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))
+        } catch (err) {
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'error' } : i)))
+          pipelineEvents.push({
+            tool_name: toolFor(a.name),
+            status: 'failed',
+            error: String(err?.message || err).slice(0, 240),
+          })
+        }
+      }
+    }
+
+    const names = attachments.map((a) => a.name)
+    const userText = hasAttachments && !text ? `Analyse the attached file${names.length > 1 ? 's' : ''}: ${names.join(', ')}` : text
+    const attachNote =
+      hasAttachments && text ? `\n\n_Attached: ${names.join(', ')}_` : ''
+    addMessage('user', userText + attachNote)
+
     setIsPending(true)
 
     // Add the assistant message immediately with streaming=true so MessageBubble
@@ -225,9 +309,13 @@ export function ChatPane() {
     const startTime = Date.now()
     const msgId = addMessage('assistant', '', {
       streaming: true,
+      // The attachment pipeline above ran BEFORE the stream: upload into the
+      // corpus, then OCR/vision per file. Seed its events into the trace so
+      // the thinking-block renders what actually happened to the attachments
+      // rather than nothing.
       citations: [],
-      toolCallEvents: [],
-      userRequest: text,
+      toolCallEvents: [...pipelineEvents],
+      userRequest: userText,
       plan: [],
       verification: null,
       route: null,
@@ -235,7 +323,7 @@ export function ChatPane() {
     })
 
     try {
-      await sendMessageStream(text, sessionId, {
+      await sendMessageStream(userText, sessionId, {
         onPlan: (planEv) => {
           // Receive the plan DAG emitted before any tool work starts.
           // Normalise the step_id field (backend uses step_id, not id).
@@ -352,6 +440,8 @@ export function ChatPane() {
       finishStreaming(msgId)
     } finally {
       setIsPending(false)
+      attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
+      setAttachments([])
     }
   }
 
@@ -675,21 +765,14 @@ export function ChatPane() {
             opacity: awaitingHumanApproval ? 0.75 : 1,
           }}
         >
-          {/* Left buttons: Paperclip + Globe */}
-          <button
-            type="button"
-            disabled={awaitingHumanApproval}
-            onClick={() => showToast('Multimodal upload ready — Drop PDFs, scans, or voice notes here', 'info')}
-            className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
-              awaitingHumanApproval
-                ? 'cursor-not-allowed opacity-40'
-                : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
-            }`}
-            style={{ color: 'var(--color-text-muted)' }}
-            title="Attach document or audio"
-          >
-            <Paperclip size={15} strokeWidth={2} />
-          </button>
+          {/* Left buttons: MultimodalUpload (paperclip + tray) + Globe */}
+          <MultimodalUpload
+            isCompact
+            disabled={isPending || awaitingHumanApproval}
+            pendingFiles={attachments}
+            onUpload={(newItems) => setAttachments((prev) => [...prev, ...newItems])}
+            onRemove={(id) => setAttachments((prev) => prev.filter((i) => i.id !== id))}
+          />
           <button
             type="button"
             disabled={awaitingHumanApproval}
@@ -828,9 +911,13 @@ export function ChatPane() {
             type="button"
             id="chat-composer-send-btn"
             onClick={handleSend}
-            disabled={!draft.trim() || isPending || awaitingHumanApproval}
+            disabled={
+              (!draft.trim() && attachments.length === 0) || isPending || awaitingHumanApproval
+            }
             className={`w-8 h-8 rounded-md flex items-center justify-center text-white transition-fast shadow-xs flex-shrink-0 ${
-              awaitingHumanApproval || !draft.trim() ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+              awaitingHumanApproval || (!draft.trim() && attachments.length === 0)
+                ? 'cursor-not-allowed opacity-40'
+                : 'cursor-pointer'
             }`}
             style={{
               background: 'var(--color-accent)',
