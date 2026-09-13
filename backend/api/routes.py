@@ -148,9 +148,15 @@ def get_graph() -> dict:
 def get_chunks(live: bool = Query(False, description="Force a live ingestion")) -> dict:
     """Every chunk with metadata, plus the chunk-to-chunk similarity matrix."""
     state = get_state()
+
+    # 1. Fast in-memory cache hit
+    if not live and getattr(state, "_cached_chunks", None) is not None:
+        return state._cached_chunks
+
+    # 2. Instant snapshot fallback
     snapshot = state.snapshot()
-    if not live and snapshot and not state.corpus_is_loaded:
-        return {
+    if not live and snapshot and "chunks" in snapshot and "similarity" in snapshot:
+        result = {
             "source": "snapshot",
             "written_at": state.snapshot_age(),
             "chunking": snapshot["chunking"],
@@ -159,6 +165,8 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
             "chunks": snapshot["chunks"],
             "similarity": snapshot["similarity"],
         }
+        state._cached_chunks = result
+        return result
 
     from backend.ingestion.chunking import (
         CHUNK_OVERLAP_TOKENS,
@@ -170,7 +178,7 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
 
     _store, chunks = state.ensure_corpus()
     if not chunks:
-        return {
+        result = {
             "source": "live",
             "written_at": None,
             "chunking": {
@@ -183,13 +191,14 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
             "chunks": [],
             "similarity": [],
         }
+        state._cached_chunks = result
+        return result
 
     vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
     coords, explained = _pca_2d(vectors) if len(chunks) > 1 else (np.zeros((len(chunks), 2)), [1.0, 0.0])
     similarity = (vectors @ vectors.T).tolist()
 
-
-    return {
+    result = {
         "source": "live",
         "written_at": None,
         "chunking": {
@@ -216,6 +225,8 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
         ],
         "similarity": [[round(v, 4) for v in row] for row in similarity],
     }
+    state._cached_chunks = result
+    return result
 
 
 # ---------------------------------------------------------------- images
@@ -375,6 +386,7 @@ class AddSourceRequest(BaseModel):
     path: str
     recursive: bool = True
     include_globs: list[str] = []
+    job_id: str | None = None
 
 
 class IngestPathRequest(BaseModel):
@@ -390,6 +402,47 @@ class UploadFileItem(BaseModel):
 
 class UploadSourcesRequest(BaseModel):
     files: list[UploadFileItem]
+    job_id: str | None = None
+
+
+def _untombstone_source(*identifiers: str) -> None:
+    """Remove paths, IDs, or tokens from deleted_sources.json so re-adding unblocks them."""
+    import json
+    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+    if not deleted_file.exists():
+        return
+    try:
+        current = json.loads(deleted_file.read_text(encoding="utf-8"))
+        if not isinstance(current, list):
+            current = []
+    except Exception:
+        current = []
+
+    to_remove = {str(i).strip().lower() for i in identifiers if i and str(i).strip()}
+    for i in list(to_remove):
+        try:
+            p = Path(i).resolve()
+            to_remove.add(str(p).lower())
+        except Exception:
+            pass
+
+    updated = []
+    for item in current:
+        item_lower = str(item).strip().lower()
+        if item_lower in to_remove:
+            continue
+        matched_parent = False
+        for r in to_remove:
+            if item_lower.startswith(r + "\\") or item_lower.startswith(r + "/"):
+                matched_parent = True
+                break
+        if not matched_parent:
+            updated.append(item)
+
+    try:
+        deleted_file.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 @router.post("/sources/upload")
@@ -433,6 +486,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
             norm_lower = str(folder_path.resolve()).lower()
             folder_hash = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
             folder_id = f"dir_{folder_hash}"
+            _untombstone_source(str(folder_path.resolve()), norm_lower, folder_id)
             if not any(str(Path(d.get("path", "")).resolve()).lower() == norm_lower for d in dirs):
                 dirs.append({
                     "id": folder_id,
@@ -447,24 +501,69 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
         except Exception:
             pass
 
+    from backend.ingestion.ingestion_progress import get_tracker
+
+    tracker = get_tracker()
+    job = tracker.create(str(target_base_dir), saved_files, job_id=body.job_id)
+
     total_chunks = 0
     all_details = []
     for sf in saved_files:
         try:
-            chunks_cnt, details = state.ingest_path(sf)
+            _untombstone_source(str(sf), str(sf.resolve()).lower(), "user_uploads_corpus")
+            chunks_cnt, details = state.ingest_path(sf, job_id=job.job_id)
             total_chunks += chunks_cnt
             all_details.extend(details)
         except Exception as exc:
             all_details.append({"filename": sf.name, "path": str(sf), "error": str(exc), "chunks": 0})
 
+    tracker.finish(job.job_id)
+
     return {
         "success": True,
+        "job_id": job.job_id,
         "count": len(saved_files),
         "total_chunks": total_chunks,
         "details": all_details,
         "saved": [{"path": str(sf), "name": sf.name} for sf in saved_files],
         "added": {"path": str(saved_files[0]), "name": saved_files[0].name} if saved_files else None,
         "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+    }
+
+
+@router.post("/sources/dialog/pick-folder")
+def pick_folder_endpoint() -> dict:
+    """Open native OS directory dialog to choose a folder on disk and return selected path immediately."""
+    from backend.api.native_picker import pick_folder_gui
+
+    picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
+    if not picked_path:
+        return {"cancelled": True, "path": None, "message": "Folder selection cancelled"}
+
+    target = Path(picked_path).resolve()
+    if not target.exists():
+        raise HTTPException(404, detail="Selected directory does not exist")
+
+    return {
+        "cancelled": False,
+        "path": str(target),
+        "name": target.name or "Custom_Corpus",
+    }
+
+
+@router.post("/sources/dialog/pick-files")
+def pick_files_endpoint() -> dict:
+    """Open native OS file dialog to choose documents on disk and return selected paths immediately."""
+    from backend.api.native_picker import pick_files_gui
+
+    picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
+    if not picked_paths:
+        return {"cancelled": True, "paths": [], "message": "File selection cancelled"}
+
+    return {
+        "cancelled": False,
+        "paths": picked_paths,
+        "count": len(picked_paths),
     }
 
 
@@ -506,6 +605,9 @@ def browse_and_add_folder() -> dict:
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
     dir_id = f"dir_{hasher}"
+
+    # Un-tombstone newly added folder and its id
+    _untombstone_source(norm_path, norm_lower, dir_id)
 
     found = False
     for d in dirs:
@@ -576,6 +678,10 @@ def browse_and_add_files() -> dict:
             file_lower = file_norm.lower()
             file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
             file_id = f"file_{file_hasher}"
+
+            # Un-tombstone file and id
+            _untombstone_source(file_norm, file_lower, file_id)
+
             if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
                 dirs.append({
                     "id": file_id,
@@ -828,7 +934,6 @@ def get_corpus() -> dict:
         if (
             d.get("id", "").lower() in deleted_records
             or p_res in deleted_records
-            or p.name.lower() in deleted_records
         ):
             dirs_pruned = True
             continue
@@ -901,7 +1006,6 @@ def get_corpus() -> dict:
         if (
             dir_cfg.get("id", "").lower() in deleted_records
             or p_resolved_lower in deleted_records
-            or p.name.lower() in deleted_records
         ):
             continue
 
@@ -913,7 +1017,6 @@ def get_corpus() -> dict:
             clean_id = raw_id if str(raw_id).startswith("file_") else f"file_{raw_id}"
             if (
                 clean_id.lower() in deleted_records
-                or p.name.lower() in deleted_records
                 or p_resolved_lower in deleted_records
             ):
                 continue
@@ -969,7 +1072,6 @@ def get_corpus() -> dict:
                     if (
                         dir_clean_id.lower() in deleted_records
                         or dir_res in deleted_records
-                        or entry.name.lower() in deleted_records
                     ):
                         continue
                     sub = {
@@ -992,7 +1094,6 @@ def get_corpus() -> dict:
                     p_res = str(entry.resolve()).lower()
                     if (
                         entry_clean_id.lower() in deleted_records
-                        or entry.name.lower() in deleted_records
                         or p_res in deleted_records
                     ):
                         continue
@@ -1081,9 +1182,20 @@ def add_source(body: AddSourceRequest) -> dict:
         source = None
 
     # Ingest the target (file or directory) in-place without copying
+    from backend.ingestion.ingestion_progress import get_tracker
+
+    target_files = [target] if target.is_file() else sorted(
+        f for f in target.rglob("*")
+        if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
+    )
+    tracker = get_tracker()
+    job = tracker.create(str(target), target_files or [target], job_id=body.job_id)
+
     try:
-        total_chunks, details = state.ingest_path(target)
+        total_chunks, details = state.ingest_path(target, job_id=job.job_id)
+        tracker.finish(job.job_id)
     except Exception as exc:
+        tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
         raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
 
     # Synchronize with configured_sources.json
@@ -1097,6 +1209,11 @@ def add_source(body: AddSourceRequest) -> dict:
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+    file_id = f"file_{hasher}"
+
+    # Un-tombstone newly added source and its ID
+    _untombstone_source(norm_path, norm_lower, file_id if target.is_file() else dir_id)
 
     found = False
     for d in dirs:
@@ -1105,7 +1222,6 @@ def add_source(body: AddSourceRequest) -> dict:
             found = True
             break
     if not found and target.is_dir():
-        dir_id = f"dir_{hasher}"
         dirs.append({
             "id": dir_id,
             "name": target.name or "Custom_Corpus",
@@ -1115,7 +1231,6 @@ def add_source(body: AddSourceRequest) -> dict:
             "enabled": True,
         })
     elif not found and target.is_file():
-        file_id = f"file_{hasher}"
         dirs.append({
             "id": file_id,
             "name": target.name,
@@ -1131,6 +1246,7 @@ def add_source(body: AddSourceRequest) -> dict:
 
     return {
         "success": True,
+        "job_id": job.job_id,
         "total_chunks": total_chunks,
         "documents": details,
         "directories": dirs,
@@ -1159,21 +1275,20 @@ def remove_source(
         except Exception:
             deleted_records = set()
 
-    # Collect all possible identifier representations
-    identifiers = {path.strip().lower()}
-    if id:
+    # Collect only specific identifiers: exact IDs and exact resolved full paths.
+    # NEVER store generic base names like "docs" or Path(name).name.lower()!
+    identifiers = set()
+    if path and path.strip():
+        identifiers.add(path.strip().lower())
+        try:
+            resolved_p = Path(path).resolve()
+            identifiers.add(str(resolved_p).lower())
+        except Exception:
+            pass
+    if id and id.strip():
         identifiers.add(id.strip().lower())
         if id.startswith("file_file_"):
             identifiers.add(id[5:].strip().lower())
-    if name:
-        identifiers.add(name.strip().lower())
-        identifiers.add(Path(name).name.lower())
-    try:
-        resolved_p = Path(path).resolve()
-        identifiers.add(str(resolved_p).lower())
-        identifiers.add(resolved_p.name.lower())
-    except Exception:
-        pass
 
     # Read config_file to see if it matches any registered entry
     real_path_to_delete = path
@@ -1183,18 +1298,16 @@ def remove_source(
             remaining_dirs = []
             for d in dirs:
                 d_id = d.get("id", "").lower()
-                d_name = d.get("name", "").lower()
                 d_path_res = str(Path(d.get("path", "")).resolve()).lower()
-                d_path_name = Path(d.get("path", "")).name.lower()
                 if (
                     d_id in identifiers
-                    or d_name in identifiers
                     or d_path_res in identifiers
-                    or d_path_name in identifiers
+                    or (id and d_id == id.strip().lower())
+                    or (path and d_path_res == str(Path(path).resolve()).lower())
                 ):
                     real_path_to_delete = d.get("path", path)
-                    identifiers.add(d_id)
-                    identifiers.add(d_name)
+                    if d_id:
+                        identifiers.add(d_id)
                     identifiers.add(d_path_res)
                 else:
                     remaining_dirs.append(d)

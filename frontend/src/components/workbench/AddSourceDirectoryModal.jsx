@@ -10,8 +10,12 @@ import {
   UploadCloud,
   Plus,
   Loader2,
+  FileText,
+  Check,
+  AlertCircle,
 } from 'lucide-react'
 import { showToast } from '../../store/toastStore'
+import { useIngestionStore } from '../../store/ingestionStore'
 
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
@@ -34,6 +38,9 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   const [dragOver, setDragOver] = useState(false)
   const folderInputRef = useRef(null)
   const fileInputRef = useRef(null)
+
+  const activeJob = useIngestionStore((s) => s.activeJob)
+  const startTracking = useIngestionStore((s) => s.startTracking)
 
   if (!isOpen) return null
 
@@ -78,12 +85,15 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         throw new Error('No files could be read from selected directory')
       }
 
+      const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+      startTracking(jobId)
+
       setUploadStatus(`Ingesting, chunking & generating embeddings for ${filesToUpload.length} file(s)...`)
 
       const res = await fetch('/api/sources/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: filesToUpload }),
+        body: JSON.stringify({ files: filesToUpload, job_id: jobId }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -116,12 +126,14 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
 
     setIsSubmitting(true)
+    const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    startTracking(jobId)
     setUploadStatus('Resolving path, chunking document(s) & generating embeddings...')
     try {
       const res = await fetch('/api/sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: pathToAdd, recursive: true }),
+        body: JSON.stringify({ path: pathToAdd, recursive: true, job_id: jobId }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -146,28 +158,49 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     // 1. Try native backend folder picker (opens Windows Folder Selection dialog directly on host)
     try {
       setIsSubmitting(true)
-      setUploadStatus('Opening native Windows folder picker...')
-      const res = await fetch('/api/sources/dialog/folder', {
+      setUploadStatus('Opening native Windows folder picker... Please select a folder')
+      const pickRes = await fetch('/api/sources/dialog/pick-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.cancelled) {
+      if (pickRes.ok) {
+        const pickData = await pickRes.json()
+        if (pickData.cancelled || !pickData.path) {
           setIsSubmitting(false)
           setUploadStatus('')
           return
         }
-        if (data.success) {
-          showToast(data.message || `Folder "${data.name}" added to sources`, 'success')
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-          onClose()
-          return
+
+        const folderName = pickData.name || pickData.path.split(/[\\/]/).pop() || 'folder'
+        setUploadStatus(`Indexing "${folderName}" in-place... Generating embeddings & updating local corpus`)
+
+        const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        startTracking(jobId)
+
+        const addRes = await fetch('/api/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: pickData.path, recursive: true, job_id: jobId }),
+        })
+        const addData = await addRes.json()
+        if (!addRes.ok) {
+          throw new Error(addData.error || addData.detail || 'Failed to index selected folder')
         }
+
+        showToast(addData.message || `Folder "${folderName}" added to sources`, 'success')
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(addData)
+        onClose()
+        return
       }
     } catch (err) {
       console.warn('Native folder dialog failed, falling back to browser picker', err)
+      if (err.message && !err.message.includes('fetch')) {
+        showToast(err.message, 'error')
+        setIsSubmitting(false)
+        setUploadStatus('')
+        return
+      }
     } finally {
       setIsSubmitting(false)
       setUploadStatus('')
@@ -222,28 +255,56 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     // 1. Try native backend file picker (opens Windows Open File dialog on host)
     try {
       setIsSubmitting(true)
-      setUploadStatus('Opening native file picker...')
-      const res = await fetch('/api/sources/dialog/files', {
+      setUploadStatus('Opening native Windows file picker... Please select document(s)')
+      const pickRes = await fetch('/api/sources/dialog/pick-files', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.cancelled) {
+      if (pickRes.ok) {
+        const pickData = await pickRes.json()
+        if (pickData.cancelled || !pickData.paths || pickData.paths.length === 0) {
           setIsSubmitting(false)
           setUploadStatus('')
           return
         }
-        if (data.success) {
-          showToast(data.message || `Successfully added ${data.count} document(s)`, 'success')
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-          onClose()
-          return
+
+        setUploadStatus(`Indexing ${pickData.paths.length} document(s) in-place... Generating embeddings & updating local corpus`)
+
+        const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        startTracking(jobId)
+
+        let totalIndexed = 0
+        let lastResult = null
+        for (let i = 0; i < pickData.paths.length; i++) {
+          const filePath = pickData.paths[i]
+          const fileName = filePath.split(/[\\/]/).pop() || filePath
+          setUploadStatus(`Indexing ${i + 1}/${pickData.paths.length}: ${fileName}...`)
+          const addRes = await fetch('/api/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath, recursive: false, job_id: jobId }),
+          })
+          const addData = await addRes.json()
+          if (addRes.ok) {
+            totalIndexed += addData.total_chunks || 0
+            lastResult = addData
+          }
         }
+
+        showToast(`Successfully added ${pickData.paths.length} document(s) (${totalIndexed} chunks indexed)`, 'success')
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(lastResult)
+        onClose()
+        return
       }
     } catch (err) {
       console.warn('Native files dialog failed, falling back to browser picker', err)
+      if (err.message && !err.message.includes('fetch')) {
+        showToast(err.message, 'error')
+        setIsSubmitting(false)
+        setUploadStatus('')
+        return
+      }
     } finally {
       setIsSubmitting(false)
       setUploadStatus('')
@@ -484,25 +545,121 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             </button>
           </div>
 
-          {/* Active Ingestion / Upload Progress Indicator */}
-          {isSubmitting && (
+          {/* Active Ingestion Progress Card (Live Polling via backend ProgressTracker) */}
+          {(isSubmitting || (activeJob && activeJob.state === 'running')) && (
             <div
-              className="flex items-center gap-2.5 p-3 rounded-lg border text-xs animate-pulse"
+              className="flex flex-col gap-2.5 p-4 rounded-xl border animate-fade-in"
               style={{
-                background: 'var(--color-accent-tint, rgba(37,99,235,0.08))',
+                background: 'var(--color-accent-tint, rgba(37,99,235,0.06))',
                 borderColor: 'var(--color-accent)',
-                color: 'var(--color-accent)',
               }}
             >
-              <Loader2 size={16} className="animate-spin flex-shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="font-semibold text-xs leading-tight">
-                  {uploadStatus || 'Processing documents...'}
-                </span>
-                <span className="text-[10px] opacity-80 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                  Extracting pages, structuring metadata & updating local corpus
-                </span>
+              {/* Header: Processing X/Y files + ETA / Elapsed */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Loader2 size={15} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
+                  <span className="font-bold text-xs" style={{ color: 'var(--color-text)' }}>
+                    {activeJob?.total_documents
+                      ? `Processing ${activeJob.completed}/${activeJob.total_documents} file(s)...`
+                      : uploadStatus || 'Processing documents...'}
+                  </span>
+                </div>
+                {activeJob?.elapsed_seconds != null && (
+                  <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
+                    {activeJob.elapsed_seconds}s
+                    {activeJob.estimated_remaining_seconds ? ` · ~${activeJob.estimated_remaining_seconds}s left` : ''}
+                  </span>
+                )}
               </div>
+
+              {/* Progress Bar */}
+              {activeJob?.total_documents > 0 && (
+                <div className="w-full h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+                  <div
+                    className="h-full transition-all duration-300 rounded-full"
+                    style={{
+                      background: 'var(--color-accent)',
+                      width: `${Math.min(100, Math.round(((activeJob.completed || 0) / activeJob.total_documents) * 100))}%`,
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Current Active File & Stage Banner */}
+              {activeJob?.current_document && (
+                <div
+                  className="flex items-center justify-between px-3 py-2 rounded-lg border text-xs"
+                  style={{
+                    background: 'var(--color-surface)',
+                    borderColor: 'var(--color-border)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 min-w-0 pr-2">
+                    <FileText size={13} className="flex-shrink-0 text-[var(--color-accent)]" />
+                    <span className="font-semibold text-xs truncate" style={{ color: 'var(--color-text)' }}>
+                      {activeJob.current_document.name}
+                    </span>
+                  </div>
+                  <span
+                    className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded font-semibold border flex-shrink-0"
+                    style={{
+                      background: 'var(--color-accent-tint)',
+                      borderColor: 'var(--color-accent-border)',
+                      color: 'var(--color-accent)',
+                    }}
+                  >
+                    {activeJob.current_document.stage}
+                  </span>
+                </div>
+              )}
+
+              {/* Per-document list if multiple documents exist */}
+              {activeJob?.documents && activeJob.documents.length > 1 && (
+                <div className="flex flex-col gap-1 max-h-36 overflow-y-auto pr-1">
+                  {activeJob.documents.map((doc, idx) => {
+                    const isDone = doc.stage === 'indexed'
+                    const isRunning = ['extracting', 'chunking', 'embedding', 'indexing'].includes(doc.stage)
+                    const isFailed = doc.stage === 'failed'
+
+                    return (
+                      <div
+                        key={doc.path || idx}
+                        className="flex items-center justify-between py-1 px-2 rounded text-[11px]"
+                        style={{
+                          background: isRunning ? 'var(--color-surface)' : 'transparent',
+                        }}
+                      >
+                        <span className="truncate pr-2 font-mono text-[10.5px]" style={{ color: 'var(--color-text)' }}>
+                          {doc.name}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {isDone && (
+                            <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
+                              <CheckCircle2 size={12} />
+                              <span>indexed</span>
+                            </span>
+                          )}
+                          {isRunning && (
+                            <span className="flex items-center gap-1 text-[10px] font-semibold text-[var(--color-accent)]">
+                              <Loader2 size={11} className="animate-spin" />
+                              <span>{doc.stage}</span>
+                            </span>
+                          )}
+                          {isFailed && (
+                            <span className="flex items-center gap-1 text-[10px] font-semibold text-red-500" title={doc.detail}>
+                              <AlertCircle size={12} />
+                              <span>failed</span>
+                            </span>
+                          )}
+                          {!isDone && !isRunning && !isFailed && (
+                            <span className="text-[10px] text-[var(--color-text-faint)]">queued</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 

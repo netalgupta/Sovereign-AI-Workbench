@@ -72,7 +72,7 @@ export default function Placeholder({
     return (
       <aside
         aria-label="Network Monitor status bar"
-        className="w-full border-t px-4 py-1.5 flex items-center justify-between text-xs font-mono select-none"
+        className="w-full border-t px-8 py-2.5 flex items-center justify-between text-xs font-mono select-none transition-colors"
         style={{
           background: 'var(--color-surface)',
           borderColor: 'var(--color-border)',

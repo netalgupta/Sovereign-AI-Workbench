@@ -52,12 +52,14 @@ class PipelineState:
         self._store = None
         self._chunks = None
         self._snapshot = None
+        self._cached_chunks = None
 
     def reset(self):
         with self._lock:
             self._store = None
             self._chunks = None
             self._snapshot = None
+            self._cached_chunks = None
 
     # ---- stores that are cheap to open -------------------------------
 
@@ -179,10 +181,24 @@ class PipelineState:
         if p.is_file():
             files = [p]
         elif p.is_dir():
-            files = sorted(
-                f for f in p.rglob("*")
-                if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
-            )
+            ignored_dirs = {
+                ".git", ".venv", "venv", "node_modules", "__pycache__",
+                ".idea", ".vscode", "dist", "build", ".next", ".cache"
+            }
+
+            def _is_safe_doc(candidate: Path) -> bool:
+                if not candidate.is_file() or candidate.name.startswith("."):
+                    return False
+                try:
+                    rel_parts = candidate.relative_to(p).parts[:-1]
+                    for part in rel_parts:
+                        if part.startswith(".") or part.lower() in ignored_dirs:
+                            return False
+                except Exception:
+                    pass
+                return True
+
+            files = sorted(f for f in p.rglob("*") if _is_safe_doc(f))
 
         store, existing_chunks = self.ensure_corpus()
         total_chunks = 0
@@ -231,6 +247,7 @@ class PipelineState:
                     self._chunks.extend(chunks)
                     # Invalidate cached static snapshot so live chunks are served
                     self._snapshot = None
+                    self._cached_chunks = None
                 try:
                     self.registry.register(str(f), type_info.detected_type)
                 except Exception:
@@ -268,6 +285,7 @@ class PipelineState:
                 ]
                 removed_count = original_len - len(self._chunks)
             self._snapshot = None
+            self._cached_chunks = None
 
         # 3. Remove from VectorStore SQLite metadata table
         if self._store and getattr(self._store, "_conn", None):

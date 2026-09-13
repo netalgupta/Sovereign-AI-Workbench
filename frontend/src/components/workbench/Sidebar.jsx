@@ -310,7 +310,7 @@ export function Sidebar() {
       <aside
         className="flex flex-col h-full flex-shrink-0 select-none overflow-hidden relative"
         style={{
-          width: 300,
+          width: 324,
           background: 'var(--color-bg)',
           borderRight: '1px solid var(--color-border)',
         }}
@@ -318,12 +318,12 @@ export function Sidebar() {
       >
         {/* ── 1. Top Header: Brand Lockup + Icon Button Row ──────────── */}
         <div
-          className="flex flex-col px-4 pt-3.5 pb-3 flex-shrink-0 gap-3"
+          className="flex flex-col px-5 pt-4 pb-3.5 flex-shrink-0 gap-3.5"
           style={{ borderBottom: '1px solid var(--color-border)' }}
         >
           <div className="flex items-center justify-between">
             {/* Logo Mark + Wordmark Lockup */}
-            <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
               <img
                 src="/assets/logo-mark-transparent.png"
                 alt="Sovereign Workbench Logo"
@@ -348,12 +348,12 @@ export function Sidebar() {
             </div>
 
             {/* Icon Buttons Row: Search & Theme Toggle */}
-            <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="flex items-center gap-2 flex-shrink-0">
               {/* Search Icon Trigger */}
               <button
                 type="button"
                 onClick={() => setIsSearchOpen(true)}
-                className="w-7 h-7 rounded-md flex items-center justify-center transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
+                className="w-8 h-8 rounded-lg flex items-center justify-center transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
                 style={{
                   background: 'var(--color-surface)',
                   border: '1px solid var(--color-border)',
@@ -369,7 +369,7 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={toggleTheme}
-                className="w-7 h-7 rounded-md flex items-center justify-center transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
+                className="w-8 h-8 rounded-lg flex items-center justify-center transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
                 style={{
                   background: 'var(--color-surface)',
                   border: '1px solid var(--color-border)',
@@ -389,13 +389,13 @@ export function Sidebar() {
 
           {/* ── 2. Two-Tab Accordion Switcher (Sources vs Chats) ─────── */}
           <div
-            className="flex items-center p-0.5 rounded-md text-xs font-medium"
+            className="flex items-center p-1 rounded-lg text-xs font-medium gap-1"
             style={{ background: 'var(--color-overlay)' }}
           >
             <button
               type="button"
               onClick={() => setActiveTab('sources')}
-              className="flex-1 py-1 rounded text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-1.5 rounded-md text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
               style={{
                 background: activeTab === 'sources' ? 'var(--color-surface)' : 'transparent',
                 color: activeTab === 'sources' ? 'var(--color-text)' : 'var(--color-text-muted)',
@@ -406,7 +406,7 @@ export function Sidebar() {
               <Database size={13} strokeWidth={2} />
               <span>Sources</span>
               <span
-                className="text-[10px] font-mono px-1 rounded"
+                className="text-[10px] font-mono px-1.5 py-0.2 rounded"
                 style={{
                   background: 'var(--color-overlay)',
                   color: 'var(--color-text-muted)',
@@ -419,7 +419,7 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setActiveTab('chats')}
-              className="flex-1 py-1 rounded text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-1.5 rounded-md text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
               style={{
                 background: activeTab === 'chats' ? 'var(--color-surface)' : 'transparent',
                 color: activeTab === 'chats' ? 'var(--color-text)' : 'var(--color-text-muted)',
@@ -430,7 +430,7 @@ export function Sidebar() {
               <MessageSquare size={13} strokeWidth={2} />
               <span>Chats</span>
               <span
-                className="text-[10px] font-mono px-1 rounded"
+                className="text-[10px] font-mono px-1.5 py-0.2 rounded"
                 style={{
                   background: 'var(--color-overlay)',
                   color: 'var(--color-text-muted)',
@@ -450,9 +450,9 @@ export function Sidebar() {
             style={{ display: activeTab === 'sources' ? 'flex' : 'none' }}
           >
             {/* Category Filter Pills & Add / Expand Buttons */}
-            <div className="px-3 pt-3 pb-2 flex-shrink-0 flex items-center justify-between gap-1.5 border-b border-[var(--color-border)]">
+            <div className="px-4 pt-3.5 pb-2.5 flex-shrink-0 flex items-center justify-between gap-2 border-b border-[var(--color-border)]">
               <div
-                className="flex items-center p-0.5 rounded-lg text-[10px] font-medium flex-1 min-w-0 border"
+                className="flex items-center p-1 rounded-lg text-[10px] font-medium flex-1 min-w-0 border gap-0.5"
                 style={{
                   background: 'var(--color-overlay)',
                   borderColor: 'var(--color-border)',
@@ -471,7 +471,7 @@ export function Sidebar() {
                       key={tab.id}
                       type="button"
                       onClick={() => setSourcesCategory(tab.id)}
-                      className="flex-1 py-1 rounded-md text-[9.5px] transition-fast text-center cursor-pointer truncate"
+                      className="flex-1 py-1.5 rounded-md text-[10px] transition-fast text-center cursor-pointer truncate"
                       style={{
                         background: isSelected ? 'var(--color-surface)' : 'transparent',
                         color: isSelected ? 'var(--color-text)' : 'var(--color-text-muted)',
@@ -489,7 +489,7 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={() => setIsAddDirModalOpen(true)}
-                className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
+                className="p-2 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
                   borderColor: 'var(--color-border)',
@@ -503,7 +503,7 @@ export function Sidebar() {
               {/* Expand to Full Sources Hub button */}
               <Link
                 to="/sources"
-                className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
+                className="p-2 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
                   borderColor: 'var(--color-border)',
@@ -516,7 +516,7 @@ export function Sidebar() {
             </div>
 
             {/* Hierarchical Tree with Smooth Custom Scrollbar */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 flex flex-col gap-0.5 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-2 flex flex-col gap-1 custom-scrollbar">
               <SourceFileTree
                 tree={tree}
                 filterCategory={sourcesCategory}
@@ -527,25 +527,25 @@ export function Sidebar() {
             </div>
 
             {/* Knowledge Base Summary Card */}
-            <div className="px-3 py-2 flex-shrink-0 border-t border-[var(--color-border)]">
+            <div className="px-4 py-3 flex-shrink-0 border-t border-[var(--color-border)]">
               <div
-                className="p-3 rounded-xl flex flex-col gap-2.5 transition-fast border shadow-xs"
+                className="p-4 rounded-xl flex flex-col gap-3.5 transition-fast border shadow-xs"
                 style={{
                   background: 'var(--color-surface)',
                   borderColor: 'var(--color-border)',
                 }}
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <div
-                      className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
                       style={{
                         background: 'var(--color-accent-tint)',
                         color: 'var(--color-accent)',
                         border: '1px solid var(--color-accent-border)',
                       }}
                     >
-                      <HardDrive size={12} strokeWidth={2.2} />
+                      <HardDrive size={13} strokeWidth={2.2} />
                     </div>
                     <div className="flex flex-col min-w-0">
                       <span className="text-[11px] font-bold uppercase tracking-wider leading-tight truncate" style={{ color: 'var(--color-text)' }}>
@@ -569,7 +569,7 @@ export function Sidebar() {
                 </div>
 
                 {/* Storage Meter */}
-                <div className="flex flex-col gap-1 pt-0.5">
+                <div className="flex flex-col gap-1.5 pt-1">
                   <div
                     className="flex items-center justify-between text-[10px]"
                     style={{ color: 'var(--color-text-muted)' }}
@@ -594,7 +594,7 @@ export function Sidebar() {
                 {/* Link to full Sources Hub */}
                 <Link
                   to="/sources"
-                  className="flex items-center justify-between pt-2 border-t text-[11px] font-semibold transition-fast group"
+                  className="flex items-center justify-between pt-2.5 border-t text-[11px] font-semibold transition-fast group"
                   style={{
                     borderColor: 'var(--color-border)',
                     color: 'var(--color-accent)',
@@ -614,11 +614,11 @@ export function Sidebar() {
           >
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {/* Pinned "+ New chat" button */}
-              <div className="px-4 pt-3 pb-2 flex-shrink-0">
+              <div className="px-5 pt-3.5 pb-2.5 flex-shrink-0">
                 <button
                   type="button"
                   onClick={handleNewChat}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-md text-xs font-semibold shadow-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-3.5 rounded-lg text-xs font-semibold shadow-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
                   style={{
                     background: 'var(--color-surface)',
                     border: '1px solid var(--color-border)',
@@ -631,7 +631,7 @@ export function Sidebar() {
               </div>
 
               {/* Past Sessions List */}
-              <div className="flex-1 overflow-y-auto px-3.5 py-1 flex flex-col gap-1">
+              <div className="flex-1 overflow-y-auto px-4 py-2 flex flex-col gap-1.5">
                 <div
                   className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider"
                   style={{ color: 'var(--color-text-faint)' }}
@@ -646,7 +646,7 @@ export function Sidebar() {
                       key={session.id}
                       type="button"
                       onClick={() => handleSelectSession(session.id)}
-                      className="w-full flex items-center justify-between p-2 rounded-md text-left transition-fast cursor-pointer group"
+                      className="w-full flex items-center justify-between p-2.5 rounded-lg text-left transition-fast cursor-pointer group"
                       style={{
                         background: isActive ? 'var(--color-surface)' : 'transparent',
                         border: isActive
@@ -655,9 +655,9 @@ export function Sidebar() {
                       }}
                       title={session.title}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <MessageSquare
-                          size={13}
+                          size={14}
                           strokeWidth={2}
                           className="flex-shrink-0"
                           style={{
@@ -666,7 +666,7 @@ export function Sidebar() {
                         />
                         <div className="flex flex-col min-w-0 flex-1">
                           <span
-                            className={`text-xs truncate leading-tight ${
+                            className={`text-xs truncate leading-normal ${
                               isActive ? 'font-semibold' : 'font-medium'
                             }`}
                             style={{
@@ -676,7 +676,7 @@ export function Sidebar() {
                             {session.title}
                           </span>
                           <span
-                            className="text-[10px] font-mono mt-0.5 leading-tight"
+                            className="text-[10px] font-mono mt-0.5 leading-normal"
                             style={{ color: 'var(--color-text-faint)' }}
                           >
                             {session.relativeTime}
@@ -700,14 +700,14 @@ export function Sidebar() {
 
         {/* ── 4. User Account Footer (Pinned at Bottom, Always Visible) ─ */}
         <div
-          className="px-4 py-3 flex-shrink-0 flex items-center justify-between"
+          className="px-5 py-3.5 flex-shrink-0 flex items-center justify-between"
           style={{
             borderTop: '1px solid var(--color-border)',
             background: 'var(--color-bg)',
           }}
         >
           <div
-            className="flex items-center gap-2.5 min-w-0 cursor-pointer select-none"
+            className="flex items-center gap-3 min-w-0 cursor-pointer select-none"
             onClick={() =>
               showToast(
                 'No authentication is configured. This is a local session on this machine.',
@@ -718,27 +718,20 @@ export function Sidebar() {
           >
             {/* Initials Badge */}
             <div
-              className="w-8 h-8 rounded-md flex items-center justify-center font-semibold text-xs transition-fast flex-shrink-0 shadow-xs"
+              className="w-9 h-9 rounded-lg flex items-center justify-center font-semibold text-xs transition-fast flex-shrink-0 shadow-xs"
               style={{
                 background: 'var(--color-surface)',
                 border: '1px solid var(--color-border-strong)',
                 color: 'var(--color-accent)',
               }}
             >
-              {/* Was "AC" for a hardcoded "Advay Chavan / Plant
-                  Operations Lead". No sign-in exists, so the app was
-                  naming a specific real person as the authenticated
-                  operator -- on a product whose audit log records who
-                  approved each gated action. An audit trail attributing
-                  approvals to a fabricated identity is worse than one
-                  with no name in it. */}
               LO
             </div>
 
             {/* Name + Role */}
             <div className="flex flex-col min-w-0">
               <span
-                className="text-xs font-semibold truncate leading-tight"
+                className="text-xs font-semibold truncate leading-normal"
                 style={{ color: 'var(--color-text)' }}
               >
                 Local Operator

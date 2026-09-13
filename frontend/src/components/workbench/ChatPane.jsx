@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   MoreHorizontal,
   Paperclip,
+  Mic,
+  MicOff,
+  Code,
   Globe,
   Send,
   ChevronRight,
@@ -51,6 +54,7 @@ export function ChatPane() {
   const addMessage = useChatStore((s) => s.addMessage)
   const updateMessage = useChatStore((s) => s.updateMessage)
   const addToolCallEvent = useChatStore((s) => s.addToolCallEvent)
+  const addThoughtEvent = useChatStore((s) => s.addThoughtEvent)
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
   const finishStreaming = useChatStore((s) => s.finishStreaming)
   const sessionId = useChatStore((s) => s.sessionId)
@@ -76,6 +80,114 @@ export function ChatPane() {
   // "selected" model to send anywhere.
   const [selectedModel, setSelectedModel] = useState('Model registry')
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+
+  // ── Voice Dictation & Multi-line Composer State ───────────────────────────
+  const [isListening, setIsListening] = useState(false)
+  const recognitionRef = useRef(null)
+  const textareaRef = useRef(null)
+
+  // Detect code or markdown structure in draft
+  const isCodeOrMarkdown = useMemo(() => {
+    if (!draft || !draft.includes('\n')) return false
+    const trimmed = draft.trim()
+    if (trimmed.startsWith('```') || trimmed.includes('\n```')) return true
+    if (trimmed.includes('---') || trimmed.startsWith('# ') || trimmed.includes('\n# ')) return true
+    const lines = draft.split('\n')
+    if (lines.length < 2) return false
+    const codePatterns = [
+      /^\s*(import|from|export|const|let|var|function|def|class|return|if|for|while)\b/,
+      /[{};=><]\s*$/,
+      /^\s*(\/\/|#|\/\*|\*)/,
+      /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP)\b/i,
+      /^\s*<[a-zA-Z0-9_-]+.*>/,
+      /^\s*print\(|console\.log\(/,
+    ]
+    let codeCount = 0
+    for (const line of lines) {
+      if (codePatterns.some((p) => p.test(line))) codeCount++
+    }
+    return codeCount >= 2
+  }, [draft])
+
+  // Auto-resize textarea height as content grows
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 180) + 'px'
+    }
+  }, [draft])
+
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop()
+        } catch (e) {}
+      }
+    }
+  }, [])
+
+  // Toggle voice dictation using Web Speech API
+  const toggleListening = () => {
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop()
+      }
+      setIsListening(false)
+      return
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      showToast('Voice dictation is not supported in this browser (requires Web Speech API)', 'warning')
+      return
+    }
+
+    try {
+      const recognition = new SpeechRecognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = 'en-US'
+
+      recognition.onstart = () => {
+        setIsListening(true)
+        showToast('Voice dictation active — speak now', 'info')
+      }
+
+      recognition.onresult = (event) => {
+        let transcript = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript
+        }
+        if (transcript) {
+          setDraft((prev) => {
+            const spacing = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''
+            return prev + spacing + transcript
+          })
+        }
+      }
+
+      recognition.onerror = (event) => {
+        console.warn('Speech recognition error:', event.error)
+        setIsListening(false)
+        if (event.error !== 'no-speech') {
+          showToast(`Voice input error: ${event.error}`, 'warning')
+        }
+      }
+
+      recognition.onend = () => {
+        setIsListening(false)
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err)
+      setIsListening(false)
+      showToast('Could not initialize microphone input', 'error')
+    }
+  }
 
   // ── Inline Live-Thinking State ───────────────────────────────────────────
   //
@@ -275,6 +387,7 @@ export function ChatPane() {
             tool_name: call.name,
             arguments: call.arguments,
             input_params: call.arguments,
+            reasoning: call.reasoning,
             status: 'running',
           })
         },
@@ -292,6 +405,11 @@ export function ChatPane() {
             status: resEv.status || 'done',
             seconds: resEv.seconds,
           })
+        },
+        onThought: (thoughtEv) => {
+          if (thoughtEv?.text) {
+            addThoughtEvent(msgId, thoughtEv.text)
+          }
         },
         onTextDelta: (delta) => {
           appendStreamChunk(msgId, delta)
@@ -390,7 +508,7 @@ export function ChatPane() {
     >
       {/* ── 1. Chat Header: Title + Tab Row + Plan DAG Link + Options ──── */}
       <div
-        className="flex items-center justify-between px-6 pt-3.5 pb-3 flex-shrink-0 select-none gap-4"
+        className="flex items-center justify-between px-8 pt-4 pb-3.5 flex-shrink-0 select-none gap-6"
         style={{ borderBottom: '1px solid var(--color-border)' }}
       >
         {/* Left: Title + Tagline */}
@@ -412,7 +530,7 @@ export function ChatPane() {
 
           {/* Segmented Control Tab Row (Chat / Notebooks / Artifacts) */}
           <div
-            className="flex items-center p-0.5 rounded-md text-xs font-medium ml-2"
+            className="flex items-center p-1 rounded-lg text-xs font-medium ml-3 gap-1"
             style={{ background: 'var(--color-overlay)' }}
           >
             {[
@@ -431,7 +549,7 @@ export function ChatPane() {
                       showToast(`${tab.label} module — Coming soon`, 'info')
                     }
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded text-xs transition-fast cursor-pointer"
+                  className="flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs transition-fast cursor-pointer"
                   style={{
                     background: isActive ? 'var(--color-surface)' : 'transparent',
                     color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
@@ -558,54 +676,21 @@ export function ChatPane() {
         /* Primary Chat Message Stream with Inline Thinking */
         <div
           id="chat-messages-container"
-          className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6"
+          className="flex-1 overflow-y-auto px-8 py-6 flex flex-col gap-7"
         >
-          {/* THE THREE HARDCODED DEMO TURNS WERE DELETED HERE.
-              ~480 lines of JSX that rendered on every single visit,
-              before and regardless of any real conversation:
-
-                - a user asking about reactor inlet temperature
-                - an answer stating "The current reactor inlet
-                  temperature is 382 C, safely within the normal
-                  operating range (360-400 C) with an 18 C safety
-                  margin"
-                - a six-row THERMOCOUPLE ARRAY table (TC-201A..F, each
-                  with a reading, a 400 C limit and a green "Normal")
-                - a second user turn asking about quenching rate
-                - and TURN 3: a "Retrieving sources" spinner with a
-                  live-counting elapsed timer that resolved to nothing,
-                  ever, because there was no request behind it
-
-              None of it was data. The temperatures, the sensor tags,
-              the limits and the green Normal statuses were literals in
-              this file. On a refinery workbench that is six fabricated
-              instrument readings and a safety verdict on them,
-              rendered in the product's own voice, in the chat
-              transcript, indistinguishable from a real answer -- and
-              it was the first thing anyone saw.
-
-              The spinner was its own problem: a permanent "Retrieving
-              sources - 21s" with no request behind it, which is why
-              every session appeared to be mid-work at the moment it
-              opened, and why a real reply looked like just another one
-              of these.
-
-              Demo scaffolding renders in a demo. This renders in the
-              product. */}
-
           {messages.length === 0 && !isPending && (
-            <div className="flex-1 flex flex-col items-center justify-center text-center py-12 animate-fade-in">
+            <div className="flex-1 flex flex-col items-center justify-center text-center py-16 animate-fade-in">
               <div
-                className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"
+                className="w-14 h-14 rounded-2xl flex items-center justify-center mb-3.5"
                 style={{ background: 'var(--color-accent-tint)', color: 'var(--color-accent)' }}
               >
-                <MessageSquare size={22} />
+                <MessageSquare size={24} />
               </div>
-              <h3 className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
+              <h3 className="text-base font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
                 Ask about your sources
               </h3>
               <p
-                className="text-xs max-w-md mt-1.5 leading-relaxed"
+                className="text-xs max-w-md mt-2 leading-relaxed"
                 style={{ color: 'var(--color-text-muted)' }}
               >
                 Answers are grounded in the documents listed under Sources, with a
@@ -625,20 +710,20 @@ export function ChatPane() {
 
       {/* ── 3. Chat Composer Docked Above Status Strip ──────────────────── */}
       <div
-        className="px-6 py-3 flex-shrink-0"
+        className="px-8 py-4 flex-shrink-0"
         style={{ borderTop: '1px solid var(--color-border)' }}
       >
         {/* Safety Gate Locked Banner when approval is pending (§3.12 / FR-15) */}
         {awaitingHumanApproval && (
           <div
             id="composer-approval-locked-banner"
-            className="mb-2.5 px-3 py-2 rounded-md flex items-center justify-between gap-3 text-xs animate-fade-in border"
+            className="mb-3 px-4 py-2.5 rounded-lg flex items-center justify-between gap-3 text-xs animate-fade-in border"
             style={{
               background: 'var(--color-error-tint)',
               borderColor: 'var(--color-accent-border)',
             }}
           >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
               <ShieldAlert
                 size={16}
                 strokeWidth={2.2}
@@ -656,7 +741,7 @@ export function ChatPane() {
               type="button"
               id="review-approval-gate-btn"
               onClick={openApprovalModal}
-              className="px-2.5 py-1 rounded text-[11px] font-bold text-white transition-fast cursor-pointer hover:brightness-110 flex-shrink-0 shadow-xs"
+              className="px-3 py-1.5 rounded-md text-[11px] font-bold text-white transition-fast cursor-pointer hover:brightness-110 flex-shrink-0 shadow-xs"
               style={{ background: 'var(--color-accent)' }}
             >
               Review Gate
@@ -665,9 +750,11 @@ export function ChatPane() {
         )}
 
         <div
-          className="flex items-center gap-2 px-3.5 py-2.5 rounded-md transition-fast"
+          className={`flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-xs ${
+            isCodeOrMarkdown ? 'ring-1 ring-[var(--color-accent-border)]' : ''
+          }`}
           style={{
-            background: 'var(--color-input-bg)',
+            background: isCodeOrMarkdown ? 'var(--color-surface-hover)' : 'var(--color-input-bg)',
             border: awaitingHumanApproval
               ? '1px dashed var(--color-accent)'
               : '1px solid var(--color-input-border)',
@@ -675,54 +762,97 @@ export function ChatPane() {
             opacity: awaitingHumanApproval ? 0.75 : 1,
           }}
         >
-          {/* Left buttons: Paperclip + Globe */}
-          <button
-            type="button"
-            disabled={awaitingHumanApproval}
-            onClick={() => showToast('Multimodal upload ready — Drop PDFs, scans, or voice notes here', 'info')}
-            className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
-              awaitingHumanApproval
-                ? 'cursor-not-allowed opacity-40'
-                : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
-            }`}
-            style={{ color: 'var(--color-text-muted)' }}
-            title="Attach document or audio"
-          >
-            <Paperclip size={15} strokeWidth={2} />
-          </button>
-          <button
-            type="button"
-            disabled={awaitingHumanApproval}
-            onClick={() => showToast('Grounded in 8 local sources — Zero outbound network egress', 'success')}
-            className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
-              awaitingHumanApproval
-                ? 'cursor-not-allowed opacity-40'
-                : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
-            }`}
-            style={{ color: 'var(--color-text-muted)' }}
-            title="Grounding scope"
-          >
-            <Globe size={15} strokeWidth={2} />
-          </button>
+          {/* Left buttons: Paperclip + Globe + Mic */}
+          <div className="flex items-center gap-1.5 pb-0.5">
+            <button
+              type="button"
+              disabled={awaitingHumanApproval}
+              onClick={() => showToast('Multimodal upload ready — Drop PDFs, scans, or voice notes here', 'info')}
+              className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+                awaitingHumanApproval
+                  ? 'cursor-not-allowed opacity-40'
+                  : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+              }`}
+              style={{ color: 'var(--color-text-muted)' }}
+              title="Attach document or audio"
+            >
+              <Paperclip size={15} strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              disabled={awaitingHumanApproval}
+              onClick={() => showToast('Grounded in 8 local sources — Zero outbound network egress', 'success')}
+              className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+                awaitingHumanApproval
+                  ? 'cursor-not-allowed opacity-40'
+                  : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+              }`}
+              style={{ color: 'var(--color-text-muted)' }}
+              title="Grounding scope"
+            >
+              <Globe size={15} strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              id="voice-dictation-btn"
+              disabled={awaitingHumanApproval}
+              onClick={toggleListening}
+              className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+                awaitingHumanApproval
+                  ? 'cursor-not-allowed opacity-40'
+                  : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+              } ${isListening ? 'animate-pulse' : ''}`}
+              style={{
+                color: isListening ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                background: isListening ? 'var(--color-accent-tint)' : 'transparent',
+              }}
+              title={isListening ? 'Stop voice recording' : 'Start voice dictation'}
+            >
+              {isListening ? (
+                <MicOff size={15} strokeWidth={2.2} />
+              ) : (
+                <Mic size={15} strokeWidth={2} />
+              )}
+            </button>
+          </div>
 
-          {/* Input field */}
-          <input
-            type="text"
-            id="chat-composer-input"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              awaitingHumanApproval
-                ? 'Composer locked: Human authorization required at approval gate...'
-                : 'Ask a follow-up or command an agentic task...'
-            }
-            className={`flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--color-text-faint)] ${
-              awaitingHumanApproval ? 'cursor-not-allowed text-[var(--color-text-muted)]' : ''
-            }`}
-            style={{ color: 'var(--color-text)' }}
-            disabled={isPending || awaitingHumanApproval}
-          />
+          {/* Input field (Multi-line auto-resizing textarea with code/markdown detection) */}
+          <div className="flex-1 flex flex-col min-w-0 py-0.5">
+            {isCodeOrMarkdown && (
+              <div
+                className="flex items-center gap-1.5 px-2 py-0.5 mb-1.5 rounded text-[10px] font-mono select-none w-fit border animate-fade-in"
+                style={{
+                  background: 'var(--color-accent-tint)',
+                  borderColor: 'var(--color-accent-border)',
+                  color: 'var(--color-accent)',
+                }}
+              >
+                <Code size={11} strokeWidth={2.5} />
+                <span>Code / Markdown detected</span>
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              id="chat-composer-input"
+              rows={1}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                awaitingHumanApproval
+                  ? 'Composer locked: Human authorization required at approval gate...'
+                  : 'Ask a follow-up or command an agentic task (Shift+Enter for newline)...'
+              }
+              className={`w-full bg-transparent text-xs outline-none placeholder:text-[var(--color-text-faint)] resize-none overflow-y-auto leading-relaxed ${
+                isCodeOrMarkdown ? 'font-mono text-[11.5px]' : ''
+              } ${awaitingHumanApproval ? 'cursor-not-allowed text-[var(--color-text-muted)]' : ''}`}
+              style={{
+                color: 'var(--color-text)',
+                maxHeight: '180px',
+              }}
+              disabled={isPending || awaitingHumanApproval}
+            />
+          </div>
 
           {/* Model Selector Dropdown (Cosmetic only per SYSTEM.md) */}
           <div className="relative">

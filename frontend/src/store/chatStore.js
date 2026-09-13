@@ -235,6 +235,22 @@ export const useChatStore = create((set, get) => ({
   },
 
   /**
+   * Append a thought or process reasoning event to a message's trace.
+   * @param {string} messageId
+   * @param {string} thoughtText
+   */
+  addThoughtEvent: (messageId, thoughtText) => {
+    if (!thoughtText) return
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId) return m
+        const existing = Array.isArray(m.thoughts) ? m.thoughts : []
+        return { ...m, thoughts: [...existing, thoughtText] }
+      }),
+    }))
+  },
+
+  /**
    * Add a message to the conversation.
    * For assistant messages, content starts empty; displayedContent is revealed
    * progressively by the typewriter hook via appendStreamChunk.

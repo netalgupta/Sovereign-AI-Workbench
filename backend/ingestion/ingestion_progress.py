@@ -159,9 +159,10 @@ class ProgressTracker:
         self._order: list[str] = []
         self._lock = threading.Lock()
 
-    def create(self, root_path: str, files: list[Path]) -> IngestionJob:
+    def create(self, root_path: str, files: list[Path], job_id: str | None = None) -> IngestionJob:
+        jid = job_id or f"job-{uuid.uuid4().hex[:10]}"
         job = IngestionJob(
-            job_id=f"job-{uuid.uuid4().hex[:10]}",
+            job_id=jid,
             root_path=str(root_path),
             documents=[
                 DocumentProgress(

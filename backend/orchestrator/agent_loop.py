@@ -364,7 +364,7 @@ def run_agent_loop(
 
     yield {"type": "start", "request": request}
 
-    full_text: list[str] = []
+    final_reply_chunks: list[str] = []
     tool_call_count = 0
 
     # Searches already run this turn. Observed: asked one question, the
@@ -392,8 +392,6 @@ def run_agent_loop(
                 chunk = message.get("content") or ""
                 if chunk:
                     assistant_text.append(chunk)
-                    full_text.append(chunk)
-                    yield {"type": "text_delta", "text": chunk}
 
                 for call in message.get("tool_calls") or []:
                     tool_calls.append(call)
@@ -408,40 +406,47 @@ def run_agent_loop(
             }
             return
 
-        text_so_far = "".join(assistant_text)
+        text_so_far = "".join(assistant_text).strip()
 
-        # No tool wanted -> the model is answering. Done.
-        if not tool_calls:
-            T.kv(f"iteration {iteration}", "final answer")
-            break
+        # If tools were called, this text is tool-selection reasoning / process narration.
+        # It belongs inside the thinking block, NEVER in the final reply body!
+        if tool_calls:
+            T.kv(f"iteration {iteration}", f"tool call reasoning ({len(text_so_far)} chars)")
+            if text_so_far:
+                yield {
+                    "type": "thought",
+                    "text": text_so_far,
+                    "iteration": iteration,
+                }
 
-        # Record the assistant's turn verbatim, including the tool calls,
-        # so the model sees its own decision on the next round-trip.
-        messages.append(
-            {"role": "assistant", "content": text_so_far, "tool_calls": tool_calls}
-        )
+            # Record the assistant's turn verbatim, including the tool calls,
+            # so the model sees its own decision on the next round-trip.
+            messages.append(
+                {"role": "assistant", "content": text_so_far, "tool_calls": tool_calls}
+            )
 
-        for call in tool_calls:
-            function = call.get("function") or {}
-            name = function.get("name") or ""
-            arguments = function.get("arguments") or {}
-            if isinstance(arguments, str):
-                # Some builds return the arguments JSON-encoded.
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            call_id = call.get("id") or f"call-{iteration}-{tool_call_count}"
-            tool_call_count += 1
+            for call in tool_calls:
+                function = call.get("function") or {}
+                name = function.get("name") or ""
+                arguments = function.get("arguments") or {}
+                if isinstance(arguments, str):
+                    # Some builds return the arguments JSON-encoded.
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                call_id = call.get("id") or f"call-{iteration}-{tool_call_count}"
+                tool_call_count += 1
 
-            tools_used.add(name)
-            T.note(f"    tool: {name}({json.dumps(arguments)[:70]})")
-            yield {
-                "type": "tool_call",
-                "id": call_id,
-                "name": name,
-                "arguments": arguments,
-            }
+                tools_used.add(name)
+                T.note(f"    tool: {name}({json.dumps(arguments)[:70]})")
+                yield {
+                    "type": "tool_call",
+                    "id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                    "reasoning": text_so_far,
+                }
 
             # HARD CONSTRAINT #4. A gated tool stops the loop. It is not
             # executed, the model is not asked whether it should be, and
@@ -542,6 +547,37 @@ def run_agent_loop(
                     "name": name,
                 }
             )
+        else:
+            # No tool wanted -> the model is delivering its FINAL ANSWER!
+            T.kv(f"iteration {iteration}", "final answer")
+
+            clean_answer = text_so_far
+            if "<think>" in clean_answer:
+                if "</think>" in clean_answer:
+                    thought_matches = re.findall(r"<think>(.*?)</think>", clean_answer, flags=re.DOTALL)
+                    for tb in thought_matches:
+                        tb_strip = tb.strip()
+                        if tb_strip:
+                            yield {
+                                "type": "thought",
+                                "text": tb_strip,
+                                "iteration": iteration,
+                            }
+                    clean_answer = re.sub(r"<think>.*?</think>", "", clean_answer, flags=re.DOTALL).strip()
+                else:
+                    parts = clean_answer.split("<think>", 1)
+                    clean_answer = parts[0].strip()
+                    thought_body = parts[1].strip()
+                    if thought_body:
+                        yield {
+                            "type": "thought",
+                            "text": thought_body,
+                            "iteration": iteration,
+                        }
+
+            final_reply_chunks.append(clean_answer)
+            yield {"type": "text_delta", "text": clean_answer}
+            break
     else:
         # Exhausted the iteration budget with the model still calling
         # tools. Reported, never presented as a finished answer.
@@ -555,7 +591,7 @@ def run_agent_loop(
             ),
         }
 
-    reply = "".join(full_text).strip()
+    reply = "".join(final_reply_chunks).strip()
 
     # HARD CONSTRAINT #3, checked on the way out.
     unverified = _unverified_arithmetic(reply, tools_used)
