@@ -513,6 +513,8 @@ class PipelineState:
             except Exception:
                 return f"[Image Document: {Path(img_path).name}]"
 
+        newly_ingested: list = []
+
         p = Path(target_path).resolve()
         if not p.exists():
             raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
@@ -585,6 +587,33 @@ class PipelineState:
                     "document_type": type_info.detected_type,
                 })
                 _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
+                newly_ingested.extend(chunks)
+
+        # THE GRAPH FOLLOWS THE CORPUS NOW.
+        #
+        # Adding a source used to update the chunk index and leave the
+        # graph exactly as it was, because entity extraction only ever
+        # ran by hand. With 63 documents loaded the graph still described
+        # the 13 somebody extracted weeks earlier -- real data, correctly
+        # stored, silently covering a fraction of what every other tab
+        # showed.
+        #
+        # Scheduled rather than awaited: extraction is one model call per
+        # chunk (10-25s each), so doing it inline would hold this request
+        # open for the better part of an hour. Ingestion returns as soon
+        # as the documents are SEARCHABLE, which is what the user is
+        # waiting for, and the graph catches up behind it.
+        #
+        # Cannot fail this call: see backend/graph/auto_extract.py.
+        if newly_ingested:
+            try:
+                from backend.graph import auto_extract
+
+                auto_extract.schedule(
+                    newly_ingested, reason=f"ingest of {Path(target_path).name}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         return total_chunks, details
 

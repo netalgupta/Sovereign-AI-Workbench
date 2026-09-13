@@ -216,8 +216,34 @@ def chunks_table(chunks, threshold: float | None = None) -> None:
         warn("retrieval returned NO chunks")
         return
 
+    # SORTED BY SCORE, NUMBERED BY CITATION.
+    #
+    # The list arrives grouped by document, because neighbour expansion
+    # deliberately keeps the chunks either side of a hit next to it --
+    # that is what stops a procedure being truncated at a chunk
+    # boundary, and reordering the list itself would undo it.
+    #
+    # But read as a table the scores then zig-zag (0.0129, 0.0257,
+    # 0.0129, 0.0145, 0.0290...) and the question the table exists to
+    # answer -- what actually matched best -- becomes a manual scan.
+    #
+    # So the DISPLAY is sorted and the `#` column keeps the citation
+    # number, which is the chunk's position in the list the model was
+    # given. Row order tells you what scored; the number tells you what
+    # `[3]` in the answer refers to. Sorting without that would silently
+    # break the mapping from the trace to the citations.
+    numbered = list(enumerate(chunks, 1))
+    numbered.sort(
+        key=lambda pair: (
+            getattr(pair[1], "score", None)
+            if isinstance(getattr(pair[1], "score", None), (int, float))
+            else float("-inf")
+        ),
+        reverse=True,
+    )
+
     _emit(f"  {DIM('#   score    source document                          page  preview')}")
-    for i, ch in enumerate(chunks, 1):
+    for i, ch in numbered:
         score = getattr(ch, "score", None)
         src = str(getattr(ch, "source_document", "?"))[:40]
         page = getattr(ch, "page_number", None)
