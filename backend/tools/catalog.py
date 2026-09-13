@@ -187,6 +187,26 @@ def register_all() -> None:
 
     from backend.sandbox.executor import run_in_sandbox
 
+    # ---- ingestion routing (FR-7, TOOLS.md row 9) -----------------------
+
+    from backend.ingestion.document_classifier import classify_document
+
+    tool(
+        name="classify_document",
+        description=(
+            "Identify what KIND of document this is -- SOP, inspection report, "
+            "maintenance log, lab/quality data, SAP export, correspondence, "
+            "engineering diagram, or scanned form -- and the processing pipeline "
+            "it needs. Distinct from file format: a P&ID and a scanned checklist "
+            "are both PNGs and need opposite handling. Returns the evidence that "
+            "decided it, and returns 'unknown' rather than guessing when nothing "
+            "matches."
+        ),
+        category="ingestion",
+        priority="🔴",
+        tools_md_row=9,
+    )(classify_document)
+
     tool(
         name="run_in_sandbox",
         description=(

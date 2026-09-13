@@ -45,7 +45,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 15 | Contradiction detection across documents | Aryan | built | 🟡 | **IMPLEMENTED** — `backend/retrieval/contradiction.py`. The hard part is false positives, not detection: a detector that flags legitimate variation gets switched off within a day and then catches nothing. Four non-contradictions are excluded by construction — same limit in different units (compared through Pint, so 10 ppm vs 0.001% does not fire), readings vs limits, dated time-series values, and different equipment sharing a word. Comparison is fully deterministic; no model decides whether two values disagree. Extraction is injectable (LLM for recall) but defaults to patterns, because a safety artifact whose contents change between runs on identical input is not one anybody can act on. Owner: Aryan |
 | 7 | Defect/anomaly detection (YOLOv8) | Aryan | not started | 🟡 | Public dataset fine-tune |
 | 8 | Photo-to-report matching | Aryan | not started | ⚪ | Registry-listed |
-| 9 | Document type classifier | Aryan | not started | 🔴 | Routes scans to correct pipeline |
+| 9 | Document type classifier | Aryan | built | 🔴 | **IMPLEMENTED** — `backend/ingestion/document_classifier.py`. The KIND of document, not its format: a P&ID and a scanned checklist are both PNGs and need opposite handling (one is a diagram whose value is the connections between tags, the other a table whose rows are findings), so format alone cannot route them. Rules rather than a model, for two reasons: a model call per document is the dominant cost of ingesting a corpus of any size, and an operator asking why their document was treated as correspondence would get no answer — every classification here names the phrases that decided it. Returns `unknown` rather than the best of a bad set, because forcing a guess is how a P&ID gets parsed as a spreadsheet. Confidence is the margin over the runner-up, not a probability, and is not presented as one. **Measured 13/13 against MRPL_RAG_Test_Corpus's own folder labels** (`backend/evaluation/classifier_accuracy.py`), which were written before the classifier existed and so cannot have been fitted to it. Owner: Aryan |
 | 10 | Image diffing/change detection | Aryan | not started | ⚪ | Registry-listed |
 | 11 | Signature/stamp detection | Aryan | not started | ⚪ | Nice MRPL-approval-workflow touch, low priority |
 | 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | Aryan | not started | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
@@ -73,19 +73,19 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 20 | Task planner with visible plan graph | Aryan | built | 🔴 | FR-5, judge-facing visual |
 | 21 | Multi-model router | Aryan | built | 🔴 | FR-3, FR-11 |
 | 22 | Sub-agent spawning per modality | Aryan | built | 🔴 | Core architecture |
-| 23 | Self-verification agent | Aryan | not started | 🟡 | Quality/trust booster |
-| 24 | Human approval gate | Aryan | not started | 🔴 | NFR-6, safety-critical |
+| 23 | Self-verification agent | Aryan | built | 🟡 | Same deliverable as row 71 — see there. `backend/orchestrator/verification.py`, AGENTS_SPEC §5, fails CLOSED. |
+| 24 | Human approval gate | Aryan | built | 🔴 | Same deliverable as rows 67-68 — see there. `backend/audit/approval_gate.py`: argument-hashed, single-use, expiring, no auto-approve flag. |
 | 25 | Long-running task checkpointing | Aryan | not started | ⚪ | Registry-listed |
 
 ## D. Computation — Owner: Aryan (tool wiring), Sahil (trace UI)
 
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
-| 26 | SymPy symbolic engine | Aryan | not started | 🔴 | No Wolfram Alpha — fully local |
+| 26 | SymPy symbolic engine | Aryan | built | 🔴 | `backend/tools/math/symbolic_calc.py`, registered as `evaluate_expression`. Never `eval()`. No Wolfram Alpha — fully local. |
 | 27 | Maxima CAS | Aryan | not started | 🟡 | Heavier symbolic ops |
 | 28 | NumPy/SciPy numerical + stats | Aryan | built | 🔴 | Trend analysis, curve fitting |
-| 29 | Pint unit-aware calculations | Aryan | not started | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
-| 30 | CoolProp thermophysical properties | Aryan | not started | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
+| 29 | Pint unit-aware calculations | Aryan | built | 🔴 | `backend/tools/math/unit_calc.py`, registered as `evaluate_unit_expression`. Raises on incompatible dimensions rather than coercing. CARD 10. |
+| 30 | CoolProp thermophysical properties | Aryan | built | 🟡 | `backend/tools/math/thermophysical.py`, registered as `lookup_thermophysical_property`. CARD 11. Deliberately excluded from the chat tool set — recorded plant values live in documents, and its description reads as if it would know them (see agent_loop.py's CHAT_TOOLS note). |
 | 31 | Matplotlib plotting | Aryan | built | 🔴 | Embedded charts in outputs |
 | 32 | NetworkX graph math | Netal | not started | 🟡 | Pipeline dependency graphs |
 | 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | Aryan | built | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
