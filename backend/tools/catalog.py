@@ -31,7 +31,7 @@ from backend.tools.registry import tool
 # corpus at all. Given the full registry and asked for a value that is
 # printed in the corpus, the model reached for find_contradictions, got
 # an empty list, and reported that no documents contained it.
-from backend.tools import mrpl_process, numeric_stats, plotting, retrieval_tools  # noqa: F401
+from backend.tools import mrpl_process, netal_tools, numeric_stats, plotting, retrieval_tools  # noqa: F401
 from backend.tools.documents import draft_docx  # noqa: F401
 
 
