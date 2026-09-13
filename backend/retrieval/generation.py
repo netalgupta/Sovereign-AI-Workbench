@@ -298,6 +298,63 @@ def _call_reasoning_model(prompt: str, model_name: str) -> str:
     return ollama_generate(model_name, prompt, timeout=600)
 
 
+# A SIGNATURE IS NOT A CLAIM THE CORPUS CAN SUPPORT.
+#
+# Asked to draft an approval note, the model ended it with
+#
+#     Signed,
+#     R. Kamath
+#     Marketing Ops Manager, HQ
+#
+# That name appears in a depot correspondence document in the corpus.
+# The model did not invent the person -- it took a real signatory from
+# an unrelated letter and signed a document THEY had not seen, which is
+# worse than an invented name: it is attributable, and it looks
+# verifiable.
+#
+# Citation validation cannot catch this. The block carries no citation
+# marker, so there is nothing to validate, and the text around it may be
+# perfectly grounded. Nothing downstream can tell a quoted signature
+# from a manufactured one.
+#
+# So it is removed and REPORTED, never silently dropped: the fact that
+# the model tried to sign something is a signal about that answer.
+_SIGNATURE_BLOCK = re.compile(
+    r"(?:^|\n)[ \t]*"
+    r"(?:"
+    # A sign-off alone on its line: "Signed," / "**Signed,**" / "Sd/-".
+    # The comma may sit inside or outside the bold markers, because both
+    # spellings have been observed from the same model.
+    r"(?:\*\*)?(?:signed|sd/-|yours\s+(?:sincerely|faithfully|truly))"
+    r"[ \t]*[,:]?[ \t]*(?:\*\*)?[ \t]*[,:]?[ \t]*\n"
+    r"|"
+    # An attribution with the name on the same line: "Approved by: X".
+    r"(?:\*\*)?(?:approved|authorised|authorized|signed)\s+by(?:\*\*)?[ \t]*:[ \t]*\S"
+    r")"
+    r"(?:.{0,160}\n?){0,3}$",
+    re.I,
+)
+
+
+def strip_signature_block(text: str) -> tuple[str, str | None]:
+    """Remove a trailing signature from an answer.
+
+    Returns (cleaned, removed_block or None).
+    """
+    match = _SIGNATURE_BLOCK.search(text or "")
+    if not match:
+        return text, None
+    removed = match.group(0).strip()
+    cleaned = text[: match.start()].rstrip()
+    cleaned += (
+        "\n\n> **A signature was removed from this answer.** The model ended it "
+        "by signing on someone's behalf. This system does not sign, approve or "
+        "authorise anything on a person's behalf -- approval is a human action, "
+        "recorded through the approval gate."
+    )
+    return cleaned, removed
+
+
 def generate_grounded_answer(
     store: VectorStore,
     user_request: str,
@@ -317,11 +374,38 @@ def generate_grounded_answer(
     prompt path by which an LLM can "helpfully" fill the gap from
     general knowledge when the corpus doesn't support an answer.
     """
+    from backend.memory import episodic
     from backend.observability import turn_log as T
 
     T.section("RETRIEVAL")
     T.kv("request", repr(user_request))
     T.kv("top_k", top_k)
+
+    # ALREADY ANSWERED, IN THIS PROCESS, AGAINST THIS CORPUS?
+    #
+    # Generation runs at temperature 0, so the same question against the
+    # same corpus with the same context produces the same answer. The
+    # stored one is not an approximation of the work, it is the work.
+    #
+    # The danger in any cache is reuse after the INPUTS changed, which
+    # is why the key covers the corpus generation, the source filter,
+    # the conversation context, top_k and the model -- see
+    # backend/memory/episodic.py. Refusals are never stored: "not found"
+    # is the answer most likely to change for reasons the key cannot
+    # see (the user adds the missing document), and it is cheap anyway
+    # because it never reaches the model.
+    cache_key = episodic.key_for(
+        search_query or user_request,
+        corpus_generation=getattr(store, "generation", 0),
+        top_k=top_k,
+        model_id=model_id,
+        active_documents=active_documents,
+        conversation_context=conversation_context,
+    )
+    cached = episodic.recall(cache_key)
+    if cached is not None:
+        T.kv("episodic memory", T.GREEN("HIT - answered before, corpus unchanged"))
+        return cached
     if active_documents is not None:
         T.kv("active sources", f"{len(active_documents)} enabled (filter ON)")
     try:
@@ -439,10 +523,19 @@ def generate_grounded_answer(
                "likely cited in prose instead of [n]")
     T.block("ANSWER", validation.cleaned_text)
 
-    return GeneratedAnswer(
-        answer_text=validation.cleaned_text,
+    cleaned_text, signature = strip_signature_block(validation.cleaned_text)
+    if signature:
+        T.warn(f"removed a signature block from the answer: {signature[:60]!r}")
+
+    answer = GeneratedAnswer(
+        answer_text=cleaned_text,
         found=True,
         sources=grounding.chunks,
         invalid_citations_stripped=validation.invalid_citation_numbers,
         unresolved_placeholders_stripped=validation.unresolved_placeholder_count,
     )
+    # Stored only once the answer is complete and validated. Caching an
+    # answer whose citations had not yet been checked would preserve the
+    # unchecked version for every later asking of the question.
+    episodic.remember(cache_key, answer)
+    return answer

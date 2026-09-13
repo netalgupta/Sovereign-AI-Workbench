@@ -155,6 +155,62 @@ def _fallback_agent(description: str) -> str:
     return "reasoning"
 
 
+def _first_json_array(text: str) -> list | None:
+    """The first complete JSON array in `text`, or None.
+
+    THE SAME BUG AS THE VERIFIER HAD, in a different file. The model
+    returns a correct plan and then keeps talking:
+
+        ```json
+        [ { "step_id": "greet", ... } ]
+        ```
+
+        Explanation: The request i...
+
+    strip_code_fences removes the fence, json.loads then chokes on the
+    trailing sentence, and a perfectly good plan is discarded --
+    observed live, after a 10.5 second call, falling back to a generic
+    three-step plan about "operational parameters and safety envelopes"
+    for the message "HolA aMIGO".
+
+    Brace/bracket counting rather than a regex, and string-aware, so a
+    bracket inside a description cannot truncate the array.
+    """
+    if not text:
+        return None
+    start = text.find("[")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        candidate = json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+                    if isinstance(candidate, list):
+                        return candidate
+                    break
+        start = text.find("[", start + 1)
+    return None
+
+
 def validate_plan(raw_steps: list[dict]) -> list[PlanStep]:
     """Turn the model's proposed steps into an executable plan, or refuse.
 
@@ -303,7 +359,13 @@ def plan_request(
     try:
         parsed = json.loads(strip_code_fences(raw))
     except json.JSONDecodeError as exc:
-        raise PlanningError(f"Planner did not return JSON: {raw[:200]!r}") from exc
+        # Fall back to scanning for the first complete array before
+        # giving up: the model routinely appends an explanation after
+        # valid JSON, and throwing away a correct plan over trailing
+        # prose costs a full planner call.
+        parsed = _first_json_array(raw)
+        if parsed is None:
+            raise PlanningError(f"Planner did not return JSON: {raw[:200]!r}") from exc
 
     # Models wrap the list in an object about as often as they return it
     # bare, and both are reasonable readings of "produce a JSON list".

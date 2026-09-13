@@ -316,6 +316,7 @@ def run_agent_loop(
     model_id: str = "reasoning-model",
     max_iterations: int = MAX_ITERATIONS,
     active_documents: list[str] | None = None,
+    memory=None,
 ) -> Iterator[dict]:
     """Work on `request`, yielding events as it goes.
 
@@ -347,8 +348,17 @@ def run_agent_loop(
     T.kv("model", f"{model_id} -> {model}")
     T.kv("tools offered", len(tools))
 
+    # Conversation context goes in the SYSTEM message, not the user
+    # message. Appending it to the request makes the model answer the
+    # history; keeping it in the system role makes it background the
+    # request is interpreted against, which is what it is. It arrives
+    # already labelled "context only - NOT a source".
+    system = _SYSTEM_PROMPT
+    context = getattr(memory, "context_block", "") or ""
+    if context:
+        system = _SYSTEM_PROMPT + "\n" + context
     messages: list[dict] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": request},
     ]
 
@@ -633,6 +643,7 @@ def run_turn(
     shape regardless, and a `route` event tells it which path ran and
     why, so the decision is visible rather than mysterious.
     """
+    from backend.memory.turn import close_turn, open_turn
     from backend.observability import turn_log as T
     from backend.orchestrator.path_router import decide_path
 
@@ -641,6 +652,131 @@ def run_turn(
     T.section("ROUTE")
     T.kv("path", decision.path)
     T.kv("reason", decision.reason)
+
+    # MEMORY, ON THIS PATH TOO.
+    #
+    # It was wired into graph.py's synthesize_node and nowhere else, so
+    # this endpoint neither remembered a conversation nor RECORDED one --
+    # which also left holes in the session for later turns answered by
+    # the other endpoint. Both paths now go through the same pair of
+    # functions; see backend/memory/turn.py.
+    memory = open_turn(session_id, request)
+    if memory.degraded:
+        T.warn(f"memory unavailable ({memory.degraded}); answering statelessly")
+    elif memory.has_context:
+        T.kv("memory", f"context {len(memory.context_block)} chars")
+        if memory.added_terms:
+            T.kv("resolved follow-up", f"+{memory.added_terms}")
+        if memory.focus_documents:
+            T.kv("focus documents", memory.focus_documents[:3])
+
+    reply_text = ""
+    citations: list = []
+    documents: list = []
+    tool_calls: list = []
+    try:
+        for event in _answer(
+            request,
+            decision,
+            memory,
+            session_id=session_id,
+            model_id=model_id,
+            active_documents=active_documents,
+        ):
+            kind = event.get("type")
+            if kind == "done":
+                reply_text = event.get("reply") or ""
+                citations = event.get("citations") or []
+                documents = _documents_from_citations(citations)
+            elif kind == "tool_result":
+                tool_calls.append({
+                    "tool_name": event.get("name"),
+                    "status": event.get("status"),
+                })
+                documents.extend(_documents_from_tool_result(event))
+            elif kind == "error":
+                reply_text = event.get("message") or reply_text
+            yield event
+    finally:
+        # Recorded in a finally block deliberately: a turn that crashed
+        # or was disconnected mid-stream still happened, and a session
+        # that silently drops it leaves the next turn interpreting a
+        # conversation with a hole in it.
+        close_turn(
+            session_id,
+            reply_text,
+            route=decision.path,
+            citations=citations,
+            documents=_dedupe(documents),
+            tool_calls=tool_calls,
+            entities=_entities_from_citations(citations),
+        )
+
+
+def _dedupe(values: list) -> list:
+    seen: list = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _documents_from_citations(citations: list) -> list:
+    return _dedupe([c.get("source_document") for c in citations if isinstance(c, dict)])
+
+
+def _documents_from_tool_result(event: dict) -> list:
+    output = event.get("output")
+    if isinstance(output, dict):
+        docs = output.get("documents")
+        if isinstance(docs, list):
+            return [d for d in docs if isinstance(d, str)]
+    return []
+
+
+def _entities_from_citations(citations: list) -> list:
+    """Equipment tags and segment names present in the cited passages.
+
+    Deterministic pattern matching, not a model call. An entity in this
+    list steers the NEXT turn's retrieval, so a hallucinated one would
+    silently bias a later answer -- and the tags this matches (HCU-2,
+    FFC-201, SOP-114-Rev3) have a shape that does not need inference.
+    """
+    found: list = []
+    for citation in citations:
+        text = citation.get("text") if isinstance(citation, dict) else None
+        if not text:
+            continue
+        for match in _ENTITY_RE.finditer(text):
+            token = match.group(0).strip()
+            if token and token not in found:
+                found.append(token)
+            if len(found) >= 12:
+                return found
+    return found
+
+
+# Equipment tags, instrument tags, document numbers and named pipeline
+# segments. Anchored on shape, so ordinary prose cannot match.
+_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z]{2,5}-\d{1,4}(?:-[A-Za-z0-9]{1,6})?"
+    r"|SOP-\d{2,4}(?:-Rev\d+)?"
+    r"|[A-Z][a-z]+(?:-[A-Z][a-z]+){1,3}\s+(?:segment|pipeline|line))\b"
+)
+
+
+def _answer(
+    request: str,
+    decision,
+    memory,
+    *,
+    session_id: str,
+    model_id: str,
+    active_documents: list[str] | None,
+) -> Iterator[dict]:
+    """The turn itself. Split out of run_turn so that memory is opened
+    and closed around EVERY path, including the ones that return early."""
+    from backend.observability import turn_log as T
 
     yield {"type": "start", "request": request}
     yield {
@@ -736,7 +872,32 @@ def run_turn(
     # prerequisite for it.
     yield from _emit_plan(request, decision)
 
-    if decision.path == "agentic":
+    # Instant paths: no retrieval, no model, no planner.
+    if decision.path in ("greeting", "closing", "capability"):
+        from backend.orchestrator.intent import (
+            CLOSING_REPLY,
+            GREETING_REPLY,
+            capability_reply,
+        )
+
+        reply = {
+            "greeting": GREETING_REPLY,
+            "closing": CLOSING_REPLY,
+            "capability": capability_reply(),
+        }[decision.path]
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.0,
+            "awaiting_approval": False,
+            "citations": [],
+        }
+        return
+
+    if decision.path == "agentic" or decision.path == "arithmetic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
         for event in run_agent_loop(
@@ -744,13 +905,16 @@ def run_turn(
             session_id=session_id,
             model_id=model_id,
             active_documents=active_documents,
+            memory=memory,
         ):
             if event.get("type") == "start":
                 continue
             yield event
         return
 
-    yield from _run_direct(request, decision, active_documents=active_documents)
+    yield from _run_direct(
+        request, decision, active_documents=active_documents, memory=memory
+    )
 
 
 def _emit_plan(request: str, decision) -> Iterator[dict]:
@@ -761,6 +925,35 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     """
     from backend.observability import turn_log as T
     from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    # THE PLANNER MUST NOT RUN FOR A TURN THAT NEEDS NO PLAN.
+    #
+    # This is the 3.5s greeting from HANDOFF.md 3a, measured and now
+    # explained. Routing was never the cost -- decide_path and classify
+    # really do take 0.0001s. The cost was HERE, three lines above the
+    # instant-path check: a greeting is not a simple lookup (no question
+    # opener), so it fell through to the LLM planner and spent 10.5s
+    # planning work that the next statement was about to skip.
+    #
+    # It also explains why capability looked FASTER than greeting
+    # through the same path, which made no sense at the time: "what can
+    # you do" starts with "what", matches the question opener, and got
+    # the deterministic plan for free.
+    #
+    # An instant path still emits a plan -- the Plan Graph should not go
+    # blank because the answer was cheap -- but it describes the one
+    # thing that actually happens.
+    if decision.path in ("greeting", "closing", "capability", "arithmetic"):
+        steps = [{
+            "step_id": decision.path,
+            "description": decision.reason,
+            "assigned_agent": "math" if decision.path == "arithmetic" else "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+        T.kv("plan steps", len(steps))
+        yield {"type": "plan", "steps": steps, "path": decision.path}
+        return
 
     steps = []
     try:
@@ -815,7 +1008,10 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
 
 
 def _run_direct(
-    request: str, decision, active_documents: list[str] | None = None
+    request: str,
+    decision,
+    active_documents: list[str] | None = None,
+    memory=None,
 ) -> Iterator[dict]:
     """The grounded path, emitted as stream events.
 
@@ -856,7 +1052,11 @@ def _run_direct(
     try:
         store, _ = get_state().ensure_corpus()
         answer = generate_grounded_answer(
-            store, request, active_documents=active_documents
+            store,
+            request,
+            active_documents=active_documents,
+            search_query=getattr(memory, "search_query", None),
+            conversation_context=getattr(memory, "context_block", "") or "",
         )
     except Exception as exc:  # noqa: BLE001
         yield {

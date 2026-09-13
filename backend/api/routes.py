@@ -1610,15 +1610,10 @@ def chat(body: ChatRequestBody) -> dict:
     from backend.audit.approval_gate import ApprovalGate
     from backend.orchestrator.graph import run_agent_turn
 
-    # Persist the user turn BEFORE running, so the working memory a
-    # concurrent request loads is never missing the message that is
-    # currently being answered.
-    try:
-        from backend.memory.store import get_store
-        get_store().append(body.session_id, "user", body.message)
-    except Exception:  # noqa: BLE001 - memory must never break a turn
-        pass
-
+    # Persistence moved into the orchestrator (backend/memory/turn.py),
+    # so that BOTH endpoints record a turn the same way and neither can
+    # be the one that forgets. Doing it here recorded turns only for
+    # requests that arrived through this route.
     state = run_agent_turn(body.message, body.session_id)
 
     # Citations shaped for frontend citation viewer
@@ -1715,33 +1710,6 @@ def chat(body: ChatRequestBody) -> dict:
             }
         except Exception:
             pass
-
-    # Record the assistant turn, with the documents it actually looked
-    # at. `documents` is stored separately from `citations` on purpose:
-    # a follow-up like "give all columns" refers to the TABLE the last
-    # turn read, which may live in a chunk the answer never explicitly
-    # cited. Citations alone would lose it.
-    try:
-        from backend.memory.store import get_store
-
-        get_store().append(
-            body.session_id,
-            "assistant",
-            state.draft_output or "",
-            route="direct",
-            citations=citations[:20],
-            documents=sorted({
-                c.get("source_document")
-                for c in state.retrieved_context
-                if c.get("source_document")
-            }),
-            tool_calls=[
-                {"tool_name": e.tool_name, "status": e.status}
-                for e in state.tool_call_log
-            ],
-        )
-    except Exception:  # noqa: BLE001 - memory must never break a turn
-        pass
 
     return {
         "reply": state.draft_output or "Analysis complete.",

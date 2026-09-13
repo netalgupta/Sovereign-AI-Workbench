@@ -88,6 +88,15 @@ def extract_arithmetic_expression(msg: str) -> str | None:
     return _balance_parentheses(match.group(0).strip(), msg, match.start())
 
 
+# Equipment tags, instrument tags, document numbers and named pipeline
+# segments. Anchored on shape, so ordinary prose cannot match one.
+_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z]{2,5}-\d{1,4}(?:-[A-Za-z0-9]{1,6})?"
+    r"|SOP-\d{2,4}(?:-Rev\d+)?"
+    r"|[A-Z][a-z]+(?:-[A-Z][a-z]+){1,3}\s+(?:segment|pipeline|line))\b"
+)
+
+
 # ACTIONS THAT REQUIRE A HUMAN (hard constraint #4).
 #
 # This used to be one regex for the words "feed rate". A request to
@@ -111,8 +120,38 @@ _WRITE_ACTION_PATTERNS = [
     (r"\b(send|email|e-mail|mail|dispatch|forward|transmit|submit|share)\b",
      "outbound send"),
     (r"\b(delete|erase|wipe|purge|drop|truncate|overwrite)\b", "destructive change"),
-    (r"\b(save|write|export|generate|draft)\b.{0,30}?\b(file|report|document|docx|"
-     r"xlsx|pdf|to\s+disk)\b", "file write"),
+    # MEASURED: this pattern let 5 of 7 real drafting requests through
+    # ungated, including "Draft an approval note on the CCR1
+    # regeneration cycle inspection findings and save it". It required
+    # a noun from a short list to fall within 30 characters of the
+    # verb, so any request that names its subject before its format
+    # missed -- which is how people actually write them.
+    #
+    # What happened when one missed is the reason this is a constraint
+    # violation and not a usability bug: the request was answered as an
+    # ordinary question, and the model WROTE the approval note in chat,
+    # ending it with
+    #
+    #     Signed,
+    #     R. Kamath
+    #     Marketing Ops Manager, HQ
+    #
+    # a person it invented, over content drawn from an unrelated depot
+    # correspondence document. An unapproved, unsourced, signed
+    # approval note is exactly the artifact hard constraint #4 exists to
+    # prevent, and the gate simply did not see the request.
+    #
+    # The verb list is PRODUCTION verbs only. "Summarise the log" and
+    # "show me the report" are reads and stay ungated; "generate a
+    # summary document" is a deliverable and does not.
+    (r"\b(draft|write|compose|prepare|produce|generate|create|make|export|save)\b"
+     r".{0,70}?"
+     r"\b(file|report|document|docx|doc|word|xlsx|excel|spreadsheet|sheet|csv|"
+     r"pdf|ppt|pptx|presentation|deck|slides|note|memo|letter|minutes|briefing|"
+     r"checklist|approval|to\s+disk)\b", "file write"),
+    # "...and save it" / "...then export this" -- the instruction to
+    # persist, independent of what is being persisted.
+    (r"\b(save|export|write|download)\s+(it|this|that|them)\b", "file write"),
 ]
 _COMPILED_WRITE_ACTIONS = [(re.compile(p, re.I), label) for p, label in _WRITE_ACTION_PATTERNS]
 
@@ -151,6 +190,132 @@ def is_action_approval_request(msg: str) -> bool:
 
 # ── Graph Nodes ─────────────────────────────────────────────────────────────
 
+_CONVERSION_RE = re.compile(
+    r"\bconvert\s+(.+?)\s+(?:to|into|in)\s+([A-Za-z\u00b0/*^\d]+)\s*[.?!]*$",
+    re.I,
+)
+
+
+def _computed_answer(request: str) -> dict[str, Any] | None:
+    """Answer a bare calculation with an EXECUTED tool call, or None.
+
+    Hard constraint #3: no number may come from a model doing arithmetic
+    in its head. So this does not shortcut the calculation -- it
+    shortcuts the RETRIEVAL, and still runs the same registered tool the
+    dispatcher would have run, recording a real ToolCallEvent so the
+    trace shows the call that produced the figure.
+
+    Returns None when nothing here is computable, which sends the
+    request back to the full pipeline. That direction is deliberate: an
+    unanswered calculation costs seconds, an unsourced number costs
+    trust.
+    """
+    from backend.observability import turn_log as T
+
+    expression = extract_arithmetic_expression(request)
+    if expression is not None:
+        tool_name = "evaluate_expression"
+        arguments: dict[str, Any] = {"expression": expression}
+    else:
+        # "convert 5 bar to kPa" carries no bare operator between two
+        # numbers, so the arithmetic matcher does not see it. Pint does.
+        match = _CONVERSION_RE.search(request)
+        if match is None:
+            return None
+        tool_name = "evaluate_unit_expression"
+        arguments = {
+            "expression": match.group(1).strip(),
+            "target_unit": match.group(2).strip(),
+        }
+
+    T.section("DIRECT CALCULATION")
+    T.kv("tool", tool_name)
+    T.kv("arguments", str(arguments))
+    try:
+        result = call_tool_as("math_tool", tool_name, arguments)
+    except Exception as exc:  # noqa: BLE001
+        # A failed calculation is reported as failed. It is not handed to
+        # a model to have a go at instead.
+        T.warn(f"{tool_name} failed: {type(exc).__name__}: {exc}")
+        return {
+            "draft_output": (
+                f"I could not evaluate that with the calculation tools: {exc}\n\n"
+                f"I do not compute numbers myself, so there is no answer to "
+                f"give here."
+            ),
+            "route": "arithmetic",
+            "plan": [
+                PlanStep(
+                    step_id="calculate",
+                    description=f"Evaluate {str(arguments.get('expression', request))[:100]}",
+                    assigned_agent="math",
+                    status="failed",
+                )
+            ],
+            "tool_call_log": [
+                ToolCallEvent(
+                    tool_name=tool_name,
+                    input_params=arguments,
+                    output={"error": str(exc)},
+                    status="failed",
+                )
+            ],
+        }
+
+    # THE TWO TOOLS RETURN DIFFERENT SHAPES, and guessing wrongly does
+    # not fail -- it prints the model object. CalcResult carries
+    # `result`; UnitCalcResult carries `result_magnitude` +
+    # `result_unit`. Probing for the wrong attribute fell through to
+    # str(result) and rendered
+    #
+    #     **5 bar = expression='5 bar' result_magnitude=500.0 ...**
+    #
+    # a pydantic repr presented to an operator as an answer. Read by
+    # field name, and if neither shape is present say so rather than
+    # stringify whatever came back.
+    value = getattr(result, "result", None)
+    if value is None:
+        magnitude = getattr(result, "result_magnitude", None)
+        if magnitude is None:
+            T.warn(f"{tool_name} returned an unrecognised shape: {type(result).__name__}")
+            return None
+        unit = getattr(result, "result_unit", "") or ""
+        value = f"{magnitude} {unit}".strip()
+    shown = arguments.get("expression", request)
+    T.kv("result", str(value))
+
+    steps = getattr(result, "steps", None) or []
+    detail = "\n".join(f"- {line}" for line in list(steps)[:6])
+    reply = f"**{shown} = {value}**\n\n"
+    if detail:
+        reply += detail + "\n\n"
+    reply += (
+        f"Computed by `{tool_name}`, not by the language model -- every number "
+        f"this workbench states comes from an executed tool."
+    )
+
+    return {
+        "draft_output": reply,
+        "route": "arithmetic",
+        "plan": [
+            PlanStep(
+                step_id="calculate",
+                description=f"Evaluate {str(shown)[:100]}",
+                assigned_agent="math",
+                status="done",
+            )
+        ],
+        "tool_call_log": [
+            ToolCallEvent(
+                tool_name=tool_name,
+                input_params=arguments,
+                output={"result": str(value)},
+                status="done",
+            )
+        ],
+    }
+
+
 def router_node(state: AgentState) -> dict[str, Any]:
     """Classify task and intercept critical actions for safety approval."""
     req = state.original_request
@@ -170,31 +335,129 @@ def router_node(state: AgentState) -> dict[str, Any]:
         # It now describes the action category actually detected and
         # quotes the operator's own words, and asserts nothing about
         # magnitudes it cannot know.
+        # RESOLVE THE INSTRUCTION TO A REAL TOOL CALL BEFORE ASKING.
+        #
+        # This used to register the approval under the tool name
+        # "operator_requested_action", which is not a registered tool.
+        # The modal appeared, the operator approved, and
+        # execute_approved() raised KeyError -- consent obtained for an
+        # effect that was wired to nothing. That is the worst shape a
+        # safety control can take: the ceremony completes, the audit
+        # entry exists, and the authorised action cannot happen.
+        #
+        # Now the instruction is resolved first, so the person approves
+        # the actual filename, the actual sections, and the actual
+        # sources those sections rest on -- and approving runs exactly
+        # that, because the gate hashes the arguments it displayed.
+        from backend.orchestrator.action_resolver import resolve as resolve_action
+
+        resolved = resolve_action(req, action_kind, session_id=state.session_id)
+
         gate = ApprovalGate()
         app_req = gate.request(
-            tool_name="operator_requested_action",
-            arguments={"command": req, "category": action_kind},
-            effect=(
-                f"Operator-requested {action_kind}, from the instruction: "
-                f"\"{req.strip()}\". The concrete target and magnitude have NOT "
-                f"been resolved by the system and must be confirmed by the operator."
+            tool_name=resolved.tool_name or "unsupported_action",
+            arguments=(
+                resolved.arguments
+                if resolved.executable
+                else {"command": req, "category": action_kind}
             ),
+            effect=resolved.effect,
         )
-        reply = (
-            f"**Action intercepted — human approval required.**\n\n"
+
+        lines = [
+            "**Action intercepted — human approval required.**",
+            "",
             f"This request was classified as a **{action_kind}**, which hard "
-            f"constraint #4 does not permit the system to perform unattended.\n\n"
-            f"> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been executed. "
-            f"The workbench has not resolved a target device, value, or file for "
-            f"this instruction; approving records your authorisation for the "
-            f"action as you described it.\n\n"
-            f"Confirm or cancel in the approval dialog."
-        )
+            f"constraint #4 does not permit the system to perform unattended.",
+            "",
+        ]
+        if resolved.executable:
+            lines += [
+                "> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                "executed yet. Approving carries this out:",
+                "",
+            ]
+            lines += [f"- {line}" for line in resolved.preview]
+            lines += [
+                "",
+                "Confirm or cancel in the approval dialog.",
+            ]
+        else:
+            # No connector exists. Said here, at the point of asking,
+            # rather than discovered after consent was recorded.
+            lines += [
+                "> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                "executed, and nothing can be:",
+                "",
+                resolved.reason,
+                "",
+                "Approving records your authorisation for the action as you "
+                "described it. It does not cause the action.",
+            ]
+        reply = "\n".join(lines)
+
         return {
             "draft_output": reply,
             "awaiting_human_approval": True,
             "final_output_path": app_req.request_id,
+            "route": "approval",
         }
+
+    # WHAT KIND OF REQUEST IS THIS, asked before any expensive machinery.
+    #
+    # THIS WAS WIRED IN THE WRONG PLACE ONCE ALREADY, and the way it was
+    # wrong is why it lives here now. Triage was added to
+    # path_router.decide_path(), which only /api/chat/stream consults.
+    # The frontend posts to /api/chat, which enters THIS graph -- so
+    # "Hola Amigo" still ran the LLM planner (10.1s), a three-step
+    # fallback plan about "operational parameters and safety envelopes",
+    # a hybrid search, and a grounding refusal naming the three
+    # documents that came closest to matching a Spanish greeting. 50.80
+    # seconds to say "not found". A fix on a path the product does not
+    # take is not a fix; it is a second implementation of the same
+    # decision, and the two disagreed immediately.
+    #
+    # router_node is the entry point of the one graph every non-stream
+    # turn passes through, so putting it here means there is a single
+    # answer to "what is this message" rather than one per endpoint.
+    #
+    # Vetoes on any plant vocabulary (see intent.py), so a message that
+    # deserves a citation can never be short-circuited here.
+    from backend.orchestrator.intent import (
+        CLOSING_REPLY,
+        GREETING_REPLY,
+        capability_reply,
+        classify,
+    )
+
+    intent = classify(req)
+
+    if intent.kind in ("greeting", "closing", "capability"):
+        reply_for = {
+            "greeting": GREETING_REPLY,
+            "closing": CLOSING_REPLY,
+            "capability": capability_reply,
+        }[intent.kind]
+        return {
+            "draft_output": reply_for() if callable(reply_for) else reply_for,
+            "route": intent.kind,
+            "plan": [
+                PlanStep(
+                    step_id=intent.kind,
+                    description=intent.reason,
+                    assigned_agent="reasoning",
+                    status="done",
+                )
+            ],
+        }
+
+    if intent.kind == "arithmetic":
+        computed = _computed_answer(req)
+        if computed is not None:
+            return computed
+        # Nothing the tools could actually evaluate. Falls through to the
+        # full pipeline rather than letting a model answer: hard
+        # constraint #3 has no "it was only a small sum" exception.
 
     return {}
 
@@ -232,34 +495,60 @@ def planner_node(state: AgentState) -> dict[str, Any]:
     except Exception as _plan_exc:  # noqa: BLE001
         T.warn(f"planner failed ({type(_plan_exc).__name__}); using the "
                f"deterministic fallback plan")
-        # Fallback to standard deterministic multi-step plan if offline/Ollama unavailable
-        try:
-            task_type = classify_task(state.original_request)
-        except Exception:
-            task_type = "reasoning"
+
+        # THE FALLBACK USED TO COST MORE THAN THE PLANNER IT REPLACES.
+        #
+        # It called classify_task() here -- an LLM call to fast-router,
+        # WITH A RETRY, so up to two. Measured on "Wassup buddy": the
+        # planner failed after 9.69s, and the turn still took 47.14s.
+        # The missing ~37 seconds were this call, because reasoning-model
+        # was resident and fast-router had to be swapped in on an 8 GB
+        # card.
+        #
+        # Its entire contribution was choosing between "math" and
+        # "reasoning" as the label on step-2. A model call, a model
+        # swap, and 37 seconds, to pick a string. The local arithmetic
+        # matcher answers the same question for free and is the same
+        # check the math branch itself uses to decide whether there is
+        # anything to compute.
+        has_arithmetic = extract_arithmetic_expression(state.original_request) is not None
+
+        # AND THE STEPS IT INVENTED WERE NOT REAL.
+        #
+        # step-2 "Verify engineering calculations and safety envelopes"
+        # and step-3 "Synthesize verified findings into grounded
+        # briefing" both dispatch to the `reasoning` agent, whose branch
+        # in dispatch_node is `step.status = "done"` -- a no-op. So the
+        # trace printed
+        #
+        #     step-2  reasoning  done  Verify engineering calculations...
+        #
+        # for a message where nothing whatsoever was verified. That is
+        # the same defect as the fabricated approval payload: a record
+        # of work that did not happen, in the log an operator would use
+        # to understand what the system did. The synthesis is done by
+        # synthesize_node, which is not a plan step at all.
+        #
+        # What is left is what actually runs.
         fallback_steps = [
             PlanStep(
-                step_id="step-1",
-                description="Retrieve operational parameters and technical specifications",
+                step_id="retrieve",
+                description=f"Retrieve passages for: {state.original_request.strip()[:110]}",
                 assigned_agent="retrieval",
                 status="pending",
                 depends_on=[],
-            ),
-            PlanStep(
-                step_id="step-2",
-                description="Verify engineering calculations and safety envelopes",
-                assigned_agent="math" if task_type == "math" else "reasoning",
-                status="pending",
-                depends_on=["step-1"],
-            ),
-            PlanStep(
-                step_id="step-3",
-                description="Synthesize verified findings into grounded briefing",
-                assigned_agent="reasoning",
-                status="pending",
-                depends_on=["step-2"],
-            ),
+            )
         ]
+        if has_arithmetic:
+            fallback_steps.append(
+                PlanStep(
+                    step_id="calculate",
+                    description="Evaluate the arithmetic in the request with the math tool",
+                    assigned_agent="math",
+                    status="pending",
+                    depends_on=[],
+                )
+            )
         return {"plan": fallback_steps, "current_step_index": 0}
 
 
@@ -484,48 +773,15 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     if is_corpus_question(state.original_request):
         return {"draft_output": answer_corpus_question(state.original_request)}
 
-    # Conversation memory: resolve the follow-up for RETRIEVAL, and hand
-    # the model prior turns as labelled context. Wrapped because a
-    # memory failure must degrade to a stateless (but correct) answer
-    # rather than break the turn -- memory is an improvement, not a
-    # dependency.
+    # Memory was loaded HERE, inside synthesis, which meant a turn that
+    # never reached synthesis -- a greeting, an approval interception --
+    # was never recorded, and the streaming endpoint had no memory at
+    # all because it does not use this node. It is now opened once at
+    # the entry point (run_agent_turn) and simply read here.
     from backend.observability import turn_log as T
 
-    search_query = None
-    conversation_context = ""
-    try:
-        from backend.memory import resolver, working
-
-        memory = working.load(state.session_id)
-        if not memory.is_empty:
-            resolved = resolver.resolve(state.original_request, memory)
-            if resolved.changed:
-                search_query = resolved.search_query
-                T.kv("memory", f"resolved follow-up: +{resolved.added_terms}")
-            conversation_context = memory.context_block()
-            if memory.focus_documents:
-                T.kv("focus documents", memory.focus_documents[:3])
-
-        # Durable preferences and identity, across all sessions. Appended
-        # after the conversation block and labelled the same way: these
-        # shape HOW the answer is written, never WHAT it claims.
-        from backend.memory.long_term import get_long_term
-
-        durable = get_long_term().context_block()
-        if durable:
-            conversation_context += durable
-            T.kv("long-term facts", "applied")
-
-        # Offer the user's own message for durable storage. Most are not
-        # facts and are rejected; nothing is inferred or guessed.
-        try:
-            get_long_term().remember(
-                state.original_request, source_session=state.session_id
-            )
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception as exc:  # noqa: BLE001
-        T.warn(f"memory unavailable ({type(exc).__name__}); answering statelessly")
+    search_query = state.search_query
+    conversation_context = state.memory_context
 
     try:
         store, _ = get_state().ensure_corpus()
@@ -548,6 +804,9 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
         }
 
     if not answer.found:
+        # RECORDED AS A REFUSAL, not as an answer. A later turn reading
+        # "I could not find that" as an ordinary reply would treat the
+        # subject as covered.
         # A refusal that only says "no" is indistinguishable from a broken
         # product when the corpus visibly contains the topic. Report the
         # margin and name what came closest, so the user can tell a real
@@ -589,7 +848,7 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
             "This is a refusal, not a failure. Answering without a source is the "
             "one thing this workbench will not do.",
         ]
-        return {"draft_output": "\n".join(lines)}
+        return {"draft_output": "\n".join(lines), "route": "refusal"}
 
     reply = answer.answer_text
     if answer.invalid_citations_stripped:
@@ -762,7 +1021,11 @@ def build_orchestrator_graph():
 
     # Conditional branching from router
     def router_branch(state: AgentState):
-        if state.awaiting_human_approval:
+        # draft_output set this early means the router answered the turn
+        # itself -- an approval interception, a greeting, or a completed
+        # calculation. Running the planner on top of that replaces a
+        # finished answer with a plan for work already done.
+        if state.awaiting_human_approval or state.draft_output:
             return END
         return "planner"
 
@@ -796,6 +1059,25 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
     T.kv("message", repr(message))
     _t0 = _time.perf_counter()
 
+    # MEMORY IS OPENED HERE, around the whole turn, not inside the node
+    # that reads it. Every path -- greeting, approval interception,
+    # refusal, full synthesis -- therefore records itself, and the
+    # streaming endpoint uses the same two functions. See
+    # backend/memory/turn.py for why that is one pair of functions and
+    # not two implementations.
+    from backend.memory.turn import close_turn, open_turn
+
+    memory = open_turn(session_id, message)
+    if memory.degraded:
+        T.warn(f"memory unavailable ({memory.degraded}); answering statelessly")
+    else:
+        if memory.added_terms:
+            T.kv("resolved follow-up", f"+{memory.added_terms}")
+        if memory.focus_documents:
+            T.kv("focus documents", memory.focus_documents[:3])
+        if memory.focus_entities:
+            T.kv("focus entities", memory.focus_entities[:4])
+
     graph = get_orchestrator_graph()
     initial_state = AgentState(
         session_id=session_id,
@@ -803,6 +1085,8 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
         plan=[],
         tool_call_log=[],
         retrieved_context=[],
+        memory_context=memory.context_block,
+        search_query=memory.search_query,
     )
     result_dict = graph.invoke(initial_state)
     final = AgentState.model_validate(result_dict)
@@ -826,4 +1110,46 @@ def run_agent_turn(message: str, session_id: str) -> AgentState:
     T.rule("", "=")
     T._emit()
 
+    close_turn(
+        session_id,
+        final.draft_output or "",
+        route=final.route or ("approval" if final.awaiting_human_approval else "direct"),
+        citations=[
+            {
+                "text": c.get("text", ""),
+                "source_document": c.get("source_document"),
+                "page_number": c.get("page_number"),
+            }
+            for c in final.retrieved_context
+        ][:20],
+        documents=sorted({
+            c.get("source_document")
+            for c in final.retrieved_context
+            if c.get("source_document")
+        }),
+        tool_calls=[
+            {"tool_name": e.tool_name, "status": e.status} for e in final.tool_call_log
+        ],
+        entities=_entities_in(final.retrieved_context),
+    )
+
     return final
+
+
+def _entities_in(chunks: list[dict]) -> list[str]:
+    """Equipment and document tags present in the retrieved passages.
+
+    Deterministic: an entity recorded here steers the NEXT turn's
+    retrieval, so a model's guess would silently bias a later answer.
+    Tags of this shape (HCU-2, FFC-201, SOP-114-Rev3) do not need
+    inference to spot.
+    """
+    found: list[str] = []
+    for chunk in chunks or []:
+        for match in _ENTITY_RE.finditer(chunk.get("text") or ""):
+            token = match.group(0).strip()
+            if token and token not in found:
+                found.append(token)
+            if len(found) >= 12:
+                return found
+    return found
