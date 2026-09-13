@@ -155,7 +155,20 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
 
     # 2. Instant snapshot fallback
     snapshot = state.snapshot()
-    if not live and snapshot and "chunks" in snapshot and "similarity" in snapshot:
+    # The snapshot is preferred over a live read so a request cannot
+    # trigger a multi-minute ingest -- but ONLY while it still describes
+    # the configured sources. It stopped doing so the moment a folder
+    # was added, and the inspector then showed 21 chunks from 13
+    # documents while the Sources panel counted 66 files, with no amount
+    # of rescanning changing it.
+    if (
+        not live
+        and snapshot
+        and "chunks" in snapshot
+        and "similarity" in snapshot
+        and not state.corpus_is_loaded
+        and (not hasattr(state, "corpus_snapshot_is_current") or state.corpus_snapshot_is_current())
+    ):
         result = {
             "source": "snapshot",
             "written_at": state.snapshot_age(),
@@ -1736,6 +1749,14 @@ _ACTION_TYPES = {
     "file write": "FILE_WRITE",
 }
 
+# What a REGISTERED tool does, for approvals whose arguments are a real
+# tool call rather than a parsed instruction. Keyed on the tool because
+# that is what will actually run.
+_TOOL_ACTION_TYPES = {
+    "draft_docx": "FILE_WRITE",
+    "run_in_sandbox": "CODE_EXECUTION",
+}
+
 
 @router.post("/chat")
 def chat(body: ChatRequestBody) -> dict:
@@ -1826,7 +1847,16 @@ def chat(body: ChatRequestBody) -> dict:
             approval_action = {
                 "id": req.request_id,
                 "title": f"Confirm {category}",
-                "action_type": _ACTION_TYPES.get(category, "OPERATOR_ACTION"),
+                # DERIVED FROM THE PENDING TOOL when the arguments
+                # belong to a real call. An executable action's
+                # arguments are the TOOL's arguments (title, sections,
+                # output_path) and carry no "category", so the lookup
+                # fell through to OPERATOR_ACTION and the modal stopped
+                # saying it was a file write. The tool name is the
+                # honest source for that: draft_docx writes a file.
+                "action_type": _ACTION_TYPES.get(
+                    category, _TOOL_ACTION_TYPES.get(req.tool_name, "OPERATOR_ACTION")
+                ),
                 # The operator's own words. The system has not resolved a
                 # device, a file path or a magnitude, and says so rather
                 # than guessing one.

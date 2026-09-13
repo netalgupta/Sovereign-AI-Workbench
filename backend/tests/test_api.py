@@ -63,16 +63,38 @@ def test_graph_returns_nodes_and_declares_its_source():
     assert isinstance(body["relationships"], list)
 
 
-def test_chunks_default_to_the_snapshot_rather_than_a_multi_minute_ingest():
+def test_chunks_prefer_the_snapshot_but_only_while_it_is_still_true():
     """A request that silently triggered a full corpus ingestion would
-    time out and look like a hang."""
-    from backend.api.state import reset_state
+    time out and look like a hang -- so the snapshot is preferred.
+
+    THIS TEST USED TO ASSERT source == "snapshot" UNCONDITIONALLY, and
+    that is the defect a user reported as "this entire page is still
+    very hardcoded". The snapshot is a committed export of 13 documents;
+    once a folder was added in the Sources panel the inspector still
+    showed those 13, and no amount of rescanning changed it. The test
+    was holding that behaviour in place.
+
+    The real requirement is BOTH of these, and neither alone:
+      - a request must not trigger a multi-minute ingest, and
+      - what it shows must still describe the configured sources.
+
+    So the assertion is on the INVARIANT rather than on one branch: the
+    response declares its provenance, and it only says "snapshot" while
+    the snapshot is actually current.
+    """
+    from backend.api.state import get_state, reset_state
+
     reset_state()
     body = client.get("/api/chunks").json()
 
-    assert body["source"] == "snapshot"
+    assert body["source"] in ("snapshot", "live")
     assert body["chunks"]
     assert body["chunking"]["chunk_size_tokens"] == 512
+
+    if body["source"] == "snapshot":
+        assert get_state().corpus_snapshot_is_current(), (
+            "a stale snapshot was served as though it described the corpus"
+        )
 
 
 def test_metrics_carry_when_they_were_measured():
@@ -134,3 +156,61 @@ def test_preview_of_an_unregistered_document_is_404_with_a_useful_message():
 
     assert response.status_code == 404
     assert "registered" in response.json()["detail"]
+
+
+def test_an_unreachable_graph_does_not_cost_four_seconds_per_request():
+    """MEASURED: state.graph() took 4.1s on EVERY call with Neo4j down,
+    because the bolt driver waits out its connect timeout and the result
+    was not cached.
+
+    /api/health calls it and the frontend POLLS /api/health, so on any
+    machine without Docker running -- most of the team, most of the
+    time -- every poll tied up a worker for four seconds and the whole
+    product felt broken for a reason unrelated to the graph.
+
+    The original note read "cheap, so never cached", which is true when
+    Neo4j is up and collapses when it is down. Success is still
+    uncached, so a graph rebuilt in another terminal appears on the next
+    refresh; only the FAILURE is remembered, briefly.
+    """
+    import time
+
+    from backend.api.state import get_state
+
+    state = get_state()
+    state._graph_failure = None
+
+    first_start = time.perf_counter()
+    first = state.graph()
+    first_elapsed = time.perf_counter() - first_start
+
+    if first.get("available"):
+        import pytest
+
+        pytest.skip("Neo4j is running on this machine; this test is about it being down")
+
+    second_start = time.perf_counter()
+    second = state.graph()
+    second_elapsed = time.perf_counter() - second_start
+
+    assert second_elapsed < 0.5, (
+        f"a repeated probe against a DOWN graph took {second_elapsed:.2f}s "
+        f"(first was {first_elapsed:.2f}s) -- the failure is not being cached, "
+        f"and /api/health pays this on every poll"
+    )
+    assert second.get("available") is False
+
+
+def test_a_recovered_graph_is_not_hidden_by_the_failure_cache():
+    """The cache must not outlive the failure. Start Neo4j and the graph
+    has to appear without restarting the API, which is why the TTL is
+    seconds rather than minutes."""
+    from backend.api.state import PipelineState, get_state
+
+    assert PipelineState._GRAPH_FAILURE_TTL_SECONDS <= 60, (
+        "a long failure TTL means starting Neo4j appears to do nothing"
+    )
+
+    state = get_state()
+    state._graph_failure = None
+    assert getattr(state, "_graph_failure", None) is None

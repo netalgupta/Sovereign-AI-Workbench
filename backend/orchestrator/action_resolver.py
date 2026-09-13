@@ -178,7 +178,15 @@ def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
             "output_path": str(output_path),
         },
         effect=(
-            f"Write a Word document to {output_path.name}, containing "
+            # THE OPERATOR'S OWN WORDS STAY IN THE RECORD.
+            #
+            # Describing only the effect ("Write a Word document to
+            # X.docx...") is precise and loses something that matters on
+            # an approval screen: what the person actually asked for.
+            # Consent is given to an instruction, and an audit entry that
+            # records only the consequence cannot show the two matched.
+            f'Requested: "{request.strip()}"\n'
+            f"Effect: write a Word document to {output_path.name}, containing "
             f"{len(sections)} section(s) grounded in "
             f"{len(documents)} source document(s)."
         ),

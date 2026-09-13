@@ -81,3 +81,8 @@ outputs/
 # which /sources and /graph would render as though it were local.
 backend/evaluation/deleted_sources.json
 frontend/public/pipeline/*.json
+
+# Per-machine corpus cache written by PipelineState. Committing a
+# corpus export is what made one person's 13 documents hydrate every
+# teammate's backend and hide folders they had just added.
+.workbench/
