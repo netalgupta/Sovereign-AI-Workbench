@@ -26,6 +26,12 @@ class AuditEvent(str, Enum):
     TOOL_EXECUTED = "tool_executed"
     TOOL_FAILED = "tool_failed"
     CORRECTION = "correction"
+    # Every executed calculation, so a number in an answer can be traced
+    # back to the computation that produced it by id. NFR-5 says numbers
+    # must be code-verified rather than LLM-guessed; this makes that
+    # checkable AFTER the fact, by someone who was not watching the
+    # trace when it happened.
+    CALCULATION = "calculation"
 
 
 class AuditRecord(BaseModel):

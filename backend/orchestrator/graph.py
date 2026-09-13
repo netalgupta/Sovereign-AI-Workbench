@@ -5,6 +5,7 @@ Coordinates the end-to-end execution graph:
 """
 
 import re
+import uuid
 from typing import Any
 from langgraph.graph import StateGraph, END
 
@@ -218,7 +219,22 @@ def _calculation_record(result, expression: str) -> dict[str, Any]:
     by name and an unrecognised one is recorded as-is rather than
     stringified into something that looks like an answer.
     """
-    record: dict[str, Any] = {"expression": expression}
+    # A STABLE ID FOR THE COMPUTATION.
+    #
+    # Recording the working (below) shows what happened while you are
+    # looking at the trace. An id makes the same calculation findable
+    # afterwards, by someone who was not: "where did 150.4 come from"
+    # becomes a lookup in the audit log rather than a re-run that may
+    # not reproduce the same inputs.
+    #
+    # That is the difference between a number being verifiable in
+    # principle and being verifiable in practice, and for an approval
+    # note that leaves the building it is the whole point of NFR-5.
+    calculation_id = f"calc-{uuid.uuid4().hex[:10]}"
+    record: dict[str, Any] = {
+        "calculation_id": calculation_id,
+        "expression": expression,
+    }
 
     value = getattr(result, "result", None)
     if value is None:
@@ -231,6 +247,27 @@ def _calculation_record(result, expression: str) -> dict[str, Any]:
     steps = getattr(result, "steps", None)
     if steps:
         record["steps"] = [str(line) for line in steps]
+
+    # Appended to the same append-only log the approvals use. No update
+    # path exists there by construction, so a calculation cannot be
+    # quietly revised after it was cited.
+    try:
+        from backend.audit.audit_log import AuditEvent, AuditLog
+
+        AuditLog().log(
+            event=AuditEvent.CALCULATION,
+            request_id=calculation_id,
+            actor="system",
+            summary=f"{expression} = {record['result']}",
+            details={
+                "expression": expression,
+                "result": record["result"],
+                "steps": record.get("steps", []),
+            },
+        )
+    except Exception:  # noqa: BLE001 - auditing must never break a turn
+        pass
+
     return record
 
 

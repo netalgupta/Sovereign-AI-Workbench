@@ -76,7 +76,16 @@ def verify_models_available(
 # ---------------------------------------------------------------------
 import os
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# CHECKED, NOT TRUSTED. Setting OLLAMA_HOST to a remote address used to
+# send every model call in the product off the premises -- silently, no
+# code change, no warning. The sovereignty claim was resting on the
+# default value of an environment variable. See backend/utils/loopback.py.
+from backend.utils.loopback import require_loopback
+
+OLLAMA_HOST = require_loopback(
+    os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+    what="OLLAMA_HOST",
+)
 GENERATE_URL = f"{OLLAMA_HOST}/api/generate"
 
 # All layers on the GPU when they fit; Ollama falls back to a split, and

@@ -15,7 +15,11 @@ from pydantic import BaseModel, Field
 from backend.models.registry import resolve_model_name
 from backend.utils.llm_output import strip_code_fences
 
-_OLLAMA_HOST = "http://localhost:11434"
+from backend.utils.loopback import require_loopback
+
+# Same check as ollama_client: an endpoint is validated where it is
+# built, so a second module cannot become the one that talks off-box.
+_OLLAMA_HOST = require_loopback("http://localhost:11434", what="entity extraction host")
 
 # Exact per GRAPH_SPEC.md §3/§4 — these are the ONLY valid values. §5's
 # extraction prompt deliberately only asks for 4 of the 6 node types

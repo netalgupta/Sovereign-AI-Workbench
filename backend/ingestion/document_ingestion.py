@@ -7,6 +7,7 @@ specifies.
 """
 
 import datetime
+import os
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -61,6 +62,63 @@ def _default_audio_transcribe_fn(audio_path: str) -> str:
     return transcribe_voice_note(audio_path).full_text
 
 
+# A single document larger than this is refused rather than ingested.
+#
+# Not arbitrary: the pipeline holds a whole document's extracted text in
+# memory, chunks it, and embeds every chunk. A multi-gigabyte file does
+# not fail fast -- it consumes the box, and on a workstation that is
+# also running the models, it takes the demo with it. Refusing at the
+# door is recoverable; an OOM three minutes into an ingest is not.
+#
+# Overridable, because a real MRPL P&ID set may legitimately exceed it
+# and the person who knows that should be able to say so.
+MAX_DOCUMENT_BYTES = int(os.environ.get("WORKBENCH_MAX_DOCUMENT_MB", "200")) * 1024 * 1024
+
+
+def _check_ingestible(file_path: str) -> None:
+    """Refuse a file that should not be read, before reading it.
+
+    TWO CHECKS, BOTH CHEAP, BOTH BEFORE ANY I/O ON THE CONTENT.
+
+    SIZE, for the reason above.
+
+    SYMLINK ESCAPE, because the ingestion path is user-supplied: the
+    Sources panel takes a folder, and a symlink inside it pointing at
+    C:\\Users\\... or /etc would be followed and its contents embedded
+    into a corpus that then answers questions from them. On a workbench
+    whose premise is that confidential data stays where it is put, that
+    is the wrong direction to be permissive in.
+
+    Raises:
+        ValueError: naming which check failed and what the limit is --
+            "file too large" without the number sends someone looking
+            through code to find it.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Document not found at {file_path}")
+
+    resolved = path.resolve()
+    if path.is_symlink() and resolved != path.absolute():
+        raise ValueError(
+            f"{file_path} is a symlink pointing at {resolved}. Symlinks are not "
+            f"followed during ingestion: a link inside a watched folder would "
+            f"pull content from outside it into the corpus, and this workbench "
+            f"exists to keep confidential data where it was put."
+        )
+
+    size = resolved.stat().st_size
+    if size > MAX_DOCUMENT_BYTES:
+        raise ValueError(
+            f"{path.name} is {size / 1024 / 1024:.1f} MB, over the "
+            f"{MAX_DOCUMENT_BYTES / 1024 / 1024:.0f} MB ingestion limit. "
+            f"The pipeline holds a document's whole extracted text in memory "
+            f"and embeds every chunk, so this would take the machine down "
+            f"rather than fail. Raise WORKBENCH_MAX_DOCUMENT_MB if the file "
+            f"is genuinely needed."
+        )
+
+
 def ingest_document(
     file_path: str,
     ocr_fn: OcrFn | None = None,
@@ -91,6 +149,8 @@ def ingest_document(
             (see that module's docstring), never something to apply
             silently by default the way a verified extraction would be.
     """
+    _check_ingestible(file_path)
+
     type_info = detect_document_type(file_path)
     if audio_transcribe_fn is None:
         audio_transcribe_fn = _default_audio_transcribe_fn
