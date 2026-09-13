@@ -36,6 +36,16 @@ router = APIRouter(prefix="/api")
 
 # ---------------------------------------------------------------- health
 
+def _ocr_device_status() -> str:
+    """"gpu", "cpu", or "unavailable" - never a guess."""
+    try:
+        from backend.tools.vision.ocr_printed import ocr_device
+
+        return ocr_device()
+    except Exception:  # noqa: BLE001
+        return "unavailable"
+
+
 def _embedding_backend_status() -> tuple[str, str | None]:
     """(backend name, degradation reason or None) without forcing a load."""
     try:
@@ -67,6 +77,11 @@ def health() -> dict:
         # Whether retrieval is actually semantic. This silently fell
         # back to hash vectors for a whole session after a transient
         # load failure, and nothing in the API said so.
+        # Which device OCR will actually use. A pipeline that silently
+        # fell back to CPU looks identical to one that chose CPU, which
+        # is how "the GPU is not working" becomes an afternoon of
+        # guessing. Measured difference on this box: 21.08s vs 0.61s.
+        "ocr_device": _ocr_device_status(),
         "embedding_backend": _embedding_backend_status()[0],
         "embeddings_degraded": _embedding_backend_status()[1] is not None,
         "embeddings_degraded_reason": _embedding_backend_status()[1],

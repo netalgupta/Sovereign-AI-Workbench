@@ -196,6 +196,44 @@ _CONVERSION_RE = re.compile(
 )
 
 
+def _calculation_record(result, expression: str) -> dict[str, Any]:
+    """A calculation, recorded so a human can check the working.
+
+    NFR-5 IS A UI REQUIREMENT, NOT ONLY AN ARCHITECTURAL ONE: "All
+    demoed calculations show the executed code alongside the result."
+    The architecture half was satisfied -- every number comes from an
+    executed tool (hard constraint #3) -- but the evidence was thrown
+    away one line later. This recorded
+
+        {"result": "150.400000000000"}
+
+    while CalcResult.steps, the actual derivation the tool produced,
+    was discarded. So the trace could prove a tool RAN and could not
+    show WHAT IT DID, which is the part a reviewer needs: a tool called
+    with the wrong expression returns a genuine result for a question
+    nobody asked, and only the working shows it.
+
+    Shapes differ by tool -- CalcResult carries `result`,
+    UnitCalcResult `result_magnitude` + `result_unit` -- so each is read
+    by name and an unrecognised one is recorded as-is rather than
+    stringified into something that looks like an answer.
+    """
+    record: dict[str, Any] = {"expression": expression}
+
+    value = getattr(result, "result", None)
+    if value is None:
+        magnitude = getattr(result, "result_magnitude", None)
+        if magnitude is not None:
+            unit = getattr(result, "result_unit", "") or ""
+            value = f"{magnitude} {unit}".strip()
+    record["result"] = str(value) if value is not None else str(result)
+
+    steps = getattr(result, "steps", None)
+    if steps:
+        record["steps"] = [str(line) for line in steps]
+    return record
+
+
 def _computed_answer(request: str) -> dict[str, Any] | None:
     """Answer a bare calculation with an EXECUTED tool call, or None.
 
@@ -309,7 +347,9 @@ def _computed_answer(request: str) -> dict[str, Any] | None:
             ToolCallEvent(
                 tool_name=tool_name,
                 input_params=arguments,
-                output={"result": str(value)},
+                output=_calculation_record(
+                    result, str(arguments.get("expression", request))
+                ),
                 status="done",
             )
         ],
@@ -640,7 +680,7 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
                         ToolCallEvent(
                             tool_name="evaluate_expression",
                             input_params={"expression": expression},
-                            output={"result": str(res)},
+                            output=_calculation_record(res, expression),
                             status="done",
                         )
                     )

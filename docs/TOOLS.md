@@ -26,7 +26,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
-| 1 | Printed OCR (PaddleOCR) | Aryan | built | 🔴 | Core to FR-7, FR-12 |
+| 1 | Printed OCR (PaddleOCR) | Aryan | built | 🔴 | Core to FR-7, FR-12. **Runs on the GPU** — `paddlepaddle-gpu` cu126, no virtualenv. Measured on an RTX 4060: warm OCR of the scanned CCR1 checklist **21.08s → 0.61s (34.8x)**, byte-identical text on both devices. Device is DETECTED, not assumed, so a CPU-only install still works and `WORKBENCH_OCR_DEVICE=cpu` forces it; `/api/health` reports which is in use, because a silent CPU fallback looks exactly like a deliberate CPU choice. The setup is fragile in one specific way and it is pinned: torch bundles cuDNN 9.10.2, paddle pins 9.5.1.17, and Windows loads one DLL per base name per process — see requirements.txt and `backend/utils/cuda_dll_path.py`. |
 | 2 | Handwritten OCR (TrOCR/VLM fallback) | Aryan | built | 🔴 | Explicit PS requirement |
 | 3 | Image super-resolution (Real-ESRGAN) | Aryan | built | 🟡 | Improves OCR accuracy on poor scans |
 | 4 | Denoise/deskew/binarize (OpenCV) | Aryan | built | 🔴 | Cheap, always run before OCR |

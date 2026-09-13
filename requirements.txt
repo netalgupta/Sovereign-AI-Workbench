@@ -44,3 +44,39 @@ responses>=0.25
 # sandbox, it took every tool test down with it.
 docker==7.2.0
 psutil==7.0.0
+
+# ---------------------------------------------------------------- GPU
+#
+# PaddleOCR ON THE GPU, WITH NO VIRTUALENV. Measured on an RTX 4060:
+# warm OCR of the scanned CCR1 checklist went 21.08s -> 0.61s (34.8x),
+# with byte-identical text on both devices.
+#
+# `paddlepaddle` (CPU) and `paddlepaddle-gpu` are different
+# distributions that both import as `paddle`; installing the GPU one
+# requires uninstalling the CPU one first, or the import is ambiguous:
+#
+#     pip uninstall -y paddlepaddle
+#     pip install paddlepaddle-gpu==3.3.1 \
+#         -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+#
+# Not listed as a hard requirement because the CPU wheel is a valid
+# install and the code detects which one is present
+# (backend/tools/vision/ocr_printed.py). WORKBENCH_OCR_DEVICE=cpu forces
+# the CPU path without reinstalling anything.
+#
+# THE PIN BELOW IS THE LOAD-BEARING PART, and it is not paddle's own.
+# torch bundles cuDNN 9.10.2 inside torch/lib; paddle pins
+# nvidia-cudnn-cu12==9.5.1.17 and takes it from the shared pip wheel.
+# Windows loads ONE DLL per base name per process, so with two versions
+# present whichever binds cudnn_graph64_9.dll first wins and the other
+# dies with WinError 127 on a symbol it expected -- measured in both
+# directions. Aligning the pip wheel to torch's version makes them
+# share one cuDNN, and paddle runs fine on it: paddle's pin is
+# conservative, not a real requirement (verified by running a
+# convolution in both frameworks in one process).
+#
+# backend/utils/cuda_dll_path.py handles the other half: the pip CUDA
+# libraries live in sibling nvidia/*/bin directories that Windows does
+# not search, and it imports torch before registering them so torch
+# binds its own DLLs first.
+nvidia-cudnn-cu12==9.10.2.21   # MUST match torch's bundled cuDNN

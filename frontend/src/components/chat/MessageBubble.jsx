@@ -211,6 +211,15 @@ function extractRetrievedSources(tool, citations = []) {
   return Array.from(sourcesMap.values())
 }
 
+// Tools that compute a number and can show their working. Named
+// rather than pattern-matched: a tool added to this set must actually
+// return `steps`, and a guess would render an empty derivation that
+// looks like the calculation had none.
+const CALCULATION_TOOLS = new Set([
+  'evaluate_expression',
+  'evaluate_unit_expression',
+])
+
 function extractToolResult(tool) {
   if (!tool?.output) return null
   let out = tool.output
@@ -219,7 +228,12 @@ function extractToolResult(tool) {
     else if (out.value !== undefined) out = out.value
     else out = JSON.stringify(out)
   }
-  return truncate(String(out).replace(/\s+/g, ' ').trim(), 60)
+  // A RESULT IS NOT TRUNCATED THE WAY A LABEL IS. 60 characters is the
+  // right budget for a summary line and the wrong one for a number: an
+  // answer ending in "..." is unusable, and a reader cannot tell a
+  // truncated figure from a precise one.
+  const text = String(out).replace(/\s+/g, ' ').trim()
+  return text.length <= 120 ? text : truncate(text, 120)
 }
 
 /**
@@ -345,7 +359,7 @@ function TurnTrace({ message, isStreaming = false }) {
             status: null,
           })
         })
-      } else if (toolName === 'evaluate_expression') {
+      } else if (CALCULATION_TOOLS.has(toolName)) {
         icon = (
           <Calculator
             size={12}
@@ -355,7 +369,40 @@ function TurnTrace({ message, isStreaming = false }) {
           />
         )
         const expr = args?.expression || ''
-        label = `evaluate_expression${expr ? ` "${truncate(expr, 36)}"` : ''}`
+        label = `${toolName}${expr ? ` "${truncate(expr, 36)}"` : ''}`
+
+        // NFR-5: "All demoed calculations show the executed code
+        // alongside the result."
+        //
+        // The architectural half was already satisfied -- every number
+        // comes from an executed tool (hard constraint #3) -- but the
+        // WORKING was discarded before it reached here, so the trace
+        // could prove a tool ran and could not show what it did. That
+        // is the half a reviewer needs: a tool called with the wrong
+        // expression returns a genuine result for a question nobody
+        // asked, and only the working reveals it. Measured once
+        // already -- the model asked evaluate_expression for
+        // "-381.95 - 400" when the user said "381.95 minus 400", and
+        // the tool correctly returned -781.95 for what it was given.
+        //
+        // Steps are rendered in full and never truncated. A derivation
+        // cut off at 60 characters is not a derivation.
+        const workingSteps = Array.isArray(tool.output?.steps) ? tool.output.steps : []
+        workingSteps.forEach((line, sIdx) => {
+          children.push({
+            id: `calc-step-${idx}-${sIdx}`,
+            icon: (
+              <CornerDownRight
+                size={11}
+                strokeWidth={1.75}
+                className="flex-shrink-0"
+                style={{ color: 'var(--color-text-muted)' }}
+              />
+            ),
+            label: String(line),
+            status: null,
+          })
+        })
 
         const resultVal = extractToolResult(tool)
         if (resultVal) {
@@ -369,7 +416,7 @@ function TurnTrace({ message, isStreaming = false }) {
                 style={{ color: 'var(--color-text-muted)' }}
               />
             ),
-            label: `→ ${resultVal}`,
+            label: `= ${resultVal}`,
             status: null,
           })
         }
