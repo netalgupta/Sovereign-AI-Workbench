@@ -9,6 +9,8 @@ Verifies:
 5. GET /api/network/status returns telemetry conforming to NetworkMonitorBar contract.
 """
 
+import pytest
+
 from fastapi.testclient import TestClient
 from backend.main import app
 
@@ -25,6 +27,7 @@ def test_api_health_shape_compatibility():
     assert "graph_available" in data
 
 
+@pytest.mark.live_model
 def test_api_chat_standard_query():
     payload = {
         "message": "What is the design capacity and operational profile of MRPL?",

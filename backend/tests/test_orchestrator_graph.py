@@ -7,6 +7,8 @@ Verifies:
 4. Tool call log and verification result are populated in state.
 """
 
+import pytest
+
 from unittest.mock import patch
 
 from backend.audit.approval_gate import ApprovalGate, ApprovalState
@@ -131,6 +133,7 @@ def test_math_step_uses_the_requested_expression_not_a_fixed_one():
     assert extract_arithmetic_expression("((2+3)*4) - 1") == "((2+3)*4) - 1"
 
 
+@pytest.mark.live_model
 def test_standard_query_executes_plan_and_dispatch():
     state = run_agent_turn(
         "Analyze operating limits for hydrocracker reactor",
@@ -204,6 +207,7 @@ def test_agent_state_ready_steps_dependency_resolution():
     assert ready[0].step_id == "step-2"
 
 
+@pytest.mark.live_model
 def test_ungrounded_question_refuses_instead_of_reassuring():
     """The most dangerous sentence this system ever emitted.
 
@@ -237,6 +241,7 @@ def test_ungrounded_question_refuses_instead_of_reassuring():
     assert not state.retrieved_context
 
 
+@pytest.mark.live_model
 def test_inline_verification_still_runs_when_enabled(monkeypatch):
     """Deferring verification must not mean deleting it.
 

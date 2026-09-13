@@ -27,6 +27,7 @@ def _first_event(body, event_type):
     return None
 
 
+@pytest.mark.live_model
 def test_the_stream_emits_a_plan_before_doing_any_work():
     """The Plan Graph rendered empty on every live turn.
 

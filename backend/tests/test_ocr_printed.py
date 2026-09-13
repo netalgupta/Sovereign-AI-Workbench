@@ -40,6 +40,7 @@ def test_missing_file_raises_exact_message():
 
 
 @pytest.mark.skipif(not os.path.exists(CORPUS_IMAGE), reason="test corpus image not present")
+@pytest.mark.live_model
 def test_extracts_known_text_from_the_deliberately_noisy_scanned_checklist():
     """The actual OCR-robustness test case the corpus README calls out —
     this image has deliberate rotation + pixel noise applied, and OCR
@@ -58,6 +59,7 @@ def test_extracts_known_text_from_the_deliberately_noisy_scanned_checklist():
 
 
 @pytest.mark.skipif(not os.path.exists(CORPUS_IMAGE), reason="test corpus image not present")
+@pytest.mark.live_model
 def test_offline_with_sockets_hard_blocked(monkeypatch):
     """Same rigor as embeddings.py/voice_transcription.py's equivalent
     tests: force a FRESH PaddleOCR construction (the risky operation --
