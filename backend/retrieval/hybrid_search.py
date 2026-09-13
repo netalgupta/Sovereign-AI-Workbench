@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Hybrid dense + sparse retrieval — VIBECODING_SPEC.md CARD 09.
 
 Dense (FAISS/bge-large) finds semantically similar chunks even when the

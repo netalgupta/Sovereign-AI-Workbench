@@ -13,6 +13,7 @@ import {
   Trash2,
   Eye,
 } from 'lucide-react'
+import { usePreviewStore } from '../../store/previewStore'
 
 
 function getFileIcon(type, category, ext) {
@@ -328,13 +329,20 @@ export function SourceFileTree({
     const fileType = getFileTypeLabel(node)
     const theme = getFileTypeTheme(fileType, node.category)
 
+    const handlePreview = (e) => {
+      if (e) e.stopPropagation()
+      if (onSelectSource) onSelectSource(node)
+      if (onPreviewSource) {
+        onPreviewSource(node)
+      } else {
+        usePreviewStore.getState().openPreview(node)
+      }
+    }
+
     return (
       <div
         key={node.id}
-        onClick={() => {
-          if (onSelectSource) onSelectSource(node)
-          if (onPreviewSource) onPreviewSource(node)
-        }}
+        onClick={handlePreview}
         className="flex items-center justify-between py-1.5 px-2 rounded-md transition-fast group cursor-pointer"
         style={{
           paddingLeft: `${depth * 12 + 16}px`,
@@ -395,20 +403,14 @@ export function SourceFileTree({
 
         {/* Action Buttons: Preview, Delete & Scope Toggle */}
         <div className="flex items-center gap-1 flex-shrink-0">
-          {onPreviewSource && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (onSelectSource) onSelectSource(node)
-                onPreviewSource(node)
-              }}
-              className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-overlay)] transition-fast cursor-pointer opacity-0 group-hover:opacity-100"
-              title={`Preview "${node.name}"`}
-            >
-              <Eye size={12} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handlePreview}
+            className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-overlay)] transition-fast cursor-pointer opacity-0 group-hover:opacity-100"
+            title={`Preview "${node.name}"`}
+          >
+            <Eye size={12} />
+          </button>
 
           {onDeleteSource && (
             <button

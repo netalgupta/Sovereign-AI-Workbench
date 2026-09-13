@@ -13,7 +13,8 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight, FileText, ExternalLink, FileCode, FileSpreadsheet } from 'lucide-react'
+import { ChevronRight, FileText, ExternalLink, FileCode, FileSpreadsheet, Eye } from 'lucide-react'
+import { usePreviewStore } from '../../store/previewStore'
 
 // ---------------------------------------------------------------------------
 // Derive a file-type icon from the doc extension — mirrors Sources rail icons
@@ -107,18 +108,31 @@ function SourceRow({ citation }) {
               {citation.passage}
             </div>
 
-            {/* Footer link */}
+            {/* Footer links: Preview & Sources Hub */}
             <div
-              className="flex justify-end px-2.5 py-1"
+              className="flex justify-end items-center gap-3 px-2.5 py-1"
               style={{ borderTop: '1px solid var(--color-border)' }}
             >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  usePreviewStore.getState().openPreview(citation.doc)
+                }}
+                className="inline-flex items-center gap-1 text-[10px] font-medium transition-fast cursor-pointer hover:underline"
+                style={{ color: 'var(--color-accent)' }}
+              >
+                <Eye size={10} strokeWidth={2} />
+                Preview document
+              </button>
+
               <Link
                 to="/sources"
-                className="inline-flex items-center gap-1 text-[10px] font-medium transition-fast"
-                style={{ color: 'var(--color-accent)', textDecoration: 'none' }}
+                className="inline-flex items-center gap-1 text-[10px] font-medium transition-fast opacity-70 hover:opacity-100"
+                style={{ color: 'var(--color-text-muted)', textDecoration: 'none' }}
                 onClick={(e) => e.stopPropagation()}
               >
-                View full source
+                Sources Hub
                 <ExternalLink size={9} strokeWidth={2} />
               </Link>
             </div>

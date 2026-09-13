@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Cross-document boilerplate detection — RAG_SPEC.md §2.
 
 Real, evidence-backed problem this solves: every document in the MRPL

@@ -24,9 +24,9 @@ import { nodeName, getNodeColor } from '../components/graph/graphTheme'
 import { VectorScatter, SimilarityHeatmap } from '../components/graph/VectorViews'
 import { SourceFileTree } from '../components/workbench/SourceFileTree'
 import { AddSourceDirectoryModal } from '../components/workbench/AddSourceDirectoryModal'
-import { SourcePreviewModal } from '../components/workbench/SourcePreviewModal'
 import { EmptyState } from '../components/ui/EmptyState'
 import { showToast } from '../store/toastStore'
+import { usePreviewStore } from '../store/previewStore'
 
 export function SourcesPage() {
   // Active top-level tab
@@ -527,8 +527,7 @@ export function SourcesPage() {
                   onSelectSource={(source) => setSelectedFile(source)}
                   onPreviewSource={(source) => {
                     setSelectedFile(source)
-                    setPreviewModalFile(source)
-                    setIsPreviewModalOpen(true)
+                    usePreviewStore.getState().openPreview(source)
                   }}
                   onToggleSource={handleToggleSource}
                   onDeleteSource={handleDeleteSource}
@@ -601,8 +600,7 @@ export function SourcesPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          setPreviewModalFile(selectedFile)
-                          setIsPreviewModalOpen(true)
+                          usePreviewStore.getState().openPreview(selectedFile)
                         }}
                         className="px-3 py-1.5 rounded-md text-xs font-semibold border transition-fast flex items-center gap-1.5 cursor-pointer shadow-xs"
                         style={{
@@ -1374,13 +1372,6 @@ export function SourcesPage() {
         onClose={() => setIsAddModalOpen(false)}
         onDirectoriesUpdated={refreshAll}
         currentDirectories={corpusData.directories || []}
-      />
-
-      {/* ── Document Preview Modal ─────────────────────────────────────── */}
-      <SourcePreviewModal
-        file={previewModalFile}
-        isOpen={isPreviewModalOpen}
-        onClose={() => setIsPreviewModalOpen(false)}
       />
     </div>
   )

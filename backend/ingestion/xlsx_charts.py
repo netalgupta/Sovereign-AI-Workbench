@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Native XLSX chart data extraction — exact values, zero vision model.
 
 WHY THIS NEEDS NO VISION MODEL AT ALL, AND WHY THAT MATTERS: a native

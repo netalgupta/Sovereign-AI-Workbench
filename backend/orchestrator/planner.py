@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The planner node — AGENTS_SPEC.md §3/§4, TOOLS.md row 20 (🔴), FR-5.
 
 Decomposes a request into a dependency graph of steps, each assigned to

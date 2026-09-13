@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Durable sessions, messages, and per-turn artifacts.
 
 WHY THIS EXISTS. `session_id` was threaded through every request and

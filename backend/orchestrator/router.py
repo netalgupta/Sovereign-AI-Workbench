@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Task router / classifier — VIBECODING_SPEC.md CARD 03.
 
 Classifies a user request into a set of fixed task tags via the local

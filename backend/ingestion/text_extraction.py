@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Text extraction — RAG_SPEC.md §2 step 2.
 
 WHY EVERYTHING RETURNS PER-PAGE, NOT ONE JOINED STRING: RAG_SPEC.md's

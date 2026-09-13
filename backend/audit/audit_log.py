@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Append-only audit log — TOOLS.md row 68, NFR-7.
 
 Every approval requested, granted, refused, and executed is recorded with

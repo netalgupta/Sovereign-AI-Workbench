@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Grounded answer generation — RAG_SPEC.md §4.
 
 Ties together grounded_retrieval.py (§3's confidence gate), the exact

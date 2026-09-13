@@ -282,6 +282,7 @@ class RenderManager:
         """Construct python script executed INSIDE Step 2 sandbox to convert docx/xlsx/pptx to PDF & page PNGs."""
         return f"""import sys
 import os
+import shutil
 from pathlib import Path
 
 source_path = Path({repr(source_path_str)})

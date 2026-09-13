@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Local voice note transcription — VIBECODING_SPEC.md CARD 12.
 
 TEAM ADDITION, NOT PS-TRACEABLE — see the card's header note and

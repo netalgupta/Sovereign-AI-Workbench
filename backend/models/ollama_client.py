@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Ollama health check + model pull verification — VIBECODING_SPEC.md CARD 02.
 
 Confirms every model named in the registry has actually been pulled into

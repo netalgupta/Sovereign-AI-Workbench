@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Human approval gate — CLAUDE.md hard constraint #4, NFR-6, TOOLS.md row 67.
 
 "No file write, send, or SAP write action without a human-approval-gate check."

@@ -2565,4 +2565,52 @@ def get_source_content(path: str = Query(..., description="Disk file path or rel
     return Response(content=candidate_path.read_bytes(), media_type=media_type)
 
 
+# ============================================================================
+# Offline Voice Capture & Local Speech-to-Text Endpoints (Step 5)
+# ============================================================================
+
+@router.post("/voice/upload")
+async def upload_voice_note(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+    category: str = Form("temporary"),
+) -> dict:
+    """Receive recorded voice audio blob, save locally, and queue local offline STT job.
+
+    Returns:
+        {"job_id": "vjob_..."}
+    """
+    from backend.tools.audio.voice_manager import get_voice_manager
+
+    content = await file.read()
+    if not content or len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty audio recording submitted")
+
+    filename = file.filename or "voice_recording.webm"
+    content_type = file.content_type or "audio/webm"
+
+    voice_mgr = get_voice_manager()
+    job_id = voice_mgr.submit_voice_note(
+        audio_bytes=content,
+        filename=filename,
+        content_type=content_type,
+        category=category,
+        session_id=session_id,
+    )
+    return {"job_id": job_id}
+
+
+@router.get("/voice/{job_id}")
+def get_voice_job_status(job_id: str) -> dict:
+    """Retrieve voice note STT status, transcript text, or error message."""
+    from backend.tools.audio.voice_manager import get_voice_manager
+
+    voice_mgr = get_voice_manager()
+    job = voice_mgr.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Voice job not found: {job_id}")
+    return job
+
+
+
 

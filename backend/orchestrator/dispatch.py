@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The `dispatch` node and the sub-agent nodes — AGENTS_SPEC.md §3/§6,
 TOOLS.md row 22 (🔴).
 

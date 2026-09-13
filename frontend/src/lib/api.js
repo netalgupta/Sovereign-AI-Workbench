@@ -474,4 +474,43 @@ export async function cleanupSessionAttachments(sessionId = 'default') {
   return { success: true, deleted_count: 0 }
 }
 
+/**
+ * Upload voice recording blob for local offline transcription.
+ */
+export async function uploadVoiceNote(audioBlob, category = 'temporary', sessionId = 'default') {
+  try {
+    const formData = new FormData()
+    formData.append('file', audioBlob, 'voice_recording.webm')
+    formData.append('category', category)
+    if (sessionId) formData.append('session_id', sessionId)
+
+    const res = await fetch('/api/voice/upload', {
+      method: 'POST',
+      body: formData,
+    })
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] uploadVoiceNote error:', err)
+  }
+  return { job_id: `vjob_mock_${Date.now()}` }
+}
+
+/**
+ * Poll STT transcription status for a voice job.
+ */
+export async function getVoiceStatus(jobId) {
+  try {
+    const res = await fetch(`/api/voice/${jobId}`)
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (err) {
+    console.warn('[API] getVoiceStatus error:', err)
+  }
+  return { status: 'failed', transcript: '', error: 'Could not fetch voice status' }
+}
+
+
 

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
+import { usePreviewStore } from '../../store/previewStore'
 import { SourceFileTree } from './SourceFileTree'
 import { AddSourceDirectoryModal } from './AddSourceDirectoryModal'
 
@@ -411,6 +412,7 @@ export function Sidebar() {
               <SourceFileTree
                 tree={tree}
                 filterCategory={sourcesCategory}
+                onPreviewSource={(source) => usePreviewStore.getState().openPreview(source)}
                 onToggleSource={toggleSource}
                 onDeleteSource={handleDeleteSource}
                 compact={false}

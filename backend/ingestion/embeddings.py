@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Embedding generation — RAG_SPEC.md §2 step 5.
 
 Exact model (BAAI/bge-large-en-v1.5), exact batch size (32), and
