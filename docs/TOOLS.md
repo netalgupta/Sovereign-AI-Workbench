@@ -97,7 +97,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
 | 33 | Code generation (routed) | Aditya | built | 🔴 | FR-13 |
-| 34 | Sandboxed execution (Docker, no network) | Aditya | not started | 🔴 | FR-13, NFR core |
+| 34 | Sandboxed execution (Docker, no network) | Aditya | built | 🔴 | FR-13, NFR core. **BUILT** — warm Docker pool, `--network none`, memory/CPU limits, read-only root, timeout. Egress isolation is PROVEN by test (`test_sandbox.py` asserts the container cannot reach 1.1.1.1), not merely configured. Now driven end to end by `backend/orchestrator/code_generation.py`: qwen2.5-coder:7b writes the program, the sandbox runs it, and the OUTPUT is checked — a program that exits 0 and prints nothing is reported FAILED, because "ran" is not "verified". Measured: "first 10 Fibonacci numbers" → `[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]`, 9.6s to generate, 4.0s to run warm. |
 | 35 | Automated test generation + run | Aditya | not started | 🟡 | Strengthens the verification story |
 | 36 | Static analysis/linting pass | Aditya | not started | ⚪ | Registry-listed |
 | 37 | Internal tool scaffolding | Aditya | not started | ⚪ | Registry-listed |
@@ -125,7 +125,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 45 | Full audit log | Aditya | built | 🔴 | NFR-7 |
 | 46 | RBAC on knowledge base | Sahil | not started | 🟡 | Basic tiers sufficient for demo |
 | 47 | Model provenance tracking | Sahil | not started | ⚪ | Registry-listed |
-| 48 | Encrypted-at-rest storage | Sahil | not started | 🔴 | NFR-3 |
+| 48 | Encrypted-at-rest storage | **Aditya** | not started | 🔴 | NFR-3. Owner corrected from Sahil: `docs/OWNERSHIP.md` line 119 assigns "Encryption at rest" to Aditya and is the tie-breaker per CLAUDE.md, and `Aditya.md`'s own scope lists it. Covers the persisted stores — `backend/memory/*.db`, the FAISS index and its SQLite sidecar, `backend/audit/*.jsonl`, and `outputs/`. AES-256 or equivalent per REQUIREMENTS.md NFR-3. |
 | 49 | SAP read-only connector | Aditya | not started | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
 | 50 | Portable/air-gapped packaging | Aditya | not started | 🔴 | NFR-2 |
 
