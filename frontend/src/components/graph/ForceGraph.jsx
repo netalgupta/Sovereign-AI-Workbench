@@ -31,6 +31,13 @@ export function ForceGraph({
   onSelect,
   reheatToken = 0,
   focusId = null,
+  // Hop-by-hop reveal: a Set<number> of distances that are currently visible.
+  // Nodes whose `distance` property is NOT in this set are drawn at low opacity.
+  // Pass `null` (default) to disable — all nodes fully visible (backward-compatible).
+  revealByDistance = null,
+  // Nodes to render with a bright highlight pulse (neighbourhood result set).
+  // A Set<string> of node ids.
+  highlightIds = null,
 }) {
   const canvasRef = useRef(null)
   const stateRef = useRef({
@@ -114,6 +121,16 @@ export function ForceGraph({
     const visible = (n) => !labelFilter || n.labels.includes(labelFilter)
     const radius = (n) =>
       5 + Math.min(n.degree, 8) * 1.4 + (n.id === selectedId ? 2 : 0)
+
+    // Hop-reveal: if revealByDistance is active, a node is "revealed" only when
+    // its .distance is in the set. Unrevealed nodes render at low opacity so the
+    // sequential unfold reads as an explanation rather than a simultaneous dump.
+    const isRevealed = (n) => {
+      if (!revealByDistance) return true
+      return revealByDistance.has(n.distance ?? 0)
+    }
+    // Neighbourhood highlight: these nodes get a pulsing outer glow.
+    const isHighlighted = (n) => !!(highlightIds?.has(n.id))
 
     const step = () => {
       const st = stateRef.current
@@ -237,6 +254,19 @@ export function ForceGraph({
         const shouldDim =
           (selectedId || st.hover) && !isSelected && !isHovered && !isConnectedToActive
 
+        // Hop-reveal opacity: unrevealed nodes are ghost-dim so the reveal reads as sequential
+        const revealed = isRevealed(n)
+        const highlighted = isHighlighted(n)
+
+        // Neighbourhood highlight glow ring (drawn before the node so it sits under it)
+        if (highlighted && revealed) {
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, r + 7, 0, Math.PI * 2)
+          ctx.fillStyle = accent
+          ctx.globalAlpha = 0.28
+          ctx.fill()
+        }
+
         // Outer glow/aura for selected or hovered nodes
         if (isSelected || isHovered) {
           ctx.beginPath()
@@ -246,7 +276,10 @@ export function ForceGraph({
           ctx.fill()
         }
 
-        ctx.globalAlpha = shouldDim ? 0.35 : 1
+        // Unrevealed nodes are rendered at very low opacity (ghost) so the hop
+        // unfold animation reads as nodes "appearing" one hop at a time
+        const baseAlpha = revealed ? (shouldDim ? 0.35 : 1) : 0.12
+        ctx.globalAlpha = baseAlpha
 
         // Main node circle
         ctx.beginPath()
@@ -264,6 +297,10 @@ export function ForceGraph({
         } else if (isHovered) {
           ctx.strokeStyle = '#FFFFFF'
           ctx.lineWidth = 1.8
+          ctx.stroke()
+        } else if (highlighted && revealed) {
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 2
           ctx.stroke()
         } else {
           ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.65)'
@@ -397,7 +434,7 @@ export function ForceGraph({
       canvas.removeEventListener('pointerup', onUp)
       canvas.removeEventListener('wheel', onWheel)
     }
-  }, [labelFilter, selectedId, onSelect, height, cssVar])
+  }, [labelFilter, selectedId, onSelect, height, cssVar, revealByDistance, highlightIds])
 
   return <canvas ref={canvasRef} className="block w-full touch-none" style={{ height }} />
 }

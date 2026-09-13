@@ -13,6 +13,8 @@ import {
   Network,
   Maximize2,
   ArrowUpRight,
+  Activity,
+  ShieldCheck,
 } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
@@ -749,6 +751,47 @@ export function Sidebar() {
               </span>
             </div>
           </div>
+
+          {/* ROUTES THAT EXISTED WITH NO WAY IN.
+             *
+             * /graph, /instrumentation and /monitor were reachable only
+             * by typing the URL. Two of them are finished work by a
+             * teammate -- the graph explorer and the agent-stream view --
+             * and /graph was worse than missing: it rendered a
+             * placeholder drawing a hardcoded graph, so it looked like
+             * it worked.
+             *
+             * A feature nobody can navigate to does not exist as far as
+             * a demo is concerned. */}
+          <Link
+            to="/graph"
+            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            style={{ color: 'var(--color-text-muted)' }}
+            title="Knowledge Graph Explorer (/graph)"
+            aria-label="Graph explorer"
+          >
+            <Network size={14} strokeWidth={2} />
+          </Link>
+
+          <Link
+            to="/instrumentation"
+            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            style={{ color: 'var(--color-text-muted)' }}
+            title="Agent stream, retrieval trace, ingestion feed (/instrumentation)"
+            aria-label="Instrumentation"
+          >
+            <Activity size={14} strokeWidth={2} />
+          </Link>
+
+          <Link
+            to="/monitor"
+            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            style={{ color: 'var(--color-text-muted)' }}
+            title="Network monitor - proof of no outbound calls (/monitor)"
+            aria-label="Network monitor"
+          >
+            <ShieldCheck size={14} strokeWidth={2} />
+          </Link>
 
           {/* Settings / Overflow trigger */}
           <Link

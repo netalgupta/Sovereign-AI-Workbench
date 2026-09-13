@@ -79,6 +79,8 @@ def decide_path(request: str) -> PathDecision:
 
     # Safety-critical commands to change setpoints, files, or write to external systems
     # must be intercepted before executing any model or tool step (FR-15 / Hard constraint #4).
+    # Safety gate runs BEFORE cheap intent — an operator command that
+    # looks like a greeting must still be gated, not fast-pathed.
     from backend.orchestrator.graph import classify_action_request
     action_kind = classify_action_request(text)
     if action_kind is not None:
@@ -88,7 +90,8 @@ def decide_path(request: str) -> PathDecision:
             False,
         )
 
-    # CHEAP INTENTS FIRST. "HolA aMIGO" previously ran the LLM planner
+    # CHEAP INTENTS NEXT -- after the safety gate above, never before
+    # it. "HolA aMIGO" previously ran the LLM planner
     # (10.5s), a three-step fallback plan about safety envelopes, a
     # corpus search, and a grounding refusal naming the three documents
     # closest to a Spanish greeting -- 46.56 seconds to say "not found".
