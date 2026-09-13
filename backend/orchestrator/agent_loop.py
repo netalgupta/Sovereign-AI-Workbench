@@ -787,51 +787,92 @@ def _answer(
     }
 
     if decision.path == "approval":
+        # INTERCEPTION ON THIS PATH IS RIGHT. THE PAYLOAD WAS NOT.
+        #
+        # The streaming endpoint had no action gate at all, so a write
+        # request reached the tool loop -- catching that here is a real
+        # fix and it stays.
+        #
+        # What arrived with it was the fabricated approval payload,
+        # hardcoded in the backend for EVERY intercepted action:
+        #
+        #     action_type   DCS_SETPOINT_WRITE
+        #     target        HCU-2 / FFC-201
+        #     current       100% (1,450 m3/h)
+        #     proposed      115% (1,667 m3/h)
+        #     risk_level    CRITICAL
+        #     warning       "Operating above 110% reduces catalyst
+        #                    residence time (LHSV > 1.8 h-1)..."
+        #
+        # So "Draft an approval note and save it" asked an operator to
+        # authorise a feed-rate change on FFC-201. This is the same
+        # defect fixed in 879a8ef, and this time it is WORSE: it was
+        # removed from ApprovalModal.jsx and moved into the backend, so
+        # the frontend now renders invented figures as authoritative
+        # backend data. A visible fallback became an invisible claim.
+        #
+        # An approval screen that describes a different action than the
+        # pending one is not a safety control. It is consent obtained
+        # under a false description, and it produces a signed audit
+        # record for something nobody approved.
+        #
+        # The action is resolved instead -- same resolver the
+        # non-streaming path uses, so the two cannot describe the same
+        # request differently.
         from backend.audit.approval_gate import ApprovalGate
+        from backend.orchestrator.action_resolver import resolve as resolve_action
         from backend.orchestrator.graph import classify_action_request
 
-        action_kind = classify_action_request(request) or "critical parameter modification"
+        action_kind = classify_action_request(request) or "operator action"
+        resolved = resolve_action(request, action_kind, session_id=session_id)
+
         gate = ApprovalGate()
         app_req = gate.request(
-            tool_name="operator_requested_action",
-            arguments={"command": request, "category": action_kind},
-            effect=(
-                f"Operator-requested {action_kind}: \"{request.strip()}\". "
-                f"Target parameter requires manual operator confirmation before setpoint update."
+            tool_name=resolved.tool_name or "unsupported_action",
+            arguments=(
+                resolved.arguments
+                if resolved.executable
+                else {"command": request, "category": action_kind}
             ),
+            effect=resolved.effect,
         )
 
+        # Only fields the system actually knows. A field it cannot know
+        # is ABSENT, never filled with a plausible placeholder: an empty
+        # field reads as unknown, a plausible one reads as measured.
         approval_action = {
             "id": app_req.request_id,
-            "title": "Confirm Operational Setpoint Modification",
-            "action_type": "DCS_SETPOINT_WRITE",
-            "target": "HCU-2 / FFC-201",
+            "title": f"Confirm {action_kind}",
+            "action_type": action_kind,
             "description": app_req.effect,
-            "detail": f"Action parameter: {request.strip()}",
-            "current_value": "100% (1,450 m³/h)",
-            "proposed_value": "115% (1,667 m³/h)",
-            "unit": "m³/h",
-            "parameter": "FFC-201.SP (Feed Rate Setpoint)",
-            "risk_level": "CRITICAL",
-            "warning": (
-                "Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) "
-                "and increases exothermic runaway risk."
-            ),
+            "detail": request.strip(),
+            "executable": resolved.executable,
+            "tool_name": resolved.tool_name,
+            "preview": resolved.preview,
+            "reason": resolved.reason,
         }
 
-        reply = (
-            f"**Action intercepted — human approval required.**\n\n"
-            f"This request was classified as a **{action_kind}**, which safety "
-            f"interlock constraint [FR-15 / §3.12] does not permit the system to perform unattended.\n\n"
-            f"> 🛑 **Safety Interlock Gate [FR-15 / §3.12]** — nothing has been executed. "
-            f"DCS setpoint write is locked until an operator authorizes the action in the approval modal."
-        )
+        lines = [
+            "**Action intercepted — human approval required.**",
+            "",
+            f"This request was classified as a **{action_kind}**, which hard "
+            f"constraint #4 does not permit the system to perform unattended.",
+            "",
+        ]
+        if resolved.executable:
+            lines += ["> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                      "executed yet. Approving carries this out:", ""]
+            lines += [f"- {line}" for line in resolved.preview]
+        else:
+            lines += ["> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                      "executed, and nothing can be:", "", resolved.reason]
+        reply = "\n".join(lines)
 
         yield {
             "type": "plan",
             "steps": [{
-                "step_id": "interlock_gate",
-                "description": f"Safety Interlock Gate: Authorize {action_kind}",
+                "step_id": "approval",
+                "description": f"Human approval for: {action_kind}",
                 "assigned_agent": "reasoning",
                 "status": "pending",
                 "depends_on": [],
@@ -841,8 +882,8 @@ def _answer(
         yield {
             "type": "approval_required",
             "id": app_req.request_id,
-            "name": "DCS_SETPOINT_WRITE",
-            "arguments": {"command": request, "category": action_kind},
+            "name": resolved.tool_name or "unsupported_action",
+            "arguments": app_req.arguments,
             "effect": app_req.effect,
             "action": approval_action,
         }
@@ -855,6 +896,7 @@ def _answer(
             "seconds": 0.05,
             "awaiting_approval": True,
             "approval_action": approval_action,
+            "citations": [],
         }
         return
 

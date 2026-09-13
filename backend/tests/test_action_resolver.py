@@ -209,3 +209,163 @@ def test_ordinary_mentions_of_signing_are_left_alone():
         cleaned, removed = strip_signature_block(text)
         assert removed is None, f"wrongly stripped: {text!r}"
         assert cleaned == text
+
+
+# ---------------------------------------------------------------------
+# Regressions that arrived with a branch merge. The suite passed at 419
+# with all three present, which is why each is pinned here by hand.
+# ---------------------------------------------------------------------
+
+
+def test_the_streaming_approval_payload_describes_the_pending_action():
+    """It arrived hardcoded, in the backend, for EVERY intercepted action:
+
+        action_type   DCS_SETPOINT_WRITE
+        target        HCU-2 / FFC-201
+        current       100% (1,450 m3/h)
+        proposed      115% (1,667 m3/h)
+        risk_level    CRITICAL
+
+    So "Draft an approval note and save it" asked an operator to
+    authorise a feed-rate change on FFC-201. The same defect as 879a8ef,
+    and worse: it was removed from ApprovalModal.jsx and moved into the
+    backend, so the UI renders invented figures as authoritative data.
+    A visible fallback became an invisible claim.
+    """
+    import os
+
+    os.environ["WORKBENCH_TRACE"] = "off"
+    from backend.orchestrator.agent_loop import run_turn
+
+    events = list(run_turn("Increase the HCU-2 feed rate to 115%", session_id="t-appr"))
+    required = [e for e in events if e["type"] == "approval_required"]
+    assert required, "a setpoint write reached the tool loop ungated"
+
+    action = required[0]["action"]
+    invented = [
+        field
+        for field in ("current_value", "proposed_value", "target", "risk_level",
+                      "unit", "parameter", "warning")
+        if field in action
+    ]
+    assert not invented, f"fields the system cannot know were filled in: {invented}"
+
+    # It describes what was actually detected, and says plainly that it
+    # cannot be carried out -- at the point of asking, not after consent.
+    assert action["action_type"] == "setpoint change"
+    assert action["executable"] is False
+    assert action["tool_name"] is None
+    assert action["reason"]
+
+
+def test_both_paths_describe_the_same_request_the_same_way():
+    """Two implementations of one decision is how they drift. The
+    non-streaming path resolves through action_resolver; so must this
+    one."""
+    import os
+
+    os.environ["WORKBENCH_TRACE"] = "off"
+    from backend.orchestrator.agent_loop import run_turn
+    from backend.orchestrator.graph import run_agent_turn
+
+    request = "Draft an approval note on the CCR1 inspection findings and save it"
+
+    events = list(run_turn(request, session_id="t-both-a"))
+    streamed = [e for e in events if e["type"] == "approval_required"][0]["action"]
+
+    state = run_agent_turn(request, "t-both-b")
+    assert state.awaiting_human_approval
+
+    from backend.audit.approval_gate import ApprovalGate
+
+    graph_req = ApprovalGate().get(state.final_output_path)
+
+    assert streamed["tool_name"] == graph_req.tool_name == "draft_docx"
+    assert streamed["executable"] is True
+
+
+# ---------------------------------------------------------------------
+# An approval is a record that a person authorised a SPECIFIC action.
+# ---------------------------------------------------------------------
+
+
+def test_an_approval_cannot_be_manufactured_for_a_request_that_does_not_exist():
+    """The merged fallback caught any failure from approve() and, rather
+    than reporting it, REGISTERED A NEW REQUEST and approved that --
+    returning the caller's request_id with a token belonging to a
+    different one.
+
+    approve() fails for exactly the reasons that matter: the request
+    expired (the TTL exists because a decision made in a context that is
+    gone should not still act), was already used (single-use exists so
+    one approval cannot authorise a retry loop), or never existed.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/approvals/resolve",
+        json={"request_id": "req-does-not-exist", "confirmed": True, "operator": "t"},
+    )
+    assert response.status_code in (404, 409), response.text
+    assert "approved" not in response.text.lower() or response.status_code >= 400
+
+
+def test_a_used_approval_cannot_be_approved_again():
+    """Single-use is the property that stops one approval authorising a
+    retry loop."""
+    from fastapi.testclient import TestClient
+
+    from backend.audit.approval_gate import ApprovalGate
+    from backend.main import app
+
+    gate = ApprovalGate()
+    request = gate.request(
+        tool_name="draft_docx",
+        arguments={"title": "t", "sections": [], "output_path": "x.docx"},
+        effect="test",
+    )
+    gate.approve(request.request_id, approved_by="first")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/approvals/resolve",
+        json={"request_id": request.request_id, "confirmed": True, "operator": "second"},
+    )
+    assert response.status_code >= 400, (
+        "an already-approved request was approved a second time: "
+        f"{response.text}"
+    )
+
+
+def test_a_refusal_that_was_not_recorded_does_not_report_success():
+    """The audit log is the evidence that a person said no. Claiming an
+    entry exists when it does not is a false record, and the direction of
+    that lie is the dangerous one."""
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/approvals/resolve",
+        json={"request_id": "req-never-made", "confirmed": False, "operator": "t"},
+    )
+    assert response.status_code >= 400, response.text
+
+
+def test_the_audit_endpoint_works_without_a_request_id():
+    """My own bug, found by Advay: routes.py called log.entries(), which
+    AuditLog does not have -- only all() and for_request(). Every call
+    without a request_id was a 500, and nothing in the suite covered it.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/audit?limit=5")
+    assert response.status_code == 200, response.text
+    assert "entries" in response.json()

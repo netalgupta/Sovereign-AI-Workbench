@@ -2435,18 +2435,40 @@ def resolve_approval(body: ApprovalResolveBody) -> dict:
 
     gate = ApprovalGate()
     if body.confirmed:
+        # THE FALLBACK HERE DEFEATED EVERY PROPERTY OF THE GATE.
+        #
+        # It caught any failure from approve() and, instead of
+        # reporting it, REGISTERED A NEW REQUEST and approved that --
+        # returning the caller's original request_id alongside a token
+        # belonging to a different one. approve() fails for exactly the
+        # reasons that matter:
+        #
+        #   expired      the 15-minute TTL exists because a decision
+        #                made in a context that is gone should not still
+        #                act. The fallback silently renewed it.
+        #   already used single-use exists so one approval cannot
+        #                authorise a retry loop. The fallback minted a
+        #                second one.
+        #   unknown id   a request that was never made got approved.
+        #
+        # An approval is a record that a person authorised a SPECIFIC
+        # action with SPECIFIC arguments. Manufacturing one because the
+        # real one could not be found is the one thing this endpoint
+        # must never do. The failure is reported instead.
         try:
             approved = gate.approve(body.request_id, approved_by=body.operator)
-            token = approved.token
-        except Exception:
-            # If the request was emitted without prior record, register and approve it
-            req = gate.request(
-                tool_name="operator_confirmed_action",
-                arguments={"request_id": body.request_id},
-                effect=f"Authorized action {body.request_id}",
-            )
-            approved = gate.approve(req.request_id, approved_by=body.operator)
-            token = approved.token
+        except KeyError as exc:
+            raise HTTPException(404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - expired, refused, already used
+            raise HTTPException(
+                409,
+                detail=(
+                    f"{exc} This approval was not granted. Re-issue the request "
+                    f"and approve the new one -- an approval cannot be renewed "
+                    f"after it expires or is used."
+                ),
+            ) from exc
+        token = approved.token
 
         return {
             "status": "approved",
@@ -2455,10 +2477,18 @@ def resolve_approval(body: ApprovalResolveBody) -> dict:
             "message": f"Action authorized by {body.operator}.",
         }
     else:
+        # A refusal that was not recorded must not report success. The
+        # audit log is the evidence that a person said no; claiming an
+        # entry exists when it does not is a false record, and the
+        # direction of the lie is the dangerous one.
         try:
-            gate.refuse(body.request_id, refused_by=body.operator, reason="Cancelled by operator")
-        except Exception:
-            pass
+            gate.refuse(
+                body.request_id, refused_by=body.operator, reason="Cancelled by operator"
+            )
+        except KeyError as exc:
+            raise HTTPException(404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(409, detail=f"Refusal not recorded: {exc}") from exc
         return {
             "status": "refused",
             "request_id": body.request_id,
