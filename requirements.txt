@@ -79,4 +79,12 @@ psutil==7.0.0
 # libraries live in sibling nvidia/*/bin directories that Windows does
 # not search, and it imports torch before registering them so torch
 # binds its own DLLs first.
-nvidia-cudnn-cu12==9.10.2.21   # MUST match torch's bundled cuDNN
+#     pip install nvidia-cudnn-cu12==9.10.2.21
+#
+# NOT LISTED AS A REQUIREMENT, and that was a mistake for about an hour.
+# It is a GPU-specific pin that only matters on a machine running
+# paddlepaddle-gpu alongside torch. Putting it in the install list means
+# every teammate's `pip install -r requirements.txt` downloads ~700 MB
+# of CUDA libraries they have no use for, and on a CPU-only box it can
+# move a shared dependency for no benefit. A machine-specific fix does
+# not belong in a shared requirements file.

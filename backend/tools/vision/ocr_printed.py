@@ -59,6 +59,9 @@ class OCRResult(BaseModel):
 _ocr_instance = None
 
 
+_device_cache: str | None = None
+
+
 def _ocr_device() -> str:
     """"gpu" when this build of paddle can actually reach one, else "cpu".
 
@@ -72,8 +75,13 @@ def _ocr_device() -> str:
     CPU path without uninstalling anything, which is the difference
     between a config change and a reinstall five minutes before a demo.
     """
+    global _device_cache
+    if _device_cache is not None:
+        return _device_cache
+
     override = (os.environ.get("WORKBENCH_OCR_DEVICE") or "").strip().lower()
     if override in ("cpu", "gpu"):
+        _device_cache = override
         return override
     try:
         # Before importing paddle, not after: the CUDA DLLs live in
@@ -88,20 +96,39 @@ def _ocr_device() -> str:
         import paddle
 
         if paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+            _device_cache = "gpu"
             return "gpu"
     except Exception:  # noqa: BLE001 - a probe must never break OCR
         pass
+    _device_cache = "cpu"
     return "cpu"
 
 
 def ocr_device() -> str:
-    """The device OCR will use. Exposed so /api/health can report it.
+    """The device OCR will use, determining it if necessary (~4s cold).
 
     A pipeline that silently fell back to CPU looks identical to one
     that chose CPU, which is how "the GPU is not working" becomes an
-    afternoon of guessing.
+    afternoon of guessing. Memoised: the cost is paid once per process.
     """
     return _ocr_device()
+
+
+def ocr_device_if_known() -> str:
+    """The device, ONLY if it has already been determined.
+
+    A HEALTH CHECK MUST NOT DO EXPENSIVE WORK. ocr_device() imports
+    torch and paddle to answer, which is 3.87s on a cold process --
+    measured -- and /api/health is polled by the frontend. A health
+    endpoint that blocks a worker for four seconds is not reporting
+    health, it is degrading it, and with a single worker every other
+    request queues behind it.
+
+    Returns "not-initialised" rather than a guess. That is a real
+    answer: OCR has not run yet, so there is nothing to report, and
+    guessing "cpu" here would be a wrong claim on a GPU machine.
+    """
+    return _device_cache or "not-initialised"
 
 
 def _get_ocr_instance():

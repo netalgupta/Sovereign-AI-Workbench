@@ -176,3 +176,96 @@ def test_degradation_is_reportable():
         assert "hash" in reason.lower()
     finally:
         embeddings._active_backend = original
+
+
+def test_concurrent_callers_do_not_race_the_model_load():
+    """THE BUG THAT LOOKED LIKE "everything broke".
+
+    FastAPI runs sync endpoints in a threadpool, so a chat turn, a
+    /api/verify and the Sources page polling all reach _get_model() at
+    once. Observed in a real log -- three loads in the same millisecond:
+
+        [22:23:06,201] Load pretrained SentenceTransformer: ...bge-large
+        [22:23:06,202] Load pretrained SentenceTransformer: ...bge-large
+        [22:23:06,203] Load pretrained SentenceTransformer: ...bge-large
+
+    then:
+
+        NotImplementedError: Cannot copy out of meta tensor; no data!
+
+    torch materialises from meta device during construction and that is
+    not reentrant for the same weights. One load wins, the others raise,
+    and the failure branch flips _active_backend to deterministic-hash
+    FOR THE WHOLE PROCESS -- so searches keep returning results, answers
+    keep carrying citations, and the content is wrong.
+
+    Two people using the app at once was enough to trigger it.
+    """
+    import threading
+
+    from backend.ingestion import embeddings
+
+    loads = []
+    real_loader = embeddings._load_model_locked
+
+    def counting_loader():
+        loads.append(threading.current_thread().name)
+        return real_loader()
+
+    embeddings._model = None
+    embeddings._load_failed = False
+    embeddings._load_model_locked = counting_loader
+    try:
+        errors = []
+
+        def worker():
+            try:
+                embeddings.embed_texts(["a short probe sentence"])
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=180)
+
+        assert not errors, f"concurrent embedding raised: {errors[:2]}"
+        # The load happens ONCE however many callers arrive together.
+        assert len(loads) <= 1, (
+            f"the model was loaded {len(loads)} times concurrently -- this is the "
+            f"race that silently degrades the whole process to hash vectors"
+        )
+    finally:
+        embeddings._load_model_locked = real_loader
+
+
+def test_a_concurrent_load_does_not_degrade_the_backend():
+    """The consequence, asserted separately from the cause.
+
+    The dangerous part is not the exception -- it is that the except
+    branch sets _active_backend to hash vectors process-wide, and hash
+    vectors look exactly like working retrieval.
+    """
+    import threading
+
+    from backend.ingestion import embeddings
+
+    def worker():
+        embeddings.embed_texts(["another probe"])
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=180)
+
+    backend_name = embeddings.active_backend()
+    if backend_name == embeddings.FALLBACK_BACKEND:
+        import pytest
+
+        pytest.skip(
+            "the embedding model is not present on this machine, so the fallback "
+            "is correct here rather than a race"
+        )
+    assert backend_name == embeddings.SEMANTIC_BACKEND

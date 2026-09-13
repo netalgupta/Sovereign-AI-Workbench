@@ -37,11 +37,17 @@ router = APIRouter(prefix="/api")
 # ---------------------------------------------------------------- health
 
 def _ocr_device_status() -> str:
-    """"gpu", "cpu", or "unavailable" - never a guess."""
-    try:
-        from backend.tools.vision.ocr_printed import ocr_device
+    """The OCR device, WITHOUT forcing the probe that determines it.
 
-        return ocr_device()
+    The forcing version imports torch and paddle -- 3.87s cold,
+    measured -- and this is called by /api/health, which the frontend
+    polls. A health check that blocks a worker for four seconds is not
+    reporting health, it is degrading it.
+    """
+    try:
+        from backend.tools.vision.ocr_printed import ocr_device_if_known
+
+        return ocr_device_if_known()
     except Exception:  # noqa: BLE001
         return "unavailable"
 
@@ -68,6 +74,9 @@ def health() -> dict:
     """
     state = get_state()
     graph = state.graph()
+    # Probed ONCE. This was called three times to fill three adjacent
+    # fields, which is three times the work for one answer.
+    _embedding_status = _embedding_backend_status()
     return {
         "ok": True,
         "status": "ok",
@@ -82,9 +91,9 @@ def health() -> dict:
         # is how "the GPU is not working" becomes an afternoon of
         # guessing. Measured difference on this box: 21.08s vs 0.61s.
         "ocr_device": _ocr_device_status(),
-        "embedding_backend": _embedding_backend_status()[0],
-        "embeddings_degraded": _embedding_backend_status()[1] is not None,
-        "embeddings_degraded_reason": _embedding_backend_status()[1],
+        "embedding_backend": _embedding_status[0],
+        "embeddings_degraded": _embedding_status[1] is not None,
+        "embeddings_degraded_reason": _embedding_status[1],
         "graph_available": graph.get("available", False),
         "graph_error": graph.get("error"),
         "images_stored": len(state.image_store.all_records()),
