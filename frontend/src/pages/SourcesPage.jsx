@@ -879,7 +879,34 @@ export function SourcesPage() {
                     Rebuild: <code>py -3 -m backend.evaluation.build_graph</code>
                   </span>
                 ) : graph?.source === 'live' ? (
-                  <span> in Neo4j</span>
+                  <>
+                    <span> in Neo4j</span>
+                    {/* COVERAGE, because "101 nodes in Neo4j" is true and
+                        still misleading. The graph is built from an
+                        ENTITY EXTRACTION CACHE covering the documents
+                        that were extracted -- 13 of them -- and adding a
+                        source updates the corpus and the chunk index but
+                        never runs extraction. So the graph silently
+                        describes a fraction of what is loaded, and the
+                        only way to notice was to count the labels. */}
+                    {(() => {
+                      const inGraph = new Set(
+                        (graph?.nodes || [])
+                          .filter((n) => (n.labels || []).includes('Document'))
+                          .map((n) => n.name || n.properties?.name)
+                          .filter(Boolean)
+                      )
+                      const total = corpusData?.sources?.length ?? 0
+                      if (!total || inGraph.size >= total) return null
+                      return (
+                        <span style={{ color: 'var(--color-warning, #a8760f)' }}>
+                          {' '}— built from {inGraph.size} of {total} loaded document(s).
+                          Entity extraction does not run when a source is added;
+                          it is a separate pass.
+                        </span>
+                      )
+                    })()}
+                  </>
                 ) : (
                   <span style={{ color: 'var(--color-text-faint)' }}> — source unknown</span>
                 )}
