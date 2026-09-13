@@ -733,48 +733,55 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
                 step.status = "done"
 
             elif step.assigned_agent == "code":
+                # GENERATE, THEN RUN. This branch used to execute a
+                # FIXED probe -- a socket check proving the sandbox
+                # worked and had no network. That was honest about what
+                # it established, and it is not a coding task: the
+                # problem statement asks for "a coding task run and
+                # verified in a sandbox", and nothing ever produced code
+                # for the sandbox to run.
+                #
+                # Both halves already existed. run_code_step(step, code)
+                # executes untrusted code with --network none and its
+                # isolation is proven by test. Nothing called it with a
+                # program, because nothing wrote one.
+                from backend.orchestrator.code_generation import (
+                    CodeGenerationError,
+                    run_generated_code,
+                )
+
                 try:
-                    from backend.sandbox.executor import run_in_sandbox
-                    # The sandbox previously ran a fixed
-                    # print('Sandboxed verification check: OK'), which
-                    # proved only that the sandbox could echo a string
-                    # while displaying the word "verification" in the
-                    # trace. Until CARD 04 supplies generated code, the
-                    # honest thing is a real, self-describing probe whose
-                    # output says what it actually established: that the
-                    # sandbox executes and has no network.
-                    result = run_in_sandbox(
-                        code=(
-                            "import socket, sys\n"
-                            "try:\n"
-                            "    socket.create_connection(('1.1.1.1', 53), timeout=2)\n"
-                            "    print('SANDBOX NETWORK REACHABLE - egress isolation FAILED')\n"
-                            "except OSError:\n"
-                            "    print(f'sandbox ok: python {sys.version_info.major}."
-                            "{sys.version_info.minor}, network unreachable (isolated)')\n"
-                        ),
-                        session_id=state.session_id,
-                        language="python",
-                        timeout_seconds=10,
-                    )
                     tool_log.append(
-                        ToolCallEvent(
-                            tool_name="sandbox_python",
-                            input_params={"language": "python"},
-                            output={"stdout": result.stdout, "exit_code": result.exit_code},
-                            status="done" if result.exit_code == 0 else "failed",
+                        run_generated_code(
+                            step,
+                            step.description,
+                            session_id=state.session_id,
                         )
                     )
-                except Exception as exc:
+                except CodeGenerationError as exc:
+                    # The model did not return code. Recorded as a
+                    # failure rather than falling back to a canned
+                    # program, which would make the trace show a coding
+                    # task nobody asked for.
                     tool_log.append(
                         ToolCallEvent(
-                            tool_name="sandbox_python",
-                            input_params={"language": "python"},
+                            tool_name="generate_code",
+                            input_params={"task": step.description},
                             output={"error": str(exc)},
-                            status="done",
+                            status="failed",
                         )
                     )
-                step.status = "done"
+                    step.status = "failed"
+                except Exception as exc:  # noqa: BLE001
+                    tool_log.append(
+                        ToolCallEvent(
+                            tool_name="sandbox_python",
+                            input_params={"task": step.description},
+                            output={"error": f"{type(exc).__name__}: {exc}"},
+                            status="failed",
+                        )
+                    )
+                    step.status = "failed"
 
             elif step.assigned_agent in ("vision", "reasoning"):
                 step.status = "done"

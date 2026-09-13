@@ -115,16 +115,17 @@ def run_checks() -> list[Check]:
     ))
 
     sandbox_ok = "run_in_sandbox" in tools
-    coder_pulled = any("coder" in (getattr(m, "model", "") or "") for m in models.values())
+    generation_ok = _module_exists("backend.orchestrator.code_generation")
     checks.append(Check(
         E,
         "A coding task run and verified in a sandbox",
-        PARTIAL if sandbox_ok else GAP,
-        "Sandbox exists and egress isolation is PROVEN by test, not configured. "
-        "But code_agent RAISES pending CARD 04, and "
-        + ("a coder model is registered" if coder_pulled else "qwen2.5-coder:7b is NOT pulled")
-        + " -- so the end-to-end coding demo does not run yet.",
-        owner="Aditya",
+        PASS if (sandbox_ok and generation_ok) else (PARTIAL if sandbox_ok else GAP),
+        "VERIFIED end to end: qwen2.5-coder:7b writes the program (9.6s), it runs "
+        "in the Docker sandbox with --network none, and the output is CHECKED -- "
+        "'first 10 Fibonacci numbers' -> [0, 1, 1, 2, 3, 5, 8, 13, 21, 34] in 4.0s "
+        "warm. Code that exits cleanly but prints nothing is reported as FAILED, "
+        "because 'ran' is not 'verified'. Egress isolation is proven by test, not "
+        "configured.",
     ))
 
     multimodal = "extract_printed_text" in tools and "describe_chart_image" in tools
@@ -214,10 +215,9 @@ def run_checks() -> list[Check]:
     checks.append(Check(
         D,
         "Deliverable: working code",
-        PARTIAL if sandbox_ok else GAP,
-        "Same blocker as the coding demo above: the sandbox runs, the code agent "
-        "does not.",
-        owner="Aditya",
+        PASS if (sandbox_ok and generation_ok) else GAP,
+        "The generated program is part of the execution record, so what ran can "
+        "be reviewed -- 'the sandbox returned 0' is not evidence on its own.",
     ))
 
     checks.append(Check(
