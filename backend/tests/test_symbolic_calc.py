@@ -60,3 +60,47 @@ def test_no_eval_call_anywhere_in_the_module():
     ]
 
     assert eval_calls == [], "symbolic_calc.py must never call the eval() builtin"
+
+
+def test_a_statistical_call_is_redirected_to_the_tool_that_can_do_it():
+    """MEASURED on a real turn: asked for mean, median, variance and
+    standard deviation of two spreadsheet columns, the model called this
+    tool TWELVE times with mean([...]), median([...]), variance([...]),
+    stddev([...]). Every one raised "Could not parse expression", which
+    told it nothing, so it tried the same shape again -- burning all
+    eight iterations and 237 seconds and returning no answer.
+
+    The calls were not unreasonable. Statistics over a list IS something
+    this workbench does, in describe_series. Nothing told the one place
+    that could say so.
+    """
+    import pytest
+
+    from backend.tools.math.symbolic_calc import evaluate_expression
+
+    for expression in (
+        "mean([99.914, 99.872, 99.939])",
+        "median([1, 2, 3])",
+        "variance([1, 2, 3])",
+        "stddev([1, 2, 3])",
+        "mode([1, 1, 2])",
+    ):
+        with pytest.raises(ValueError) as exc:
+            evaluate_expression(expression)
+        message = str(exc.value)
+        assert "describe_series" in message, (
+            f"{expression} failed without naming the tool that can do it: {message}"
+        )
+        # The correct call SHAPE, not just the tool name -- the failure
+        # mode was the model not knowing what to type next.
+        assert "values=" in message
+
+
+def test_ordinary_algebra_is_untouched_by_the_redirect():
+    """The redirect matches a statistical call at the START of the
+    expression, so algebra that merely contains such a word is not
+    hijacked."""
+    from backend.tools.math.symbolic_calc import evaluate_expression
+
+    assert evaluate_expression("(12 + 8) * 3").result == "60"
+    assert evaluate_expression("2*x + 3", variables={"x": 5}).result == "13"

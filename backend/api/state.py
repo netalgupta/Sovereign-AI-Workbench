@@ -28,6 +28,13 @@ from threading import Lock
 
 DEFAULT_CORPUS_DIR = "MRPL_RAG_Test_Corpus"
 SNAPSHOT_PATH = Path("backend/evaluation/inspection_data.json")
+# The corpus cache this layer writes and reads. Separate from the
+# inspector export above: that one carries PCA coordinates and a
+# similarity matrix, which ensure_corpus has no use for and which are
+# expensive to compute. Gitignored per-machine state -- committing a
+# corpus export is what made one person's 13 documents hydrate
+# everybody's backend.
+CORPUS_CACHE_PATH = Path("backend/evaluation/corpus_cache.json")
 IMAGE_SNAPSHOT_PATH = Path("backend/evaluation/image_data.json")
 METRICS_PATHS = {
     "retrieval_metrics": Path("backend/evaluation/retrieval_metrics.json"),
@@ -88,7 +95,16 @@ class PipelineState:
     # ---- corpus: expensive, cached -----------------------------------
 
     def snapshot(self) -> dict | None:
-        """The exported corpus snapshot, if one exists."""
+        """The exported snapshot file, if one exists.
+
+        A PLAIN READER, deliberately. This file carries two unrelated
+        things -- the corpus chunks and a graph export -- and staleness
+        means different things for each. Making this method itself
+        refuse to return a stale corpus also broke /api/graph, which was
+        correctly falling back to the graph half while Neo4j was down.
+        Callers that care about corpus freshness ask
+        corpus_snapshot_is_current().
+        """
         if self._snapshot is None and SNAPSHOT_PATH.exists():
             self._snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
         return self._snapshot
@@ -97,6 +113,146 @@ class PipelineState:
         if not SNAPSHOT_PATH.exists():
             return None
         return datetime.fromtimestamp(SNAPSHOT_PATH.stat().st_mtime).isoformat(timespec="seconds")
+
+    def _write_corpus_cache(self, chunks: list) -> None:
+        """Persist the ingested chunks so the next boot does not re-ingest.
+
+        WHY NOT REUSE inspection_data.json. That file is the chunk
+        INSPECTOR's export -- it carries PCA coordinates and a
+        similarity matrix that are expensive to compute and that
+        ensure_corpus has no use for. Writing it here would make every
+        ingest pay for a visualisation nobody asked for.
+
+        This cache is gitignored per-machine state. Committing a corpus
+        export is what caused the original problem: a snapshot of one
+        person's 13 documents shipped to everyone and hydrated every
+        backend.
+
+        Never raises. Failing to write a cache must not fail an ingest
+        that already succeeded -- the only cost is a slow next boot.
+        """
+        try:
+            payload = {
+                "written_at": datetime.now().isoformat(timespec="seconds"),
+                "chunks": [
+                    {
+                        "text": c.text,
+                        "source_document": c.metadata.source_document,
+                        "document_type": c.metadata.document_type,
+                        "page_number": c.metadata.page_number,
+                        "chunk_index": c.metadata.chunk_index,
+                        "ingestion_date": c.metadata.ingestion_date,
+                    }
+                    for c in chunks
+                ],
+            }
+            CORPUS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CORPUS_CACHE_PATH.write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _configured_folders(self) -> list[Path] | None:
+        """The enabled source folders, or None if nothing is configured.
+
+        One reader for the file that decides what this workbench is
+        grounded in. It was being read in two route handlers and nowhere
+        in the state layer, which is how the store ended up hydrating
+        from a snapshot that had no relationship to it.
+
+        None and [] mean different things and both are real: None is "no
+        configuration file yet" (a fresh install), [] is "a file that
+        enables nothing".
+        """
+        config = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        if not config.exists():
+            return None
+        try:
+            entries = json.loads(config.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
+        return [
+            Path(e["path"])
+            for e in entries
+            if e.get("enabled", True) and e.get("path")
+        ]
+
+    def corpus_snapshot_is_current(self) -> bool:
+        """Does the exported CORPUS still describe the configured sources?
+
+        Public because /api/chunks needs it: that endpoint prefers the
+        snapshot over a live read to avoid a multi-minute ingest on a
+        request, which is right, and it must not do so once the snapshot
+        has stopped describing reality.
+        """
+        return self._cache_matches_sources(SNAPSHOT_PATH)
+
+    def _snapshot_matches_sources(self) -> bool:
+        """Is the INSPECTOR export still a fair description of the
+        configured sources? See _cache_matches_sources."""
+        return self._cache_matches_sources(SNAPSHOT_PATH)
+
+    def _cache_matches_sources(self, cache_path: Path) -> bool:
+        """Does the exported snapshot still describe what is configured?
+
+        Compares the DOCUMENT NAMES in the snapshot against the files
+        found under every enabled source folder. Any configured document
+        the snapshot has never heard of means the snapshot predates a
+        change and must not be used -- that is the whole failure this
+        guards: a folder added in the Sources panel that never appears
+        in the chunk inspector.
+
+        Names, not paths or hashes, deliberately. The snapshot records
+        `source_document` as a bare filename, so a filename is the only
+        thing the two sides can be compared on. It is a weaker check
+        than a content hash and it catches the case that actually
+        happens -- new files appearing -- while a stricter check would
+        need the snapshot format to change.
+
+        Fails towards RE-INGESTING. If the source list cannot be read,
+        or anything else goes wrong, the answer is "do not trust the
+        snapshot": being slow is recoverable, showing a frozen corpus as
+        though it were live is not.
+        """
+        try:
+            folders = self._configured_folders()
+            if folders is None:
+                return True  # nothing configured yet; the snapshot is all there is
+            if not folders:
+                return True
+
+            configured_names: set[str] = set()
+            for folder in folders:
+                if not folder.exists():
+                    continue
+                for path in folder.rglob("*"):
+                    if path.is_file() and not path.name.startswith("."):
+                        configured_names.add(path.name)
+
+            if not configured_names:
+                return True
+
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            snapshot_names = {
+                c.get("source_document") for c in data.get("chunks", [])
+            }
+
+            missing = configured_names - snapshot_names
+            if missing:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Ingestion snapshot is stale: %d configured document(s) are not "
+                    "in it (e.g. %s). Re-ingesting from the configured folders "
+                    "instead of serving the snapshot.",
+                    len(missing),
+                    ", ".join(sorted(missing)[:3]),
+                )
+                return False
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def ensure_corpus(self):
         """Get or initialize the active VectorStore and chunks.
@@ -113,9 +269,36 @@ class PipelineState:
                 self._store = VectorStore(dim=1024)
                 self._chunks = []
 
-                if SNAPSHOT_PATH.exists():
+                # THE SNAPSHOT IS A CACHE, AND A CACHE THAT IS NEVER
+                # INVALIDATED IS JUST STALE DATA WITH A FRIENDLY NAME.
+                #
+                # This hydrated the store from inspection_data.json
+                # unconditionally -- a 21-chunk export of 13 documents,
+                # COMMITTED TO GIT, frozen at the moment somebody last
+                # ran the exporter. So every clone shipped one machine's
+                # corpus, every backend started with it, and a folder
+                # you added in the Sources panel was invisible to the
+                # chunk inspector no matter how many times you rescanned.
+                #
+                # Reported as "this entire page is still very hardcoded",
+                # which was exactly right: 66 files registered, 21 chunks
+                # shown, and the 21 were a file in the repository.
+                #
+                # The snapshot is still used, because re-ingesting a
+                # corpus of scans on every boot is minutes of silence.
+                # It is now CHECKED against what is actually configured
+                # first, and discarded the moment those disagree.
+                hydrate_from = None
+                if CORPUS_CACHE_PATH.exists() and self._cache_matches_sources(
+                    CORPUS_CACHE_PATH
+                ):
+                    hydrate_from = CORPUS_CACHE_PATH
+                elif SNAPSHOT_PATH.exists() and self._snapshot_matches_sources():
+                    hydrate_from = SNAPSHOT_PATH
+
+                if hydrate_from is not None:
                     try:
-                        data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                        data = json.loads(hydrate_from.read_text(encoding="utf-8"))
                         raw_chunks = data.get("chunks", [])
                         for rc in raw_chunks:
                             meta = ChunkMetadata(
@@ -133,10 +316,48 @@ class PipelineState:
                     except Exception:
                         pass
                 else:
+                    # EVERY CONFIGURED FOLDER, not just the built-in
+                    # corpus directory. Ingesting only self.corpus_dir
+                    # here would reject the stale snapshot for the right
+                    # reason and then rebuild something equally wrong --
+                    # the folder the user actually added would still be
+                    # missing.
+                    #
+                    # ingest_path() is NOT used: it takes self._lock,
+                    # which this method already holds, and Lock() is not
+                    # reentrant.
                     from backend.evaluation.ingest_corpus import ingest_corpus
-                    self._store, self._chunks, _stats = ingest_corpus(
-                        self.corpus_dir, verbose=False
-                    )
+                    from backend.ingestion.embeddings import embed_texts
+
+                    folders = self._configured_folders() or [Path(self.corpus_dir)]
+                    collected: list = []
+                    seen: set = set()
+                    for folder in folders:
+                        try:
+                            _s, chunks, _stats = ingest_corpus(str(folder), verbose=False)
+                        except Exception:  # noqa: BLE001 - one bad folder is not fatal
+                            continue
+                        for chunk in chunks:
+                            # Folders legitimately nest (07_User_Uploads
+                            # sits inside MRPL_RAG_Test_Corpus), so the
+                            # same chunk arrives more than once.
+                            key = (
+                                chunk.metadata.source_document,
+                                chunk.metadata.chunk_index,
+                            )
+                            if key not in seen:
+                                seen.add(key)
+                                collected.append(chunk)
+
+                    self._chunks = collected
+                    if collected:
+                        vectors = embed_texts([c.text for c in collected])
+                        self._store.add_chunks(collected, vectors)
+                        # Write the cache back, so the NEXT boot is fast
+                        # AND correct. Without this the fix trades one
+                        # problem for another: a stale corpus becomes an
+                        # 88-second startup, every time, forever.
+                        self._write_corpus_cache(collected)
         return self._store, self._chunks
 
     def ingest_path(
@@ -307,13 +528,52 @@ class PipelineState:
 
     # ---- graph --------------------------------------------------------
 
+    # How long a FAILED graph probe is remembered. Success is never
+    # cached; see graph().
+    _GRAPH_FAILURE_TTL_SECONDS = 20.0
+
     def graph(self, uri="bolt://localhost:7687", user="neo4j", password="testpassword123") -> dict:
-        """Live graph read. Cheap, so never cached — a graph rebuilt in
+        """Live graph read. Success is never cached — a graph rebuilt in
         another terminal should show up on the next refresh rather than
-        requiring an API restart."""
+        requiring an API restart.
+
+        FAILURE IS CACHED, AND NOT CACHING IT WAS DEGRADING THE WHOLE
+        APP. The original note read "cheap, so never cached", which is
+        true when Neo4j is up: a local bolt query costs milliseconds.
+        When Neo4j is DOWN the driver waits out its connect timeout, and
+        that was measured at 4.1 SECONDS ON EVERY CALL.
+
+        /api/health calls this, and the frontend polls /api/health. With
+        uvicorn's threadpool, each poll ties up a worker for four
+        seconds, so on any machine where Docker is not running -- which
+        is most of the team, most of the time -- the entire product
+        feels broken for a reason that has nothing to do with the
+        graph.
+
+        An assumption that holds on the happy path and collapses on the
+        failure path, where the failure path is the common one.
+
+        The TTL is short so recovery is still noticed quickly: start
+        Neo4j and the graph appears within twenty seconds, without a
+        restart.
+        """
+        import time as _time
+
+        cached = getattr(self, "_graph_failure", None)
+        if cached is not None:
+            result, failed_at = cached
+            if (_time.time() - failed_at) < self._GRAPH_FAILURE_TTL_SECONDS:
+                return result
+
         from backend.evaluation.export_inspection_data import export_graph
 
-        return export_graph(uri, user, password)
+        result = export_graph(uri, user, password)
+
+        if result.get("available"):
+            self._graph_failure = None
+        else:
+            self._graph_failure = (result, _time.time())
+        return result
 
     def graph_client(
         self, uri="bolt://localhost:7687", user="neo4j", password="testpassword123"

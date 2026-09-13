@@ -21,6 +21,8 @@ run it. parse_expr only ever builds a SymPy expression tree; it cannot
 execute arbitrary Python. This is a security boundary, not a style choice.
 """
 
+import re
+
 from sympy import simplify
 from sympy.parsing.sympy_parser import parse_expr
 from pydantic import BaseModel
@@ -30,6 +32,16 @@ class CalcResult(BaseModel):
     expression: str
     result: str
     steps: list[str]
+
+
+# Statistical function names a model reaches for when it wants
+# describe_series. Matched at the START of the expression so an
+# ordinary algebraic use of a variable called `mode` is untouched.
+_STATISTICAL_CALL = re.compile(
+    r"^(mean|average|avg|median|mode|variance|var|stddev|std|stdev|"
+    r"standard_deviation|percentile|quartile|sum|count)\s*\(",
+    re.I,
+)
 
 
 def evaluate_expression(
@@ -66,6 +78,34 @@ def evaluate_expression(
         # one predictable exception type for callers, so we normalize all
         # of them here rather than making every caller know SymPy's
         # internal parser error taxonomy.
+        # AN ERROR THAT DOES NOT SAY WHAT TO DO INSTEAD BECOMES A LOOP.
+        #
+        # Measured on a real turn: asked for the mean, median, variance
+        # and standard deviation of two spreadsheet columns, the model
+        # called this tool twelve times with mean([...]), median([...]),
+        # variance([...]), stddev([...]) -- every one a ValueError
+        # reading "Could not parse expression". With nothing in the
+        # message to correct against, it tried the same shape again,
+        # burned all eight iterations and 237 seconds, and returned no
+        # answer.
+        #
+        # These are not unreasonable calls. Statistics over a list IS a
+        # thing this workbench does -- in describe_series, a different
+        # tool. The gap was never told to the one place that could say
+        # so. SymPy is a SYMBOLIC engine: `mean` is not one of its
+        # functions, and it never will be.
+        statistic = _STATISTICAL_CALL.match(expression.strip())
+        if statistic:
+            raise ValueError(
+                f"{statistic.group(1)}() is not a symbolic function, so this tool "
+                f"cannot evaluate {expression!r}. Statistics over a list of "
+                f"readings are computed by the describe_series tool, which returns "
+                f"mean, median, standard deviation, variance, min, max and "
+                f"quartiles in one call. Call it with the numbers as a plain list: "
+                f'describe_series(values=[99.914, 99.872, ...]). Use this tool for '
+                f"arithmetic and algebra instead, e.g. '(12 + 8) * 3'."
+            ) from exc
+
         raise ValueError(f"Could not parse expression: {expression!r}") from exc
 
     steps: list[str] = [str(parsed)]
