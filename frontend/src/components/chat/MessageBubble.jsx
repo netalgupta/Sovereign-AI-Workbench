@@ -47,15 +47,17 @@ const TYPEWRITER_SPEED_MS = 18
  */
 function useMessageTypewriter(message) {
   const setDisplayedContent = useChatStore((s) => s.setDisplayedContent)
-  const revealedRef = useRef(message.displayedContent.length)
+  const initialLen = (message.displayedContent ?? message.content ?? '').length
+  const revealedRef = useRef(initialLen)
   const intervalRef = useRef(null)
 
   useEffect(() => {
     // Non-streaming or already fully revealed → skip animation
-    if (!message.streaming && message.displayedContent === message.content) return
+    const displayed = message.displayedContent ?? message.content ?? ''
+    if (!message.streaming && displayed === (message.content ?? '')) return
     if (message.role === 'user') return
 
-    const target = message.content
+    const target = message.content ?? ''
 
     // Start the drain interval if not already running
     if (!intervalRef.current) {
