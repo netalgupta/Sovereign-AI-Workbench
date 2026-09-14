@@ -515,32 +515,54 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
             pass
 
     from backend.ingestion.ingestion_progress import get_tracker
+    import threading
 
     tracker = get_tracker()
     job = tracker.create(str(target_base_dir), saved_files, job_id=body.job_id)
 
-    total_chunks = 0
-    all_details = []
-    for sf in saved_files:
+    def _run():
+        for sf in saved_files:
+            try:
+                _untombstone_source(str(sf), str(sf.resolve()).lower(), "user_uploads_corpus")
+                state.ingest_path(sf, job_id=job.job_id)
+            except Exception as exc:
+                from backend.ingestion.ingestion_progress import DocumentStage
+                tracker.set_stage(job.job_id, str(sf), DocumentStage.FAILED,
+                                  detail=f"{type(exc).__name__}: {exc}")
+        tracker.finish(job.job_id)
+        # Ensure configured_sources.json reflects the uploaded folder after ingestion
+        import json as _json
+        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _dirs = []
+        if _cfg.exists():
+            try:
+                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        # top_folders already registered above — just make sure enabled=True
+        for folder in top_folders:
+            folder_path = target_base_dir / folder
+            norm = str(folder_path.resolve()).lower()
+            for d in _dirs:
+                if str(Path(d.get("path", "")).resolve()).lower() == norm:
+                    d["enabled"] = True
+                    break
         try:
-            _untombstone_source(str(sf), str(sf.resolve()).lower(), "user_uploads_corpus")
-            chunks_cnt, details = state.ingest_path(sf, job_id=job.job_id)
-            total_chunks += chunks_cnt
-            all_details.extend(details)
-        except Exception as exc:
-            all_details.append({"filename": sf.name, "path": str(sf), "error": str(exc), "chunks": 0})
+            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
-    tracker.finish(job.job_id)
+    threading.Thread(target=_run, name=f"upload-ingest-{job.job_id}", daemon=True).start()
 
     return {
         "success": True,
         "job_id": job.job_id,
+        "state": "running",
         "count": len(saved_files),
-        "total_chunks": total_chunks,
-        "details": all_details,
         "saved": [{"path": str(sf), "name": sf.name} for sf in saved_files],
         "added": {"path": str(saved_files[0]), "name": saved_files[0].name} if saved_files else None,
-        "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Uploaded {len(saved_files)} file(s) — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
     }
 
 
@@ -582,9 +604,10 @@ def pick_files_endpoint() -> dict:
 
 @router.post("/sources/dialog/folder")
 def browse_and_add_folder() -> dict:
-    """Open native OS directory dialog to choose a folder on disk, ingest and register it."""
+    """Open native OS directory dialog to choose a folder on disk, register and ingest in background."""
     import hashlib
     import json
+    import threading
     from backend.api.native_picker import pick_folder_gui
 
     picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
@@ -601,11 +624,6 @@ def browse_and_add_folder() -> dict:
     except Exception:
         source = None
 
-    try:
-        total_chunks, details = state.ingest_path(target)
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Failed to chunk and embed source folder: {exc}") from exc
-
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
     dirs = []
     if config_file.exists():
@@ -619,9 +637,8 @@ def browse_and_add_folder() -> dict:
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
     dir_id = f"dir_{hasher}"
 
-    # Un-tombstone newly added folder and its id
+    # Un-tombstone and register BEFORE thread starts so sidebar sees it immediately
     _untombstone_source(norm_path, norm_lower, dir_id)
-
     found = False
     for d in dirs:
         if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
@@ -641,24 +658,59 @@ def browse_and_add_folder() -> dict:
     except Exception:
         pass
 
+    # Enumerate files for progress tracker
+    target_files = sorted(
+        f for f in target.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    ) if target.is_dir() else [target]
+
+    from backend.ingestion.ingestion_progress import get_tracker
+    tracker = get_tracker()
+    job = tracker.create(norm_path, target_files or [target])
+
+    def _run():
+        try:
+            state.ingest_path(target, job_id=job.job_id)
+            tracker.finish(job.job_id)
+        except Exception as exc:
+            tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+        # Re-sync configured_sources after completion
+        _dirs2 = []
+        try:
+            _dirs2 = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        for d in _dirs2:
+            if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+                d["enabled"] = True
+                break
+        try:
+            config_file.write_text(json.dumps(_dirs2, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name=f"dialog-folder-ingest-{job.job_id}", daemon=True).start()
+
     return {
         "success": True,
+        "job_id": job.job_id,
+        "state": "running",
         "path": norm_path,
         "name": target.name,
-        "total_chunks": total_chunks,
-        "documents": details,
         "directories": dirs,
         "added": {"path": norm_path, "name": target.name, "id": dir_id},
         "source": source.model_dump() if source else {"path": norm_path},
-        "message": f"Folder '{target.name}' registered: {total_chunks} chunks indexed in FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Folder '{target.name}' registered — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
     }
 
 
 @router.post("/sources/dialog/files")
 def browse_and_add_files() -> dict:
-    """Open native OS file dialog to choose documents on disk, ingest and register them."""
+    """Open native OS file dialog to choose documents on disk, register and ingest them in background."""
     import hashlib
     import json
+    import threading
     from backend.api.native_picker import pick_files_gui
 
     picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
@@ -666,8 +718,6 @@ def browse_and_add_files() -> dict:
         return {"cancelled": True, "message": "File selection cancelled"}
 
     state = get_state()
-    total_chunks = 0
-    all_details = []
     saved_items = []
 
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
@@ -678,49 +728,60 @@ def browse_and_add_files() -> dict:
         except Exception:
             pass
 
+    target_files: list[Path] = []
     for p_str in picked_paths:
         target = Path(p_str).resolve()
-        try:
-            cnt, details = state.ingest_path(target)
-            total_chunks += cnt
-            all_details.extend(details)
-            saved_items.append({"path": str(target), "name": target.name})
+        file_norm = str(target)
+        file_lower = file_norm.lower()
+        file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
+        file_id = f"file_{file_hasher}"
 
-            # Store the REAL on-disk file path — never copy, never pull unrelated parent files
-            file_norm = str(target)
-            file_lower = file_norm.lower()
-            file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
-            file_id = f"file_{file_hasher}"
+        _untombstone_source(file_norm, file_lower, file_id)
+        target_files.append(target)
+        saved_items.append({"path": file_norm, "name": target.name})
 
-            # Un-tombstone file and id
-            _untombstone_source(file_norm, file_lower, file_id)
-
-            if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
-                dirs.append({
-                    "id": file_id,
-                    "name": target.name,
-                    "path": file_norm,
-                    "isFile": True,
-                    "isPreset": False,
-                    "enabled": True,
-                })
-        except Exception as exc:
-            all_details.append({"filename": target.name, "path": str(target), "error": str(exc), "chunks": 0})
+        if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
+            dirs.append({
+                "id": file_id,
+                "name": target.name,
+                "path": file_norm,
+                "isFile": True,
+                "isPreset": False,
+                "enabled": True,
+            })
 
     try:
         config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
     except Exception:
         pass
 
+    # Create progress job and ingest in background
+    from backend.ingestion.ingestion_progress import get_tracker
+    tracker = get_tracker()
+    job = tracker.create(picked_paths[0] if len(picked_paths) == 1 else "multi-file", target_files)
+
+    def _run():
+        for target in target_files:
+            try:
+                state.ingest_path(target, job_id=job.job_id)
+            except Exception as exc:
+                from backend.ingestion.ingestion_progress import DocumentStage
+                tracker.set_stage(job.job_id, str(target), DocumentStage.FAILED,
+                                  detail=f"{type(exc).__name__}: {exc}")
+        tracker.finish(job.job_id)
+
+    threading.Thread(target=_run, name=f"dialog-files-ingest-{job.job_id}", daemon=True).start()
+
     return {
         "success": True,
+        "job_id": job.job_id,
+        "state": "running",
         "count": len(picked_paths),
-        "total_chunks": total_chunks,
-        "documents": all_details,
         "saved": saved_items,
         "added": saved_items[0] if saved_items else None,
         "directories": dirs,
-        "message": f"Successfully ingested {len(picked_paths)} document(s) in-place: {total_chunks} chunks indexed into FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Registered {len(picked_paths)} document(s) — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
     }
 
 

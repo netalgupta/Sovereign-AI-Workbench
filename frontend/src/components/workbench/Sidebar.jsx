@@ -536,8 +536,24 @@ export function Sidebar() {
                 </span>
               </div>
 
-              {/* Action Buttons: Filter Dropdown + Expand */}
+              {/* Action Buttons: Add Source + Filter Dropdown + Expand */}
               <div className="flex items-center gap-1.5 flex-shrink-0">
+                {/* Add Permanent Source button */}
+                <button
+                  type="button"
+                  id="sidebar-add-source-btn"
+                  onClick={() => setIsAddDirModalOpen(true)}
+                  className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
+                  style={{
+                    background: 'var(--color-accent-tint)',
+                    borderColor: 'var(--color-accent-border)',
+                    color: 'var(--color-accent)',
+                  }}
+                  title="Add permanent source — directory or files to knowledge base"
+                  aria-label="Add source"
+                >
+                  <Plus size={13} strokeWidth={2.4} />
+                </button>
                 {/* Single Filter Button */}
                 <div className="relative" ref={filterDropdownRef}>
                   <button
