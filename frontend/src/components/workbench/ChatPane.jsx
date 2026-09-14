@@ -585,12 +585,14 @@ export function ChatPane() {
     window.__workbenchSetCompletedPhrases = () => {}
     window.__workbenchTriggerApproval = (action) => useChatStore.getState().setAwaitingApproval(true, action)
     window.__workbenchResolveApproval = (confirmed) => useChatStore.getState().resolveApproval(confirmed)
+    window.useChatStore = useChatStore
     return () => {
       delete window.__workbenchSetThinkingMidResponse
       delete window.__workbenchSetThinkingExpanded
       delete window.__workbenchSetCompletedPhrases
       delete window.__workbenchTriggerApproval
       delete window.__workbenchResolveApproval
+      delete window.useChatStore
     }
   }, [])
 
