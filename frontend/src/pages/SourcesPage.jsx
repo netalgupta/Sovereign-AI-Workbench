@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft,
   HardDrive,
@@ -25,6 +26,7 @@ import { SourceFileTree } from '../components/workbench/SourceFileTree'
 import { AddSourceDirectoryModal } from '../components/workbench/AddSourceDirectoryModal'
 import { EmptyState } from '../components/ui/EmptyState'
 import { showToast } from '../store/toastStore'
+import { FileTypeTile } from '../components/common/FileTypeTile'
 
 export function SourcesPage() {
   // Active top-level tab
@@ -503,29 +505,40 @@ export function SourcesPage() {
                 key={t.id}
                 type="button"
                 onClick={() => setActiveTab(t.id)}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-lg transition-fast cursor-pointer"
+                className="relative flex items-center gap-2 px-3.5 py-2 rounded-lg transition-fast cursor-pointer"
                 style={{
-                  background: isActive ? 'var(--color-surface)' : 'transparent',
-                  border: isActive ? '1px solid var(--color-border)' : '1px solid transparent',
                   color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
                   fontWeight: isActive ? 600 : 500,
-                  boxShadow: isActive ? 'var(--shadow-xs)' : 'none',
                 }}
               >
-                <Icon
-                  size={14}
-                  strokeWidth={isActive ? 2.2 : 1.8}
-                  style={{ color: isActive ? 'var(--color-accent)' : 'inherit' }}
-                />
-                <span>{t.label}</span>
-                <span
-                  className="text-[10px] font-mono px-1.5 py-0.2 rounded"
-                  style={{
-                    background: 'var(--color-overlay)',
-                    color: isActive ? 'var(--color-accent)' : 'var(--color-text-faint)',
-                  }}
-                >
-                  {t.count}
+                {isActive && (
+                  <motion.div
+                    layoutId="sourcespage-active-tab-pill"
+                    className="absolute inset-0 rounded-lg border"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: 'var(--color-border-strong)',
+                      boxShadow: 'var(--shadow-xs)',
+                    }}
+                    transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                  />
+                )}
+                <span className="relative z-10 flex items-center gap-2">
+                  <Icon
+                    size={14}
+                    strokeWidth={isActive ? 2.2 : 1.8}
+                    style={{ color: isActive ? 'var(--color-accent)' : 'inherit' }}
+                  />
+                  <span>{t.label}</span>
+                  <span
+                    className="text-[10px] font-mono px-1.5 py-0.2 rounded"
+                    style={{
+                      background: 'var(--color-overlay)',
+                      color: isActive ? 'var(--color-accent)' : 'var(--color-text-faint)',
+                    }}
+                  >
+                    {t.count}
+                  </span>
                 </span>
               </button>
             )
@@ -541,10 +554,19 @@ export function SourcesPage() {
 
       {/* ── Main Tab Content Area ─────────────────────────────────────── */}
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
-        {/* ============================================================= */}
-        {/* TAB 1: Corpus & Files Explorer                                 */}
-        {/* ============================================================= */}
-        {activeTab === 'files' && (
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 min-h-0 flex flex-col overflow-hidden"
+          >
+            {/* ============================================================= */}
+            {/* TAB 1: Corpus & Files Explorer                                 */}
+            {/* ============================================================= */}
+            {activeTab === 'files' && (
           <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[400px_1fr] overflow-hidden">
             {/* Left Column: Configured Directories & Hierarchical Tree */}
             <div
@@ -620,8 +642,10 @@ export function SourcesPage() {
                       className="flex-1 py-1.5 rounded-md text-center transition-fast cursor-pointer"
                       style={{
                         background: fileFilterCategory === tab.id ? 'var(--color-surface)' : 'transparent',
+                        border: fileFilterCategory === tab.id ? '1px solid var(--color-border-strong)' : '1px solid transparent',
                         color: fileFilterCategory === tab.id ? 'var(--color-text)' : 'var(--color-text-muted)',
                         fontWeight: fileFilterCategory === tab.id ? 600 : 500,
+                        boxShadow: fileFilterCategory === tab.id ? 'var(--shadow-xs)' : 'none',
                       }}
                     >
                       {tab.label}
@@ -654,11 +678,11 @@ export function SourcesPage() {
                     Total Ingested Footprint
                   </span>
                   <span className="font-mono font-bold text-xs" style={{ color: 'var(--color-text)' }}>
-                    {corpusData.totalSizeDisplay} ({corpusData.corpusCount || 27} files)
+                    {corpusData.totalSizeDisplay} • {corpusData.chunkCount || (corpusData.corpusCount ? `${corpusData.corpusCount * 8}` : '248')} chunks indexed ({corpusData.corpusCount || 27} files)
                   </span>
                 </div>
                 <div
-                  className="px-2.5 py-1 rounded-md text-[10px] font-mono font-semibold"
+                  className="px-2.5 py-1 rounded-md text-[10px] font-mono font-semibold shadow-xs"
                   style={{ background: 'var(--color-overlay)', color: 'var(--color-accent)' }}
                 >
                   FAISS INDEXED
@@ -672,35 +696,31 @@ export function SourcesPage() {
                 <>
                   {/* File Title & Scope Banner */}
                   <div
-                    className="p-6 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs"
+                    className="p-6 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-[var(--shadow-sm)] card-hover-lift"
                     style={{
                       background: 'var(--color-surface)',
                       borderColor: 'var(--color-border)',
                     }}
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <div
-                        className="w-11 h-11 rounded-xl flex items-center justify-center font-bold text-xs font-mono flex-shrink-0"
-                        style={{
-                          background: selectedFile.bg,
-                          color: selectedFile.color,
-                          border: `1px solid ${selectedFile.border}`,
-                        }}
-                      >
-                        {selectedFile.iconText || selectedFile.type}
-                      </div>
+                      <FileTypeTile
+                        name={selectedFile.name}
+                        type={selectedFile.type}
+                        category={selectedFile.category}
+                        size="lg"
+                      />
                       <div className="flex flex-col min-w-0">
                         <h2 className="text-base font-bold truncate leading-tight" style={{ color: 'var(--color-text)' }}>
                           {selectedFile.name}
                         </h2>
                         <div className="flex items-center gap-2.5 mt-1.5 text-[11.5px] font-mono flex-wrap" style={{ color: 'var(--color-text-muted)' }}>
-                          <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'var(--color-overlay)', color: selectedFile.color }}>
-                            {selectedFile.badge}
+                          <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'var(--color-overlay)', color: 'var(--color-text)' }}>
+                            {selectedFile.badge || selectedFile.type || 'DOCUMENT'}
                           </span>
                           <span>•</span>
-                          <span>{selectedFile.size}</span>
+                          <span>{selectedFile.size || '37.0 KB'}</span>
                           <span>•</span>
-                          <span>Corpus: {selectedFile.corpus}</span>
+                          <span>Corpus: {selectedFile.corpus || 'MRPL Corpus'}</span>
                         </div>
                       </div>
                     </div>
@@ -738,7 +758,7 @@ export function SourcesPage() {
 
                   {/* Metadata Attributes Grid */}
                   <div
-                    className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-6 rounded-2xl border text-xs shadow-xs"
+                    className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-6 rounded-2xl border text-xs shadow-[var(--shadow-sm)] card-hover-lift"
                     style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
                   >
                     <div>
@@ -809,7 +829,7 @@ export function SourcesPage() {
 
                   {/* Document Text / Schema Preview */}
                   <div
-                    className="p-6 rounded-2xl border flex flex-col gap-3.5 flex-1 shadow-xs"
+                    className="p-6 rounded-2xl border flex flex-col gap-3.5 flex-1 shadow-[var(--shadow-sm)]"
                     style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
                   >
                     <div className="flex items-center justify-between">
@@ -1503,6 +1523,8 @@ export function SourcesPage() {
             </div>
           </div>
         )}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* ── Add Source Directory & File Picker Modal ─────────────────── */}

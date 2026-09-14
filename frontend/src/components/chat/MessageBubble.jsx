@@ -15,6 +15,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { ErrorBoundary } from '../common/ErrorBoundary'
 import {
   Terminal,
   Search,
@@ -444,6 +446,7 @@ function TurnTrace({ message, isStreaming = false }) {
       )
       let label = toolName
       const children = []
+      let customComponent = null
 
       // If the model gave reasoning before calling this tool, show it as the first child
       if (tool.reasoning) {
@@ -769,7 +772,14 @@ function TurnTrace({ message, isStreaming = false }) {
       {/* ── Hierarchical Reasoning Tree (Claude Code style) ──────────── */}
       <div className={`collapsible-grid ${open ? 'is-expanded' : ''}`}>
         <div className="collapsible-inner">
-          <div className="pt-2 pb-2 pl-2 flex flex-col font-mono text-[11.5px] leading-relaxed gap-0.5">
+          <div
+            className="mt-1 pt-2.5 pb-2.5 pl-3 pr-2 flex flex-col font-mono text-[11.5px] leading-relaxed gap-0.5 rounded-lg border"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              boxShadow: 'var(--shadow-xs)',
+            }}
+          >
             {/* Level 0: Turn Root */}
             <div className="flex items-center gap-2 py-1">
               <Terminal
@@ -991,7 +1001,12 @@ export function MessageBubble({ message }) {
   // ── User message ────────────────────────────────────────────────────────
   if (isUser) {
     return (
-      <div className="flex justify-end px-2 animate-fade-in">
+      <motion.div
+        initial={{ opacity: 0, y: 8, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        className="flex justify-end px-2"
+      >
         <div className="flex flex-col items-end gap-1.5" style={{ maxWidth: '78%' }}>
           <div
             className="px-5 py-3.5 text-sm leading-[1.68]"
@@ -1011,7 +1026,7 @@ export function MessageBubble({ message }) {
             {formatTime(message.timestamp)}
           </span>
         </div>
-      </div>
+      </motion.div>
     )
   }
 
@@ -1019,9 +1034,21 @@ export function MessageBubble({ message }) {
   // No bubble — just text on the cream surface (FRONTEND.md §3.1)
   // No app/assistant name label above response (starts directly with thinking-status line)
   return (
-    <div className="flex flex-col gap-3.5 px-2 animate-fade-in" style={{ maxWidth: '92%' }}>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+      className="flex flex-col gap-4 px-2"
+      style={{ maxWidth: '92%' }}
+    >
       {/* 1. Reasoning tree directly at top */}
-      <TurnTrace message={message} isStreaming={Boolean(message.streaming)} />
+      <ErrorBoundary fallback={(err) => (
+        <div className="text-[11px] font-mono text-[var(--color-text-faint)] py-1">
+          Trace collapsed: {err?.message}
+        </div>
+      )}>
+        <TurnTrace message={message} isStreaming={Boolean(message.streaming)} />
+      </ErrorBoundary>
 
       {/* 2. Markdown body with streaming typewriter reveal */}
       <div className="relative">
@@ -1041,6 +1068,6 @@ export function MessageBubble({ message }) {
       <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>
         {formatTime(message.timestamp)}
       </span>
-    </div>
+    </motion.div>
   )
 }

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   X,
   FolderPlus,
@@ -14,6 +14,7 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { showToast } from '../../store/toastStore'
 import { useIngestionStore } from '../../store/ingestionStore'
 
@@ -42,7 +43,27 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   const activeJob = useIngestionStore((s) => s.activeJob)
   const startTracking = useIngestionStore((s) => s.startTracking)
 
-  if (!isOpen) return null
+  // Auto-close modal when an in-progress job finishes (activeJob transitions
+  // from running → complete/failed).
+  const [jobStarted, setJobStarted] = useState(false)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
+  useEffect(() => {
+    if (jobStarted && (activeJob?.state === 'complete' || activeJob?.state === 'failed')) {
+      // Dispatch immediately on completion so sidebar updates chunks & tree right away
+      window.dispatchEvent(new CustomEvent('corpus-updated'))
+      if (onDirectoriesUpdated) onDirectoriesUpdated()
+
+      const t = setTimeout(() => {
+        setJobStarted(false)
+        onCloseRef.current?.()
+      }, 2500)
+      return () => clearTimeout(t)
+    }
+  }, [activeJob?.state, jobStarted])
 
   // Core file batch upload handler
   const uploadFiles = async (fileList) => {
@@ -85,29 +106,27 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         throw new Error('No files could be read from selected directory')
       }
 
-      const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-      startTracking(jobId)
-
-      setUploadStatus(`Ingesting, chunking & generating embeddings for ${filesToUpload.length} file(s)...`)
-
       const res = await fetch('/api/sources/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: filesToUpload, job_id: jobId }),
+        body: JSON.stringify({ files: filesToUpload }),
       })
       const data = await res.json()
       if (!res.ok) {
         throw new Error(data.error || data.detail || 'Failed to upload source file(s)')
       }
 
-      const chunkNotice = data.total_chunks != null ? ` (${data.total_chunks} chunks embedded & indexed in FAISS)` : ''
-      showToast(
-        data.message || `Successfully ingested ${data.count || filesToUpload.length} source document(s)${chunkNotice}`,
-        'success'
-      )
-      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-      onClose()
+      // Start tracking AFTER the backend has registered the job
+      if (data.job_id) {
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        startTracking(data.job_id)
+        setJobStarted(true)
+      } else {
+        // Synchronous upload path — just close
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+        onClose()
+      }
     } catch (err) {
       showToast(err.message || 'Failed to upload source documents', 'error')
     } finally {
@@ -126,25 +145,32 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
 
     setIsSubmitting(true)
-    const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-    startTracking(jobId)
     setUploadStatus('Resolving path, chunking document(s) & generating embeddings...')
     try {
       const res = await fetch('/api/sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: pathToAdd, recursive: true, job_id: jobId }),
+        body: JSON.stringify({ path: pathToAdd, recursive: true }),
       })
       const data = await res.json()
       if (!res.ok) {
         throw new Error(data.error || data.detail || 'Failed to add source')
       }
 
-      showToast(data.message || `Source registered: ${pathToAdd}`, 'success')
+      showToast(data.message || `Source queued for indexing: ${pathToAdd}`, 'success')
       setCustomPath('')
-      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-      onClose()
+      // Start tracking AFTER backend confirms the job exists.
+      // Call startTracking BEFORE setJobStarted so activeJob is non-null
+      // when the effect first evaluates jobStarted=true.
+      if (data.job_id) {
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        startTracking(data.job_id)
+        setJobStarted(true)
+      } else {
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+        onClose()
+      }
     } catch (err) {
       showToast(err.message || 'Failed to register source', 'error')
     } finally {
@@ -174,23 +200,28 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         const folderName = pickData.name || pickData.path.split(/[\\/]/).pop() || 'folder'
         setUploadStatus(`Indexing "${folderName}" in-place... Generating embeddings & updating local corpus`)
 
-        const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-        startTracking(jobId)
-
         const addRes = await fetch('/api/sources', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: pickData.path, recursive: true, job_id: jobId }),
+          body: JSON.stringify({ path: pickData.path, recursive: true }),
         })
         const addData = await addRes.json()
         if (!addRes.ok) {
           throw new Error(addData.error || addData.detail || 'Failed to index selected folder')
         }
 
-        showToast(addData.message || `Folder "${folderName}" added to sources`, 'success')
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
-        if (onDirectoriesUpdated) onDirectoriesUpdated(addData)
-        onClose()
+        showToast(addData.message || `Source "${folderName}" queued for indexing`, 'success')
+        // Start tracking AFTER backend confirms job exists.
+        // Call startTracking BEFORE setJobStarted (race-condition safety).
+        if (addData.job_id) {
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
+          startTracking(addData.job_id)
+          setJobStarted(true)
+        } else {
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
+          if (onDirectoriesUpdated) onDirectoriesUpdated(addData)
+          onClose()
+        }
         return
       }
     } catch (err) {
@@ -270,10 +301,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
 
         setUploadStatus(`Indexing ${pickData.paths.length} document(s) in-place... Generating embeddings & updating local corpus`)
 
-        const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-        startTracking(jobId)
-
-        let totalIndexed = 0
+        // Multi-file: use one shared job tracked via the last response's job_id
         let lastResult = null
         for (let i = 0; i < pickData.paths.length; i++) {
           const filePath = pickData.paths[i]
@@ -282,19 +310,24 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           const addRes = await fetch('/api/sources', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath, recursive: false, job_id: jobId }),
+            body: JSON.stringify({ path: filePath, recursive: false }),
           })
           const addData = await addRes.json()
           if (addRes.ok) {
-            totalIndexed += addData.total_chunks || 0
             lastResult = addData
           }
         }
 
-        showToast(`Successfully added ${pickData.paths.length} document(s) (${totalIndexed} chunks indexed)`, 'success')
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
-        if (onDirectoriesUpdated) onDirectoriesUpdated(lastResult)
-        onClose()
+        showToast(`Queued ${pickData.paths.length} document(s) for indexing — watch the progress indicator`, 'success')
+        if (lastResult?.job_id) {
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
+          startTracking(lastResult.job_id)
+          setJobStarted(true)
+        } else {
+          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
+          if (onDirectoriesUpdated) onDirectoriesUpdated(lastResult)
+          onClose()
+        }
         return
       }
     } catch (err) {
@@ -412,20 +445,32 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
-      style={{ background: 'rgba(0, 0, 0, 0.55)', backdropFilter: 'blur(3px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg rounded-xl shadow-2xl border flex flex-col overflow-hidden animate-scale-in"
-        style={{
-          background: 'var(--color-surface)',
-          borderColor: 'var(--color-border)',
-          color: 'var(--color-text)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="add-source-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.55)', backdropFilter: 'blur(4px)' }}
+          onClick={onClose}
+        >
+          <motion.div
+            key="add-source-modal-card"
+            initial={{ opacity: 0, scale: 0.96, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="w-full max-w-lg rounded-xl shadow-2xl border flex flex-col overflow-hidden"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
         {/* Hidden inputs for native browser file/folder dialogs */}
         <input
           type="file"
@@ -546,40 +591,60 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           </div>
 
           {/* Active Ingestion Progress Card (Live Polling via backend ProgressTracker) */}
-          {(isSubmitting || (activeJob && activeJob.state === 'running')) && (
+          {(isSubmitting || (activeJob && (activeJob.state === 'running' || activeJob.state === 'complete' || activeJob.state === 'failed'))) && (
             <div
               className="flex flex-col gap-2.5 p-4 rounded-xl border animate-fade-in"
               style={{
-                background: 'var(--color-accent-tint, rgba(37,99,235,0.06))',
-                borderColor: 'var(--color-accent)',
+                background: activeJob?.state === 'complete'
+                  ? 'rgba(16, 185, 129, 0.08)'
+                  : activeJob?.state === 'failed'
+                  ? 'rgba(239, 68, 68, 0.08)'
+                  : 'var(--color-accent-tint, rgba(37,99,235,0.06))',
+                borderColor: activeJob?.state === 'complete'
+                  ? 'rgba(16, 185, 129, 0.4)'
+                  : activeJob?.state === 'failed'
+                  ? 'rgba(239, 68, 68, 0.4)'
+                  : 'var(--color-accent)',
               }}
             >
               {/* Header: Processing X/Y files + ETA / Elapsed */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Loader2 size={15} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
+                  {activeJob?.state === 'complete' ? (
+                    <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0" />
+                  ) : activeJob?.state === 'failed' ? (
+                    <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+                  ) : (
+                    <Loader2 size={15} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
+                  )}
                   <span className="font-bold text-xs" style={{ color: 'var(--color-text)' }}>
-                    {activeJob?.total_documents
+                    {activeJob?.state === 'complete'
+                      ? `Ingestion complete! ${activeJob.completed || activeJob.total_documents} file(s) indexed into local FAISS index`
+                      : activeJob?.state === 'failed'
+                      ? `Ingestion failed: ${activeJob.error || 'Unknown error'}`
+                      : activeJob?.total_documents
                       ? `Processing ${activeJob.completed}/${activeJob.total_documents} file(s)...`
                       : uploadStatus || 'Processing documents...'}
                   </span>
                 </div>
                 {activeJob?.elapsed_seconds != null && (
                   <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
-                    {activeJob.elapsed_seconds}s
-                    {activeJob.estimated_remaining_seconds ? ` · ~${activeJob.estimated_remaining_seconds}s left` : ''}
+                    {activeJob.state === 'complete' ? `Done in ${activeJob.elapsed_seconds}s` : `${activeJob.elapsed_seconds}s`}
+                    {activeJob.state === 'running' && activeJob.estimated_remaining_seconds ? ` · ~${activeJob.estimated_remaining_seconds}s left` : ''}
                   </span>
                 )}
               </div>
 
               {/* Progress Bar */}
-              {activeJob?.total_documents > 0 && (
+              {(activeJob?.total_documents > 0 || activeJob?.state === 'complete') && (
                 <div className="w-full h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
                   <div
                     className="h-full transition-all duration-300 rounded-full"
                     style={{
-                      background: 'var(--color-accent)',
-                      width: `${Math.min(100, Math.round(((activeJob.completed || 0) / activeJob.total_documents) * 100))}%`,
+                      background: activeJob?.state === 'complete' ? '#10b981' : 'var(--color-accent)',
+                      width: activeJob?.state === 'complete'
+                        ? '100%'
+                        : `${Math.min(100, Math.round(((activeJob.completed || 0) / (activeJob.total_documents || 1)) * 100))}%`,
                     }}
                   />
                 </div>
@@ -813,7 +878,9 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             Done
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }

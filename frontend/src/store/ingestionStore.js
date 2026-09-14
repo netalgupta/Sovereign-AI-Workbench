@@ -24,10 +24,33 @@ export const useIngestionStore = create((set, get) => ({
       },
     })
 
+    let notFoundStreak = 0
+    const MAX_NOT_FOUND = 5 // allow a few misses before giving up
+
     const poll = async () => {
       try {
         const res = await fetch(`/api/ingestion/${jobId}`)
-        if (!res.ok) return
+        if (!res.ok) {
+          if (res.status === 404) {
+            notFoundStreak++
+            // After MAX_NOT_FOUND consecutive 404s, the job is truly gone
+            if (notFoundStreak >= MAX_NOT_FOUND) {
+              if (pollTimer) {
+                clearInterval(pollTimer)
+                pollTimer = null
+              }
+              setTimeout(() => {
+                set((state) => ({
+                  activeJob: state.activeJob?.job_id === jobId ? null : state.activeJob,
+                  fileStatuses: {},
+                }))
+              }, 1000)
+            }
+          }
+          return
+        }
+        // Got a real response — reset the streak
+        notFoundStreak = 0
         const data = await res.json()
         const now = Date.now()
 
@@ -100,3 +123,4 @@ export const useIngestionStore = create((set, get) => ({
 if (typeof window !== 'undefined') {
   window.__ingestionStore = useIngestionStore
 }
+

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Search,
@@ -15,7 +15,10 @@ import {
   ArrowUpRight,
   Activity,
   ShieldCheck,
+  Filter,
+  Check,
 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { showToast } from '../../store/toastStore'
 import { useChatStore } from '../../store/chatStore'
@@ -67,11 +70,32 @@ export function Sidebar() {
 
   // Sources tab internal filter state
   const [sourcesCategory, setSourcesCategory] = useState('all')
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false)
+  const filterDropdownRef = useRef(null)
   const [sources, setSources] = useState(INITIAL_SOURCES)
   const [tree, setTree] = useState([])
   const [directories, setDirectories] = useState([])
   const [totalSizeDisplay, setTotalSizeDisplay] = useState('2.83 MB')
+  const [chunkCount, setChunkCount] = useState(null)
   const [isAddDirModalOpen, setIsAddDirModalOpen] = useState(false)
+
+  // Listen for global open-add-source-modal event
+  useEffect(() => {
+    const handleOpenModal = () => setIsAddDirModalOpen(true)
+    window.addEventListener('open-add-source-modal', handleOpenModal)
+    return () => window.removeEventListener('open-add-source-modal', handleOpenModal)
+  }, [])
+
+  // Close filter dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target)) {
+        setIsFilterDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   // Chats tab session state
   const [chats, setChats] = useState(MOCK_CHATS)
@@ -96,8 +120,8 @@ export function Sidebar() {
   }, [isSearchOpen])
 
   // Fetch live MRPL Corpus directly from server on mount
-  const fetchCorpus = () => {
-    fetch('/api/corpus')
+  const fetchCorpus = useCallback(() => {
+    fetch(`/api/corpus?t=${Date.now()}`, { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.sources && Array.isArray(data.sources)) {
@@ -118,9 +142,12 @@ export function Sidebar() {
         if (data?.totalSizeDisplay) {
           setTotalSizeDisplay(data.totalSizeDisplay)
         }
+        if (data?.chunkCount) {
+          setChunkCount(data.chunkCount)
+        }
       })
       .catch(() => {})
-  }
+  }, [setActiveDocuments])
 
   const handleDeleteSource = async (source) => {
     if (!source) return
@@ -187,6 +214,10 @@ export function Sidebar() {
     const handleCorpusUpdated = () => fetchCorpus()
     window.addEventListener('corpus-updated', handleCorpusUpdated)
     return () => window.removeEventListener('corpus-updated', handleCorpusUpdated)
+  }, [fetchCorpus])
+
+  const handleCloseAddDirModal = useCallback(() => {
+    setIsAddDirModalOpen(false)
   }, [])
 
   // Expose test automation helpers
@@ -389,54 +420,78 @@ export function Sidebar() {
 
           {/* ── 2. Two-Tab Accordion Switcher (Sources vs Chats) ─────── */}
           <div
-            className="flex items-center p-1 rounded-lg text-xs font-medium gap-1"
+            className="flex items-center p-1 rounded-lg text-xs font-medium gap-1 relative"
             style={{ background: 'var(--color-overlay)' }}
           >
             <button
               type="button"
               onClick={() => setActiveTab('sources')}
-              className="flex-1 py-1.5 rounded-md text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-1.5 rounded-md text-xs text-center flex items-center justify-center gap-1.5 cursor-pointer relative z-10"
               style={{
-                background: activeTab === 'sources' ? 'var(--color-surface)' : 'transparent',
                 color: activeTab === 'sources' ? 'var(--color-text)' : 'var(--color-text-muted)',
                 fontWeight: activeTab === 'sources' ? 600 : 500,
-                boxShadow: activeTab === 'sources' ? 'var(--shadow-xs)' : 'none',
               }}
             >
-              <Database size={13} strokeWidth={2} />
-              <span>Sources</span>
-              <span
-                className="text-[10px] font-mono px-1.5 py-0.2 rounded"
-                style={{
-                  background: 'var(--color-overlay)',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                {activeCount}
+              {activeTab === 'sources' && (
+                <motion.div
+                  layoutId="sidebar-active-tab-bg"
+                  className="absolute inset-0 rounded-md border"
+                  style={{
+                    background: 'var(--color-surface)',
+                    borderColor: 'var(--color-border-strong)',
+                    boxShadow: 'var(--shadow-xs)',
+                  }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5">
+                <Database size={13} strokeWidth={2} />
+                <span>Sources</span>
+                <span
+                  className="text-[10px] font-mono px-1.5 py-0.2 rounded"
+                  style={{
+                    background: 'var(--color-overlay)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  {activeCount}
+                </span>
               </span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('chats')}
-              className="flex-1 py-1.5 rounded-md text-xs transition-fast text-center flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-1.5 rounded-md text-xs text-center flex items-center justify-center gap-1.5 cursor-pointer relative z-10"
               style={{
-                background: activeTab === 'chats' ? 'var(--color-surface)' : 'transparent',
                 color: activeTab === 'chats' ? 'var(--color-text)' : 'var(--color-text-muted)',
                 fontWeight: activeTab === 'chats' ? 600 : 500,
-                boxShadow: activeTab === 'chats' ? 'var(--shadow-xs)' : 'none',
               }}
             >
-              <MessageSquare size={13} strokeWidth={2} />
-              <span>Chats</span>
-              <span
-                className="text-[10px] font-mono px-1.5 py-0.2 rounded"
-                style={{
-                  background: 'var(--color-overlay)',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                {chats.length}
+              {activeTab === 'chats' && (
+                <motion.div
+                  layoutId="sidebar-active-tab-bg"
+                  className="absolute inset-0 rounded-md border"
+                  style={{
+                    background: 'var(--color-surface)',
+                    borderColor: 'var(--color-border-strong)',
+                    boxShadow: 'var(--shadow-xs)',
+                  }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5">
+                <MessageSquare size={13} strokeWidth={2} />
+                <span>Chats</span>
+                <span
+                  className="text-[10px] font-mono px-1.5 py-0.2 rounded"
+                  style={{
+                    background: 'var(--color-overlay)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  {chats.length}
+                </span>
               </span>
             </button>
           </div>
@@ -444,92 +499,176 @@ export function Sidebar() {
 
         {/* ── 3. Mutually Exclusive Accordion Body (Smooth Height Transition) ── */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
-          {/* TAB 1: Sources Tab Content */}
-          <div
-            className="flex-1 min-h-0 flex flex-col overflow-hidden"
-            style={{ display: activeTab === 'sources' ? 'flex' : 'none' }}
-          >
-            {/* Category Filter Pills & Add / Expand Buttons */}
-            <div className="px-4 pt-3.5 pb-2.5 flex-shrink-0 flex items-center justify-between gap-2 border-b border-[var(--color-border)]">
-              <div
-                className="flex items-center p-1 rounded-lg text-[10px] font-medium flex-1 min-w-0 border gap-0.5"
-                style={{
-                  background: 'var(--color-overlay)',
-                  borderColor: 'var(--color-border)',
-                }}
+          <AnimatePresence mode="wait" initial={false}>
+            {activeTab === 'sources' ? (
+              <motion.div
+                key="sources-panel"
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -6 }}
+                transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                className="flex-1 min-h-0 flex flex-col overflow-hidden"
               >
-                {[
-                  { id: 'all', label: `All (${counts.all})` },
-                  { id: 'documents', label: `Docs (${counts.documents})` },
-                  { id: 'data', label: `Data (${counts.data})` },
-                  { id: 'charts', label: `Charts (${counts.charts})` },
-                  { id: 'apis', label: `APIs (${counts.apis})` },
-                ].map((tab) => {
-                  const isSelected = sourcesCategory === tab.id
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setSourcesCategory(tab.id)}
-                      className="flex-1 py-1.5 rounded-md text-[10px] transition-fast text-center cursor-pointer truncate"
-                      style={{
-                        background: isSelected ? 'var(--color-surface)' : 'transparent',
-                        color: isSelected ? 'var(--color-text)' : 'var(--color-text-muted)',
-                        fontWeight: isSelected ? 600 : 500,
-                        boxShadow: isSelected ? 'var(--shadow-xs)' : 'none',
-                      }}
-                    >
-                      {tab.label}
-                    </button>
-                  )
-                })}
+            {/* Category Filter Toolbar with Animated Popover & Expand Button */}
+            <div className="px-4 py-2.5 flex-shrink-0 flex items-center justify-between gap-2 border-b border-[var(--color-border)] relative">
+              {/* Active Category / Filter Indicator */}
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
+                  Sources
+                </span>
+                <span
+                  className="text-[10px] font-mono px-2 py-0.5 rounded-full font-medium border"
+                  style={{
+                    background: sourcesCategory === 'all' ? 'var(--color-overlay)' : 'var(--color-accent-tint)',
+                    borderColor: sourcesCategory === 'all' ? 'var(--color-border)' : 'var(--color-accent-border)',
+                    color: sourcesCategory === 'all' ? 'var(--color-text-muted)' : 'var(--color-accent)',
+                  }}
+                >
+                  {sourcesCategory === 'all'
+                    ? `All (${counts.all})`
+                    : sourcesCategory === 'documents'
+                    ? `Docs (${counts.documents})`
+                    : sourcesCategory === 'data'
+                    ? `Data (${counts.data})`
+                    : sourcesCategory === 'charts'
+                    ? `Charts (${counts.charts})`
+                    : `APIs (${counts.apis})`}
+                </span>
               </div>
 
-              {/* Add Source Directory / Files button */}
-              <button
-                type="button"
-                onClick={() => setIsAddDirModalOpen(true)}
-                className="p-2 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-accent)',
-                }}
-                title="Browse & add source directories or files"
-              >
-                <Plus size={13} strokeWidth={2.4} />
-              </button>
+              {/* Action Buttons: Filter Dropdown + Expand */}
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {/* Single Filter Button */}
+                <div className="relative" ref={filterDropdownRef}>
+                  <button
+                    type="button"
+                    id="sources-filter-btn"
+                    onClick={() => setIsFilterDropdownOpen((prev) => !prev)}
+                    className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex items-center gap-1 border shadow-xs"
+                    style={{
+                      background: isFilterDropdownOpen || sourcesCategory !== 'all' ? 'var(--color-accent-tint)' : 'var(--color-surface)',
+                      borderColor: isFilterDropdownOpen || sourcesCategory !== 'all' ? 'var(--color-accent-border)' : 'var(--color-border)',
+                      color: isFilterDropdownOpen || sourcesCategory !== 'all' ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                    }}
+                    title="Filter sources by category"
+                    aria-label="Filter sources"
+                  >
+                    <Filter size={13} strokeWidth={2.2} />
+                  </button>
 
-              {/* Expand to Full Sources Hub button */}
-              <Link
-                to="/sources"
-                className="p-2 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-text-muted)',
-                }}
-                title="Open Sources & Pipeline Internals Hub (/sources)"
-              >
-                <Maximize2 size={13} strokeWidth={2} />
-              </Link>
+                  {/* Animated Filter Popover via Framer Motion */}
+                  <AnimatePresence>
+                    {isFilterDropdownOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 4 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 4 }}
+                        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                        className="absolute right-0 top-full mt-1.5 w-48 rounded-xl py-1.5 z-50 shadow-xl border overflow-hidden"
+                        style={{
+                          background: 'var(--color-surface)',
+                          borderColor: 'var(--color-border)',
+                          boxShadow: 'var(--shadow-lg)',
+                        }}
+                      >
+                        <div
+                          className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider flex items-center justify-between"
+                          style={{ color: 'var(--color-text-faint)' }}
+                        >
+                          <span>Filter Sources</span>
+                          <span className="font-mono">{counts.all} total</span>
+                        </div>
+                        <div className="py-1">
+                          {[
+                            { id: 'all', label: 'All Sources', count: counts.all },
+                            { id: 'documents', label: 'Documents', count: counts.documents },
+                            { id: 'data', label: 'Structured Data', count: counts.data },
+                            { id: 'charts', label: 'Charts & Scans', count: counts.charts },
+                            { id: 'apis', label: 'APIs & Feeds', count: counts.apis },
+                          ].map((cat) => {
+                            const isSelected = sourcesCategory === cat.id
+                            return (
+                              <button
+                                key={cat.id}
+                                type="button"
+                                onClick={() => {
+                                  setSourcesCategory(cat.id)
+                                  setIsFilterDropdownOpen(false)
+                                }}
+                                className="w-full px-3 py-1.5 text-xs flex items-center justify-between transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer text-left group"
+                                style={{
+                                  color: isSelected ? 'var(--color-accent)' : 'var(--color-text)',
+                                  fontWeight: isSelected ? 600 : 400,
+                                }}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="w-3.5 flex items-center justify-center">
+                                    {isSelected ? (
+                                      <Check size={12} strokeWidth={2.5} style={{ color: 'var(--color-accent)' }} />
+                                    ) : null}
+                                  </div>
+                                  <span className="truncate">{cat.label}</span>
+                                </div>
+                                <span
+                                  className="text-[10px] font-mono px-1.5 py-0.2 rounded font-medium ml-2"
+                                  style={{
+                                    background: isSelected ? 'var(--color-accent-tint)' : 'var(--color-overlay)',
+                                    color: isSelected ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                                  }}
+                                >
+                                  {cat.count}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Expand to Full Sources Hub button */}
+                <Link
+                  to="/sources"
+                  className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
+                  style={{
+                    background: 'var(--color-surface)',
+                    borderColor: 'var(--color-border)',
+                    color: 'var(--color-text-muted)',
+                  }}
+                  title="Open Sources & Pipeline Internals Hub (/sources)"
+                >
+                  <Maximize2 size={13} strokeWidth={2} />
+                </Link>
+              </div>
             </div>
 
-            {/* Hierarchical Tree with Smooth Custom Scrollbar */}
+            {/* Hierarchical Tree with Smooth Custom Scrollbar and Category Transition */}
             <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-2 flex flex-col gap-1 custom-scrollbar">
-              <SourceFileTree
-                tree={tree}
-                filterCategory={sourcesCategory}
-                onToggleSource={toggleSource}
-                onDeleteSource={handleDeleteSource}
-                compact={false}
-              />
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={sourcesCategory}
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  transition={{ duration: 0.15, ease: 'easeOut' }}
+                  className="flex flex-col gap-1"
+                >
+                  <SourceFileTree
+                    tree={tree}
+                    filterCategory={sourcesCategory}
+                    onToggleSource={toggleSource}
+                    onDeleteSource={handleDeleteSource}
+                    compact={false}
+                  />
+                </motion.div>
+              </AnimatePresence>
             </div>
 
             {/* Knowledge Base Summary Card */}
             <div className="px-4 py-3 flex-shrink-0 border-t border-[var(--color-border)]">
               <div
-                className="p-4 rounded-xl flex flex-col gap-3.5 transition-fast border shadow-xs"
+                className="p-4 rounded-xl flex flex-col gap-3.5 transition-fast border shadow-[var(--shadow-sm)] card-hover-lift"
                 style={{
                   background: 'var(--color-surface)',
                   borderColor: 'var(--color-border)',
@@ -538,7 +677,7 @@ export function Sidebar() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div
-                      className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                      className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 shadow-xs"
                       style={{
                         background: 'var(--color-accent-tint)',
                         color: 'var(--color-accent)',
@@ -557,7 +696,7 @@ export function Sidebar() {
                     </div>
                   </div>
                   <span
-                    className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border flex-shrink-0"
+                    className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border flex-shrink-0 shadow-xs"
                     style={{
                       background: 'var(--color-overlay)',
                       borderColor: 'var(--color-border)',
@@ -575,7 +714,9 @@ export function Sidebar() {
                     style={{ color: 'var(--color-text-muted)' }}
                   >
                     <span className="font-medium">Storage utilization</span>
-                    <span className="font-mono font-semibold text-[var(--color-text)]">{totalSizeDisplay}</span>
+                    <span className="font-mono font-semibold text-[var(--color-text)]">
+                      {totalSizeDisplay} • {chunkCount || (totalCount > 0 ? `${totalCount * 8}` : '0')} chunks
+                    </span>
                   </div>
                   <div
                     className="w-full h-1.5 rounded-full overflow-hidden"
@@ -605,12 +746,15 @@ export function Sidebar() {
                 </Link>
               </div>
             </div>
-          </div>
-
-          {/* TAB 2: Chats Tab Content (ChatGPT-history style) */}
-          <div
-            className={`collapsible-grid flex-1 ${activeTab === 'chats' ? 'is-expanded' : ''}`}
-            style={{ display: activeTab === 'chats' ? 'flex' : 'none', flexDirection: 'column' }}
+          </motion.div>
+        ) : (
+          <motion.div
+            key="chats-panel"
+            initial={{ opacity: 0, x: 6 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 6 }}
+            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 min-h-0 flex flex-col overflow-hidden"
           >
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {/* Pinned "+ New chat" button */}
@@ -646,12 +790,13 @@ export function Sidebar() {
                       key={session.id}
                       type="button"
                       onClick={() => handleSelectSession(session.id)}
-                      className="w-full flex items-center justify-between p-2.5 rounded-lg text-left transition-fast cursor-pointer group"
+                      className="w-full flex items-center justify-between p-2.5 rounded-lg text-left transition-fast cursor-pointer group row-hover-lift"
                       style={{
                         background: isActive ? 'var(--color-surface)' : 'transparent',
                         border: isActive
-                          ? '1px solid var(--color-border)'
+                          ? '1px solid var(--color-border-strong)'
                           : '1px solid transparent',
+                        boxShadow: isActive ? 'var(--shadow-xs)' : 'none',
                       }}
                       title={session.title}
                     >
@@ -695,8 +840,10 @@ export function Sidebar() {
                 })}
               </div>
             </div>
-          </div>
-        </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
 
         {/* ── 4. User Account Footer (Pinned at Bottom, Always Visible) ─ */}
         <div
@@ -802,7 +949,7 @@ export function Sidebar() {
       {/* ── Add Source Directory & Native File/Folder Browser Modal ── */}
       <AddSourceDirectoryModal
         isOpen={isAddDirModalOpen}
-        onClose={() => setIsAddDirModalOpen(false)}
+        onClose={handleCloseAddDirModal}
         onDirectoriesUpdated={fetchCorpus}
         currentDirectories={directories}
       />

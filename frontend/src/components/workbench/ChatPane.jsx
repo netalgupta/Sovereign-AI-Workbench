@@ -24,15 +24,36 @@ import {
   Play,
   ShieldAlert,
   MessageSquare,
+  FilePlus,
+  FolderPlus,
+  Image as ImageIcon,
+  Shield,
+  ShieldCheck,
 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
+import { useIngestionStore } from '../../store/ingestionStore'
 import { sendMessageStream } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
-import { NetworkMonitorBar } from '../../integrations/network-monitor'
 import { CalcTraceCard } from '../../integrations/calc-trace'
+import LiveAudioVisualizer from './LiveAudioVisualizer'
+
+// Helper to convert browser File object to Base64
+const readFileAsBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      const base64 = typeof result === 'string' ? result.split(',')[1] || '' : ''
+      resolve(base64)
+    }
+    reader.onerror = (err) => reject(err)
+    reader.readAsDataURL(file)
+  })
+}
 
 // Set of 12 phrases for completed thinking block word rotation
 
@@ -84,7 +105,166 @@ export function ChatPane() {
   // ── Voice Dictation & Multi-line Composer State ───────────────────────────
   const [isListening, setIsListening] = useState(false)
   const recognitionRef = useRef(null)
+  const audioStreamRef = useRef(null)
   const textareaRef = useRef(null)
+  const [interimTranscript, setInterimTranscript] = useState('')
+  const [sessionTranscript, setSessionTranscript] = useState('')
+  const [recordingDuration, setRecordingDuration] = useState(0)
+  const baseDraftRef = useRef('')
+
+  // ── Attachment Popover & Ingestion State ───────────────────────────────────
+  const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false)
+  const attachMenuRef = useRef(null)
+  const docFileInputRef = useRef(null)
+  const photoFileInputRef = useRef(null)
+  const startTrackingIngestion = useIngestionStore((s) => s.startTracking)
+
+  // ── Real-Time Network Monitor Telemetry for Header Button ─────────────────
+  const [networkStatus, setNetworkStatus] = useState({ isAirGapped: true, socketCount: 0, available: false })
+
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/network/status')
+        if (res.ok && active) {
+          const data = await res.json()
+          setNetworkStatus({
+            isAirGapped: data.is_air_gapped !== false,
+            socketCount: Array.isArray(data.connections) ? data.connections.length : (data.externalCount ?? 0),
+            available: data.status !== 'error' && data.status !== 'unknown',
+          })
+        }
+      } catch {
+        // preserve fallback
+      }
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [])
+
+  // Close attachment dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target)) {
+        setIsAttachMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Attachment flow handlers: Add Document, Add Photo, Add Source Directory
+  const handleAddDocument = async () => {
+    setIsAttachMenuOpen(false)
+    try {
+      showToast('Opening native document picker...', 'info')
+      const pickRes = await fetch('/api/sources/dialog/pick-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (pickRes.ok) {
+        const pickData = await pickRes.json()
+        if (pickData.cancelled || !pickData.paths || pickData.paths.length === 0) return
+
+        showToast(`Indexing ${pickData.paths.length} document(s)...`, 'info')
+        let lastResult = null
+        for (let i = 0; i < pickData.paths.length; i++) {
+          const filePath = pickData.paths[i]
+          const addRes = await fetch('/api/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath, recursive: false }),
+          })
+          if (addRes.ok) lastResult = await addRes.json()
+        }
+
+        if (lastResult?.job_id) startTrackingIngestion(lastResult.job_id)
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
+        showToast(`Queued ${pickData.paths.length} document(s) for indexing`, 'success')
+        return
+      }
+    } catch {
+      // Fallback to browser file input
+    }
+    docFileInputRef.current?.click()
+  }
+
+  const handleAddPhoto = () => {
+    setIsAttachMenuOpen(false)
+    photoFileInputRef.current?.click()
+  }
+
+  const handleAddSourceDirectory = async () => {
+    setIsAttachMenuOpen(false)
+    try {
+      showToast('Opening native folder picker...', 'info')
+      const pickRes = await fetch('/api/sources/dialog/pick-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (pickRes.ok) {
+        const pickData = await pickRes.json()
+        if (pickData.cancelled || !pickData.path) return
+
+        const folderName = pickData.name || pickData.path.split(/[\\/]/).pop() || 'folder'
+        showToast(`Indexing folder "${folderName}"...`, 'info')
+        const addRes = await fetch('/api/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: pickData.path, recursive: true }),
+        })
+        const addData = await addRes.json()
+        if (!addRes.ok) throw new Error(addData.error || addData.detail || 'Failed to index folder')
+
+        if (addData.job_id) startTrackingIngestion(addData.job_id)
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
+        showToast(`Folder "${folderName}" registered and queued for indexing`, 'success')
+        return
+      }
+    } catch {
+      // Fallback
+    }
+    window.dispatchEvent(new CustomEvent('open-add-source-modal'))
+  }
+
+  const handleBrowserFilesUpload = async (e, label) => {
+    const fileList = Array.from(e.target.files || [])
+    if (fileList.length === 0) return
+    e.target.value = ''
+
+    showToast(`Uploading ${fileList.length} ${label || 'file'}(s)...`, 'info')
+    try {
+      const filesToUpload = []
+      for (const file of fileList) {
+        const base64 = await readFileAsBase64(file)
+        filesToUpload.push({
+          name: file.name,
+          relPath: file.name,
+          contentBase64: base64,
+          sizeBytes: file.size,
+        })
+      }
+
+      const res = await fetch('/api/sources/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: filesToUpload }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || data.detail || 'Upload failed')
+
+      if (data.job_id) startTrackingIngestion(data.job_id)
+      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+      showToast(`Added ${fileList.length} ${label || 'file'}(s) to sources`, 'success')
+    } catch (err) {
+      showToast(err.message || 'Failed to upload files', 'error')
+    }
+  }
 
   // Detect code or markdown structure in draft
   const isCodeOrMarkdown = useMemo(() => {
@@ -128,65 +308,199 @@ export function ChatPane() {
     }
   }, [])
 
-  // Toggle voice dictation using Web Speech API
-  const toggleListening = () => {
+  // Timer and keyboard escape handler for voice dictation
+  useEffect(() => {
+    let interval = null
     if (isListening) {
+      interval = setInterval(() => {
+        setRecordingDuration((d) => d + 1)
+      }, 1000)
+    } else {
+      setRecordingDuration(0)
+    }
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [isListening])
+
+  useEffect(() => {
+    if (!isListening) return
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        cancelListening()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        confirmListening()
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [isListening, sessionTranscript, interimTranscript])
+
+  useEffect(() => {
+    return () => {
       if (recognitionRef.current) {
+        try { recognitionRef.current.stop() } catch (e) {}
+      }
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((t) => t.stop())
+      }
+    }
+  }, [])
+
+  // Confirm voice dictation: commit transcribed text and restore normal composer
+  const confirmListening = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null
         recognitionRef.current.stop()
-      }
-      setIsListening(false)
+      } catch (e) {}
+      recognitionRef.current = null
+    }
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      audioStreamRef.current = null
+    }
+
+    // Append session transcription to base draft
+    const fullSessionText = (sessionTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim()
+    if (fullSessionText) {
+      setDraft((prev) => {
+        const base = baseDraftRef.current || ''
+        const spacing = base && !base.endsWith(' ') && !base.endsWith('\n') ? ' ' : ''
+        return base + spacing + fullSessionText
+      })
+    }
+
+    setInterimTranscript('')
+    setSessionTranscript('')
+    setIsListening(false)
+
+    setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 50)
+  }
+
+  // Cancel voice dictation: discard recorded speech and restore previous composer text
+  const cancelListening = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null
+        recognitionRef.current.stop()
+      } catch (e) {}
+      recognitionRef.current = null
+    }
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      audioStreamRef.current = null
+    }
+
+    // Discard any transcribed speech from this session and restore snapshot
+    setDraft(baseDraftRef.current || '')
+    setInterimTranscript('')
+    setSessionTranscript('')
+    setIsListening(false)
+
+    setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 50)
+  }
+
+  const stopListening = confirmListening
+
+  // Toggle voice dictation using MediaStream + Web Audio Analyser + Web Speech API
+  const toggleListening = async () => {
+    if (isListening) {
+      stopListening()
       return
     }
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      showToast('Voice dictation is not supported in this browser (requires Web Speech API)', 'warning')
+    // 1. Snapshot base draft and reset session buffers
+    baseDraftRef.current = draft
+    setInterimTranscript('')
+    setSessionTranscript('')
+    setRecordingDuration(0)
+
+    // 2. Request microphone stream (feeds Web Audio AnalyserNode for live audiogram)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showToast('Microphone device access (getUserMedia) is not supported in this browser', 'error')
       return
     }
 
+    let stream = null
     try {
-      const recognition = new SpeechRecognition()
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.lang = 'en-US'
-
-      recognition.onstart = () => {
-        setIsListening(true)
-        showToast('Voice dictation active — speak now', 'info')
-      }
-
-      recognition.onresult = (event) => {
-        let transcript = ''
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript
-        }
-        if (transcript) {
-          setDraft((prev) => {
-            const spacing = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''
-            return prev + spacing + transcript
-          })
-        }
-      }
-
-      recognition.onerror = (event) => {
-        console.warn('Speech recognition error:', event.error)
-        setIsListening(false)
-        if (event.error !== 'no-speech') {
-          showToast(`Voice input error: ${event.error}`, 'warning')
-        }
-      }
-
-      recognition.onend = () => {
-        setIsListening(false)
-      }
-
-      recognitionRef.current = recognition
-      recognition.start()
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioStreamRef.current = stream
     } catch (err) {
-      console.error('Failed to start speech recognition:', err)
-      setIsListening(false)
-      showToast('Could not initialize microphone input', 'error')
+      console.error('Microphone access denied or unavailable:', err)
+      showToast('Microphone access denied: please enable microphone permission', 'error')
+      return
     }
+
+    // 3. Initialize SpeechRecognition if available
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (SpeechRecognition) {
+      try {
+        const recognition = new SpeechRecognition()
+        recognition.continuous = true
+        recognition.interimResults = true
+        recognition.lang = 'en-US'
+
+        recognition.onstart = () => {
+          // Recognition started
+        }
+
+        recognition.onresult = (event) => {
+          let currentFinal = ''
+          let currentInterim = ''
+
+          for (let i = 0; i < event.results.length; i++) {
+            const chunk = event.results[i][0]?.transcript || ''
+            if (event.results[i].isFinal) {
+              currentFinal += chunk + ' '
+            } else {
+              currentInterim += chunk
+            }
+          }
+
+          setInterimTranscript(currentInterim)
+          if (currentFinal) {
+            setSessionTranscript(currentFinal.trim())
+          }
+        }
+
+        recognition.onerror = (event) => {
+          console.warn('Speech recognition event:', event.error)
+          if (event.error === 'no-speech') {
+            // Silence detected; do not abort, let user speak when ready
+            return
+          }
+          if (event.error === 'network') {
+            // Chromium Web Speech API requires Google cloud endpoint.
+            // In air-gapped / local networks, notify user that live audiogram continues
+            showToast('Air-gapped mode: cloud STT endpoint unreachable, live audiogram active', 'info')
+          } else if (event.error !== 'aborted') {
+            showToast(`Voice recognition: ${event.error}`, 'warning')
+          }
+        }
+
+        recognition.onend = () => {
+          // If still recording, keep state
+        }
+
+        recognitionRef.current = recognition
+        recognition.start()
+      } catch (err) {
+        console.warn('SpeechRecognition start failed:', err)
+      }
+    } else {
+      showToast('Web Speech API not supported; live audiogram active', 'info')
+    }
+
+    setIsListening(true)
   }
 
   // ── Inline Live-Thinking State ───────────────────────────────────────────
@@ -530,8 +844,8 @@ export function ChatPane() {
 
           {/* Segmented Control Tab Row (Chat / Notebooks / Artifacts) */}
           <div
-            className="flex items-center p-1 rounded-lg text-xs font-medium ml-3 gap-1"
-            style={{ background: 'var(--color-overlay)' }}
+            className="flex items-center p-1 rounded-lg text-xs font-medium ml-3 gap-1 border relative"
+            style={{ background: 'var(--color-overlay)', borderColor: 'var(--color-border)' }}
           >
             {[
               { id: 'chat', label: 'Chat', icon: Bot },
@@ -549,23 +863,35 @@ export function ChatPane() {
                       showToast(`${tab.label} module — Coming soon`, 'info')
                     }
                   }}
-                  className="flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs transition-fast cursor-pointer"
+                  className="relative flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs transition-fast cursor-pointer"
                   style={{
-                    background: isActive ? 'var(--color-surface)' : 'transparent',
                     color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
                     fontWeight: isActive ? 600 : 500,
-                    boxShadow: isActive ? 'var(--shadow-xs)' : 'none',
                   }}
                 >
-                  <tab.icon size={13} strokeWidth={2} />
-                  <span>{tab.label}</span>
+                  {isActive && (
+                    <motion.div
+                      layoutId="chatpane-active-tab-pill"
+                      className="absolute inset-0 rounded-md border"
+                      style={{
+                        background: 'var(--color-surface)',
+                        borderColor: 'var(--color-border-strong)',
+                        boxShadow: 'var(--shadow-xs)',
+                      }}
+                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-2">
+                    <tab.icon size={13} strokeWidth={2} />
+                    <span>{tab.label}</span>
+                  </span>
                 </button>
               )
             })}
           </div>
         </div>
 
-        {/* Right Header Actions: Plan DAG Compact Progress Strip + Overflow Menu */}
+        {/* Right Header Actions: Plan DAG Compact Progress Strip + Live Sockets + Overflow Menu */}
         <div className="flex items-center gap-2">
           {(() => {
             const doneSteps = plan.filter((s) => s.status === 'done').length
@@ -576,7 +902,7 @@ export function ChatPane() {
             return (
               <Link
                 to={`/plan/${sessionId}`}
-                className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none"
+                className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none row-hover-lift"
                 style={{
                   background: 'var(--color-surface)',
                   border: '1px solid var(--color-border)',
@@ -627,6 +953,31 @@ export function ChatPane() {
               </Link>
             )
           })()}
+
+          {/* Dedicated Live Sockets Telemetry Button (Relocated from bottom strip) */}
+          <Link
+            to="/monitor"
+            id="live-sockets-header-btn"
+            className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none row-hover-lift"
+            style={{
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+            }}
+            title="Inspect real-time air-gap security and socket telemetry (/monitor)"
+          >
+            <div
+              className="flex items-center gap-1.5"
+              style={{ color: networkStatus.isAirGapped ? '#10b981' : '#ef4444' }}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${networkStatus.isAirGapped ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`}
+              />
+              <ShieldCheck size={13} strokeWidth={2.2} />
+              <span className="text-[11px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                Live Sockets ({networkStatus.available ? networkStatus.socketCount : 0})
+              </span>
+            </div>
+          </Link>
 
           <button
             type="button"
@@ -749,39 +1100,179 @@ export function ChatPane() {
           </div>
         )}
 
-        <div
-          className={`flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-xs ${
-            isCodeOrMarkdown ? 'ring-1 ring-[var(--color-accent-border)]' : ''
-          }`}
-          style={{
-            background: isCodeOrMarkdown ? 'var(--color-surface-hover)' : 'var(--color-input-bg)',
-            border: awaitingHumanApproval
-              ? '1px dashed var(--color-accent)'
-              : '1px solid var(--color-input-border)',
-            boxShadow: 'var(--shadow-xs)',
-            opacity: awaitingHumanApproval ? 0.75 : 1,
-          }}
-        >
-          {/* Left buttons: Paperclip + Globe + Mic */}
-          <div className="flex items-center gap-1.5 pb-0.5">
-            <button
-              type="button"
-              disabled={awaitingHumanApproval}
-              onClick={() => showToast('Multimodal upload ready — Drop PDFs, scans, or voice notes here', 'info')}
-              className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
-                awaitingHumanApproval
-                  ? 'cursor-not-allowed opacity-40'
-                  : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
-              }`}
-              style={{ color: 'var(--color-text-muted)' }}
-              title="Attach document or audio"
+        <AnimatePresence mode="wait">
+          {isListening ? (
+            <motion.div
+              key="voice-recording-pill"
+              initial={{ opacity: 0, scale: 0.98, y: 2 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 2 }}
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full"
             >
-              <Paperclip size={15} strokeWidth={2} />
-            </button>
+              <LiveAudioVisualizer
+                stream={audioStreamRef.current}
+                onConfirm={confirmListening}
+                onCancel={cancelListening}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="normal-composer"
+              initial={{ opacity: 0, scale: 0.98, y: 2 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 2 }}
+              transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+              className={`flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-[var(--shadow-md)] ${
+                isCodeOrMarkdown ? 'ring-1 ring-[var(--color-accent-border)]' : ''
+              }`}
+              style={{
+                background: isCodeOrMarkdown ? 'var(--color-surface-hover)' : 'var(--color-input-bg)',
+                border: awaitingHumanApproval
+                  ? '1px dashed var(--color-accent)'
+                  : '1px solid var(--color-input-border)',
+                boxShadow: 'var(--shadow-md)',
+                opacity: awaitingHumanApproval ? 0.75 : 1,
+              }}
+            >
+          {/* Hidden file inputs for document and photo attachments */}
+          <input
+            ref={docFileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,.xlsx,.xls,.txt,.csv,.json,.md,.yaml,.yml,.py,.sql"
+            className="hidden"
+            onChange={(e) => handleBrowserFilesUpload(e, 'document')}
+          />
+          <input
+            ref={photoFileInputRef}
+            type="file"
+            multiple
+            accept="image/*,.png,.jpg,.jpeg,.tiff,.bmp,.svg"
+            className="hidden"
+            onChange={(e) => handleBrowserFilesUpload(e, 'photo')}
+          />
+
+          {/* Left buttons: Paperclip (with animated popover) + Globe + Mic */}
+          <div className="flex items-center gap-1.5 pb-0.5">
+            {/* Attachment Button + Animated Popover */}
+            <div className="relative" ref={attachMenuRef}>
+              <button
+                type="button"
+                id="chat-attachment-btn"
+                disabled={awaitingHumanApproval}
+                onClick={() => !awaitingHumanApproval && setIsAttachMenuOpen((prev) => !prev)}
+                className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
+                  awaitingHumanApproval
+                    ? 'cursor-not-allowed opacity-40'
+                    : 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
+                }`}
+                style={{
+                  color: isAttachMenuOpen ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                  background: isAttachMenuOpen ? 'var(--color-accent-tint)' : 'transparent',
+                }}
+                title="Attach document, photo, or source directory"
+                aria-label="Attach source"
+              >
+                <Paperclip size={15} strokeWidth={2} />
+              </button>
+
+              {/* Animated Attachment Dropdown via Framer Motion */}
+              <AnimatePresence>
+                {isAttachMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 6 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 6 }}
+                    transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                    className="absolute left-0 bottom-full mb-2 w-56 rounded-xl py-1.5 z-50 shadow-xl border overflow-hidden"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: 'var(--color-border)',
+                      boxShadow: 'var(--shadow-lg)',
+                    }}
+                  >
+                    <div
+                      className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
+                      style={{ color: 'var(--color-text-faint)' }}
+                    >
+                      Add to Sources
+                    </div>
+
+                    {/* 1. Add Document */}
+                    <button
+                      type="button"
+                      id="attach-add-document-btn"
+                      onClick={handleAddDocument}
+                      className="w-full px-3 py-2 text-xs flex items-center gap-2.5 transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer text-left"
+                      style={{ color: 'var(--color-text)' }}
+                    >
+                      <div
+                        className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                        style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6' }}
+                      >
+                        <FilePlus size={13} strokeWidth={2.2} />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium text-xs">Add Document</span>
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                          PDF, DOCX, XLSX, TXT
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* 2. Add Photo */}
+                    <button
+                      type="button"
+                      id="attach-add-photo-btn"
+                      onClick={handleAddPhoto}
+                      className="w-full px-3 py-2 text-xs flex items-center gap-2.5 transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer text-left"
+                      style={{ color: 'var(--color-text)' }}
+                    >
+                      <div
+                        className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                        style={{ background: 'rgba(168, 85, 247, 0.12)', color: '#a855f7' }}
+                      >
+                        <ImageIcon size={13} strokeWidth={2.2} />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium text-xs">Add Photo</span>
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                          Inspection photos, P&amp;ID scans
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* 3. Add Source Directory */}
+                    <button
+                      type="button"
+                      id="attach-add-directory-btn"
+                      onClick={handleAddSourceDirectory}
+                      className="w-full px-3 py-2 text-xs flex items-center gap-2.5 transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer text-left"
+                      style={{ color: 'var(--color-text)' }}
+                    >
+                      <div
+                        className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                        style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}
+                      >
+                        <FolderPlus size={13} strokeWidth={2.2} />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium text-xs">Add Source Directory</span>
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                          Index local folder in-place
+                        </span>
+                      </div>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button
               type="button"
               disabled={awaitingHumanApproval}
-              onClick={() => showToast('Grounded in 8 local sources — Zero outbound network egress', 'success')}
+              onClick={() => showToast('Grounded in local sources — Zero outbound network egress', 'success')}
               className={`w-7 h-7 rounded-md flex items-center justify-center transition-fast ${
                 awaitingHumanApproval
                   ? 'cursor-not-allowed opacity-40'
@@ -969,11 +1460,10 @@ export function ChatPane() {
           >
             <Send size={14} strokeWidth={2} />
           </button>
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-
-      {/* ── 4. Persistent Bottom System / Network Monitor Bar (§3.9) ───── */}
-      <NetworkMonitorBar />
     </div>
   )
 }

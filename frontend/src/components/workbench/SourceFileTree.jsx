@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChevronRight,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   Check,
 } from 'lucide-react'
 import { useIngestionStore } from '../../store/ingestionStore'
+import { FileTypeTile } from '../common/FileTypeTile'
 
 
 function getFileIcon(type, category, ext) {
@@ -281,7 +283,7 @@ export function SourceFileTree({
           {/* Folder header row */}
           <div
             onClick={() => toggleFolder(node.id)}
-            className={`flex items-center justify-between transition-fast cursor-pointer group ${
+            className={`flex items-center justify-between transition-fast cursor-pointer group row-hover-lift ${
               isRootSection
                 ? 'py-2 px-2.5 rounded-lg my-1 border shadow-xs'
                 : 'py-1.5 px-2 rounded-md my-0.5 hover:bg-[var(--color-surface-hover)]'
@@ -303,24 +305,24 @@ export function SourceFileTree({
 
               {isRootSection ? (
                 <div
-                  className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+                  className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 shadow-xs"
                   style={{
                     background: 'var(--color-accent-tint)',
                     color: 'var(--color-accent)',
                     border: '1px solid var(--color-accent-border)',
                   }}
                 >
-                  <HardDrive size={11} strokeWidth={2.2} />
+                  <HardDrive size={12} strokeWidth={2.2} />
                 </div>
               ) : isExpanded ? (
                 <FolderOpen
-                  size={13}
+                  size={14}
                   className="flex-shrink-0"
                   style={{ color: 'var(--color-accent)' }}
                 />
               ) : (
                 <Folder
-                  size={13}
+                  size={14}
                   className="flex-shrink-0"
                   style={{ color: 'var(--color-text-muted)' }}
                 />
@@ -369,27 +371,33 @@ export function SourceFileTree({
           </div>
 
           {/* Children container with subtle vertical connector line */}
-          {isExpanded && (
-            <div
-              className="flex flex-col relative my-1 transition-base"
-              style={{
-                marginLeft: isRootSection ? '16px' : '12px',
-                paddingLeft: '10px',
-                borderLeft: '1px solid var(--color-border)',
-              }}
-            >
-              {children.length > 0 ? (
-                children
-              ) : (
-                <div
-                  className="text-[10px] italic py-1 opacity-70"
-                  style={{ paddingLeft: '8px', color: 'var(--color-text-muted)' }}
-                >
-                  (No matching documents in folder)
-                </div>
-              )}
-            </div>
-          )}
+          <AnimatePresence initial={false}>
+            {isExpanded && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                className="flex flex-col relative my-1 overflow-hidden"
+                style={{
+                  marginLeft: isRootSection ? '16px' : '12px',
+                  paddingLeft: '10px',
+                  borderLeft: '1px solid var(--color-border)',
+                }}
+              >
+                {children.length > 0 ? (
+                  children
+                ) : (
+                  <div
+                    className="text-[10px] italic py-1 opacity-70"
+                    style={{ paddingLeft: '8px', color: 'var(--color-text-muted)' }}
+                  >
+                    (No matching documents in folder)
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )
     }
@@ -409,10 +417,15 @@ export function SourceFileTree({
     const isRecentlyIndexed = statusInfo && statusInfo.stage === 'indexed'
 
     return (
-      <div
+      <motion.div
         key={node.id}
+        layout="position"
+        initial={{ opacity: 0, y: 3 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98 }}
+        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
         onClick={() => onSelectSource && onSelectSource(node)}
-        className="flex items-center justify-between py-2 px-2.5 rounded-lg transition-fast group cursor-pointer my-1 hover:bg-[var(--color-surface-hover)]"
+        className="flex items-center justify-between py-2 px-2.5 rounded-lg transition-fast group cursor-pointer my-1 hover:bg-[var(--color-surface-hover)] row-hover-lift"
         style={{
           background: isSelected ? 'var(--color-surface-hover)' : 'transparent',
           borderLeft: isSelected ? '2px solid var(--color-accent)' : '2px solid transparent',
@@ -421,43 +434,15 @@ export function SourceFileTree({
         title={`${node.name} • ${fileType} • ${node.size || ''} • ${node.fullPath || ''}`}
       >
         <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
-          {/* Colored File Icon container matching token system or live ingestion status */}
-          {isProcessing ? (
-            <div
-              className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-fast shadow-xs animate-pulse"
-              style={{
-                background: 'var(--color-accent-tint)',
-                color: 'var(--color-accent)',
-                border: '1px solid var(--color-accent-border)',
-              }}
-              title={`Ingesting document: ${statusInfo.stage}...`}
-            >
-              <Loader2 size={11} className="animate-spin" />
-            </div>
-          ) : isRecentlyIndexed ? (
-            <div
-              className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-all duration-300 shadow-xs animate-fade-in"
-              style={{
-                background: 'rgba(52, 211, 153, 0.15)',
-                color: '#10b981',
-                border: '1px solid rgba(52, 211, 153, 0.3)',
-              }}
-              title="Successfully indexed into FAISS"
-            >
-              <Check size={11} strokeWidth={2.6} />
-            </div>
-          ) : (
-            <div
-              className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-fast shadow-xs"
-              style={{
-                background: theme.bg,
-                color: theme.color,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              {getFileIcon(node.type, node.category, fileType)}
-            </div>
-          )}
+          {/* Standardized FileTypeTile with consistent square size and padding */}
+          <FileTypeTile
+            name={node.name}
+            type={node.type}
+            category={node.category}
+            size="sm"
+            isProcessing={isProcessing}
+            isIndexed={isRecentlyIndexed}
+          />
 
           <div className="flex flex-col min-w-0 flex-1 justify-center">
             {/* Clean File Name */}
@@ -469,7 +454,7 @@ export function SourceFileTree({
               {node.name}
             </span>
 
-            {/* Ingestion status badge or normal file type badge and size */}
+            {/* Ingestion status badge or normal file type badge and determinate size */}
             {isProcessing ? (
               <div className="flex items-center gap-1.5 text-[10px] font-sans mt-0.5 leading-none whitespace-nowrap overflow-hidden">
                 <span
@@ -480,7 +465,7 @@ export function SourceFileTree({
                     borderColor: 'var(--color-accent-border)',
                   }}
                 >
-                  {statusInfo.stage}…
+                  {statusInfo.chunks ? `${statusInfo.chunks} chunks • ` : ''}{statusInfo.stage}…
                 </span>
               </div>
             ) : isRecentlyIndexed ? (
@@ -493,7 +478,7 @@ export function SourceFileTree({
                     borderColor: 'rgba(52, 211, 153, 0.3)',
                   }}
                 >
-                  Indexed ✓
+                  {statusInfo.chunks ? `${statusInfo.chunks} chunks indexed ✓` : 'Indexed ✓'}
                 </span>
               </div>
             ) : (
@@ -562,7 +547,7 @@ export function SourceFileTree({
             </button>
           )}
         </div>
-      </div>
+      </motion.div>
     )
   }
 

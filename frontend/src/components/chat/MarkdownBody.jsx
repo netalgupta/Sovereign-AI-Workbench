@@ -46,7 +46,7 @@ const TableWrapper = ({ children }) => (
 const Th = ({ children }) => (
   <th
     style={{
-      padding: '8px 14px',
+      padding: '9px 16px',
       textAlign: 'left',
       fontWeight: 600,
       fontSize: '11.5px',
@@ -64,7 +64,7 @@ const Th = ({ children }) => (
 const Td = ({ children }) => (
   <td
     style={{
-      padding: '7px 14px',
+      padding: '8px 16px',
       color: 'var(--color-text)',
       borderBottom: '1px solid var(--color-border)',
       verticalAlign: 'top',
@@ -146,12 +146,13 @@ export function MarkdownBody({ content }) {
           // ── Blockquote ────────────────────────────────────────────────
           blockquote: ({ children }) => (
             <blockquote
-              className="my-3 pl-3.5 py-1.5 text-[13px] leading-relaxed"
+              className="my-3.5 pl-4 py-2.5 text-[13px] leading-relaxed"
               style={{
                 borderLeft: '3px solid var(--color-accent)',
                 color: 'var(--color-text-muted)',
                 background: 'var(--color-surface)',
-                borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+                borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+                boxShadow: 'var(--shadow-xs)',
               }}
             >
               {children}
@@ -168,17 +169,17 @@ export function MarkdownBody({ content }) {
 
           // ── Lists ─────────────────────────────────────────────────────
           ul: ({ children }) => (
-            <ul className="mb-3 pl-5 flex flex-col gap-1.5" style={{ listStyleType: 'disc' }}>
+            <ul className="mb-3.5 pl-5 flex flex-col gap-2" style={{ listStyleType: 'disc' }}>
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="mb-3 pl-5 flex flex-col gap-1.5" style={{ listStyleType: 'decimal' }}>
+            <ol className="mb-3.5 pl-5 flex flex-col gap-2" style={{ listStyleType: 'decimal' }}>
               {children}
             </ol>
           ),
           li: ({ children }) => (
-            <li className="leading-[1.7] text-[13.5px]" style={{ color: 'var(--color-text)' }}>
+            <li className="leading-[1.72] text-[13.5px]" style={{ color: 'var(--color-text)' }}>
               {children}
             </li>
           ),
@@ -197,13 +198,16 @@ export function MarkdownBody({ content }) {
                   language={language}
                   PreTag="div"
                   customStyle={{
-                    margin: '14px 0',
+                    margin: '16px 0',
                     borderRadius: 'var(--radius-lg)',
                     fontSize: '12px',
                     border: '1px solid var(--color-code-border)',
                     background: dark ? '#1a1714' : 'var(--color-code-bg)',
-                    padding: '14px 16px',
-                    lineHeight: 1.65,
+                    padding: '16px 18px',
+                    lineHeight: 1.68,
+                    boxShadow: dark
+                      ? '0 2px 8px -2px rgba(0,0,0,0.5)'
+                      : '0 1px 4px -1px rgba(42,39,36,0.08)',
                   }}
                   codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
                   {...props}

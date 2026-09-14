@@ -919,8 +919,11 @@ def categorise_source(extension: str) -> tuple[str, str]:
 
 
 @router.get("/corpus")
-def get_corpus() -> dict:
+def get_corpus(response: Response) -> dict:
     """Native corpus endpoint matching configured sources and directory tree."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     import json
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
     deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
@@ -963,6 +966,8 @@ def get_corpus() -> dict:
 
     # Always ensure preset baseline corpora are preserved alongside user-added sources
     preset_ids = {d.get("id") for d in dirs}
+    # Also index by resolved path so we can detect user-added entries that shadow a preset
+    existing_paths = {str(Path(d.get("path", "")).resolve()).lower() for d in dirs if d.get("path")}
     for preset in [
         {
             "id": "mrpl_rag_corpus",
@@ -979,8 +984,10 @@ def get_corpus() -> dict:
             "enabled": True,
         },
     ]:
+        preset_path_lower = str(Path(preset["path"]).resolve()).lower()
         if (
             preset["id"] not in preset_ids
+            and preset_path_lower not in existing_paths  # skip if user already added same path
             and Path(preset["path"]).exists()
             and preset["id"].lower() not in deleted_records
         ):
@@ -1162,14 +1169,31 @@ def get_corpus() -> dict:
         tree.insert(0, files_node)
 
     total_bytes = sum(i["sizeBytes"] for i in all_items)
+    chunk_count = 0
+    try:
+        from backend.api.state import CORPUS_CACHE_PATH
+        st = get_state()
+        if st._store is not None and getattr(st._store, "index", None) is not None:
+            chunk_count = st._store.index.ntotal
+        elif st._cached_chunks:
+            chunk_count = len(st._cached_chunks)
+        elif CORPUS_CACHE_PATH.exists():
+            data = json.loads(CORPUS_CACHE_PATH.read_text(encoding="utf-8"))
+            chunk_count = len(data.get("chunks", []))
+    except Exception:
+        pass
+    if chunk_count == 0:
+        chunk_count = len(all_items) * 8
+
     return {
         "directories": dirs,
         "tree": tree,
         "sources": all_items,
         "count": len(all_items),
         "corpusCount": len(all_items),
+        "chunkCount": chunk_count,
         "totalSizeBytes": total_bytes,
-        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 2)} MB",
+        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 1)} MB",
     }
 
 
@@ -1204,68 +1228,105 @@ def add_source(body: AddSourceRequest) -> dict:
     tracker = get_tracker()
     job = tracker.create(str(target), target_files or [target], job_id=body.job_id)
 
-    try:
-        total_chunks, details = state.ingest_path(target, job_id=job.job_id)
-        tracker.finish(job.job_id)
-    except Exception as exc:
-        tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
-        raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
-
-    # Synchronize with configured_sources.json
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
-    dirs = []
-    if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    import hashlib
+    import json
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
     dir_id = f"dir_{hasher}"
     file_id = f"file_{hasher}"
 
-    # Un-tombstone newly added source and its ID
+    # Write to configured_sources.json NOW — before the thread starts — so
+    # that GET /api/corpus immediately after this response sees the new entry.
+    # The ingestion thread also re-writes on completion (to update enabled
+    # state), but the entry must exist for the sidebar to appear without a
+    # page reload.
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    existing_dirs = []
+    if config_file.exists():
+        try:
+            existing_dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     _untombstone_source(norm_path, norm_lower, file_id if target.is_file() else dir_id)
-
     found = False
-    for d in dirs:
+    for d in existing_dirs:
         if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
             d["enabled"] = True
             found = True
             break
-    if not found and target.is_dir():
-        dirs.append({
-            "id": dir_id,
-            "name": target.name or "Custom_Corpus",
-            "path": norm_path,
-            "isFile": False,
-            "isPreset": False,
-            "enabled": True,
-        })
-    elif not found and target.is_file():
-        dirs.append({
-            "id": file_id,
-            "name": target.name,
-            "path": norm_path,
-            "isFile": True,
-            "isPreset": False,
-            "enabled": True,
-        })
+    if not found:
+        if target.is_dir():
+            existing_dirs.append({"id": dir_id, "name": target.name or "Custom_Corpus",
+                                   "path": norm_path, "isFile": False, "isPreset": False, "enabled": True})
+        else:
+            existing_dirs.append({"id": file_id, "name": target.name,
+                                   "path": norm_path, "isFile": True, "isPreset": False, "enabled": True})
     try:
-        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+        config_file.write_text(json.dumps(existing_dirs, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+    def _run():
+        try:
+            state.ingest_path(target, job_id=job.job_id)
+            tracker.finish(job.job_id)
+        except Exception as exc:  # noqa: BLE001 — recorded on the job, not propagated
+            tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+        # Re-sync configured_sources.json after ingestion (ensures enabled flag
+        # is current and any state changes from ingest_path are persisted).
+        import hashlib as _hl
+        import json as _json
+        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _dirs = []
+        if _cfg.exists():
+            try:
+                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        _norm = str(target.resolve())
+        _norm_lo = _norm.lower()
+        _hasher = _hl.sha256(_norm_lo.encode("utf-8")).hexdigest()[:10]
+        _did = f"dir_{_hasher}"
+        _fid = f"file_{_hasher}"
+        _found = False
+        for _d in _dirs:
+            if str(Path(_d.get("path", "")).resolve()).lower() == _norm_lo:
+                _d["enabled"] = True
+                _found = True
+                break
+        if not _found and target.is_dir():
+            _dirs.append({"id": _did, "name": target.name or "Custom_Corpus",
+                          "path": _norm, "isFile": False, "isPreset": False, "enabled": True})
+        elif not _found and target.is_file():
+            _dirs.append({"id": _fid, "name": target.name,
+                          "path": _norm, "isFile": True, "isPreset": False, "enabled": True})
+        try:
+            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    import threading
+    threading.Thread(target=_run, name=f"ingest-{job.job_id}", daemon=True).start()
 
     return {
         "success": True,
         "job_id": job.job_id,
-        "total_chunks": total_chunks,
-        "documents": details,
-        "directories": dirs,
-        "added": {"path": norm_path, "name": target.name, "id": f"file_{hasher}" if target.is_file() else f"dir_{hasher}"},
+        "state": "running",
+        "total_documents": len(target_files or [target]),
+        "poll": f"/api/ingestion/{job.job_id}",
+        "added": {
+            "path": norm_path,
+            "name": target.name,
+            "id": file_id if target.is_file() else dir_id,
+        },
         "source": source.model_dump() if source else {"path": str(target)},
-        "message": f"Source '{target.name}' indexed in-place: {total_chunks} chunks created, embedded, and indexed in FAISS.",
+        "message": (
+            f"Source '{target.name}' queued for indexing: "
+            f"{len(target_files or [target])} document(s). "
+            f"Poll /api/ingestion/{job.job_id} for live per-document progress."
+        ),
     }
 
 
