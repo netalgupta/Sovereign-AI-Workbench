@@ -478,7 +478,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
         try:
             raw_bytes = base64.b64decode(f.contentBase64)
             dest.write_bytes(raw_bytes)
-            saved_files.append(dest)
+            saved_files.append(dest.resolve())
             parts = clean_rel.split("/")
             if len(parts) > 1 and parts[0]:
                 top_folders.add(parts[0])
@@ -1283,13 +1283,18 @@ def add_source(body: AddSourceRequest) -> dict:
         if not target.exists():
             raise HTTPException(400, detail=f"Path does not exist on disk: {body.path}")
 
-    watch_path = str(target if target.is_dir() else target.parent)
-    try:
-        source = state.watcher.add_source(
-            watch_path, recursive=body.recursive, include_globs=body.include_globs
-        )
-    except Exception:
-        source = None
+    # Only register a watcher for directories. For a single file, pointing
+    # the watcher at its parent directory would silently ingest every other
+    # file in that folder — the opposite of what "add this one file" means.
+    # Single files are tracked through configured_sources.json directly.
+    source = None
+    if target.is_dir():
+        try:
+            source = state.watcher.add_source(
+                str(target), recursive=body.recursive, include_globs=body.include_globs
+            )
+        except Exception:
+            source = None
 
     # Ingest the target (file or directory) in-place without copying
     from backend.ingestion.ingestion_progress import get_tracker

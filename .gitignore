@@ -86,3 +86,6 @@ frontend/public/pipeline/*.json
 # corpus export is what made one person's 13 documents hydrate every
 # teammate's backend and hide folders they had just added.
 .workbench/
+MRPL_RAG_Test_Corpus/07_User_Uploads/*
+!MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
+/*.png

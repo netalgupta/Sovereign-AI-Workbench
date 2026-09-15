@@ -114,6 +114,7 @@ export function ChatPane() {
 
   // ── Attachment Popover & Ingestion State ───────────────────────────────────
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false)
+  const [temporaryAttachments, setTemporaryAttachments] = useState([])
   const attachMenuRef = useRef(null)
   const docFileInputRef = useRef(null)
   const photoFileInputRef = useRef(null)
@@ -158,39 +159,9 @@ export function ChatPane() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Attachment flow handlers: Add Document, Add Photo, Add Source Directory
-  const handleAddDocument = async () => {
+  // Attachment flow handlers: Temporary Attachments vs Permanent Sources
+  const handleAddDocument = () => {
     setIsAttachMenuOpen(false)
-    try {
-      showToast('Opening native document picker...', 'info')
-      const pickRes = await fetch('/api/sources/dialog/pick-files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (pickRes.ok) {
-        const pickData = await pickRes.json()
-        if (pickData.cancelled || !pickData.paths || pickData.paths.length === 0) return
-
-        showToast(`Indexing ${pickData.paths.length} document(s)...`, 'info')
-        let lastResult = null
-        for (let i = 0; i < pickData.paths.length; i++) {
-          const filePath = pickData.paths[i]
-          const addRes = await fetch('/api/sources', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath, recursive: false }),
-          })
-          if (addRes.ok) lastResult = await addRes.json()
-        }
-
-        if (lastResult?.job_id) startTrackingIngestion(lastResult.job_id)
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
-        showToast(`Queued ${pickData.paths.length} document(s) for indexing`, 'success')
-        return
-      }
-    } catch {
-      // Fallback to browser file input
-    }
     docFileInputRef.current?.click()
   }
 
@@ -199,36 +170,8 @@ export function ChatPane() {
     photoFileInputRef.current?.click()
   }
 
-  const handleAddSourceDirectory = async () => {
+  const handleAddSourceDirectory = () => {
     setIsAttachMenuOpen(false)
-    try {
-      showToast('Opening native folder picker...', 'info')
-      const pickRes = await fetch('/api/sources/dialog/pick-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (pickRes.ok) {
-        const pickData = await pickRes.json()
-        if (pickData.cancelled || !pickData.path) return
-
-        const folderName = pickData.name || pickData.path.split(/[\\/]/).pop() || 'folder'
-        showToast(`Indexing folder "${folderName}"...`, 'info')
-        const addRes = await fetch('/api/sources', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: pickData.path, recursive: true }),
-        })
-        const addData = await addRes.json()
-        if (!addRes.ok) throw new Error(addData.error || addData.detail || 'Failed to index folder')
-
-        if (addData.job_id) startTrackingIngestion(addData.job_id)
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
-        showToast(`Folder "${folderName}" registered and queued for indexing`, 'success')
-        return
-      }
-    } catch {
-      // Fallback
-    }
     window.dispatchEvent(new CustomEvent('open-add-source-modal'))
   }
 
@@ -237,33 +180,37 @@ export function ChatPane() {
     if (fileList.length === 0) return
     e.target.value = ''
 
-    showToast(`Uploading ${fileList.length} ${label || 'file'}(s)...`, 'info')
-    try {
-      const filesToUpload = []
-      for (const file of fileList) {
-        const base64 = await readFileAsBase64(file)
-        filesToUpload.push({
-          name: file.name,
-          relPath: file.name,
-          contentBase64: base64,
-          sizeBytes: file.size,
-        })
+    const newAttachments = []
+    for (const file of fileList) {
+      let previewUrl = null
+      let textContent = null
+      if (file.type.startsWith('image/')) {
+        previewUrl = URL.createObjectURL(file)
+      } else if (
+        file.size < 500_000 &&
+        (file.name.endsWith('.txt') ||
+          file.name.endsWith('.md') ||
+          file.name.endsWith('.json') ||
+          file.name.endsWith('.csv') ||
+          file.name.endsWith('.py') ||
+          file.name.endsWith('.yaml') ||
+          file.name.endsWith('.yml'))
+      ) {
+        try {
+          textContent = await file.text()
+        } catch {}
       }
-
-      const res = await fetch('/api/sources/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: filesToUpload }),
+      newAttachments.push({
+        id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        name: file.name,
+        size: file.size,
+        type: label || 'document',
+        previewUrl,
+        textContent,
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || data.detail || 'Upload failed')
-
-      if (data.job_id) startTrackingIngestion(data.job_id)
-      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-      showToast(`Added ${fileList.length} ${label || 'file'}(s) to sources`, 'success')
-    } catch (err) {
-      showToast(err.message || 'Failed to upload files', 'error')
     }
+    setTemporaryAttachments((prev) => [...prev, ...newAttachments])
+    showToast(`Attached ${newAttachments.length} temporary ${label || 'file'}(s) to this message`, 'info')
   }
 
   // Detect code or markdown structure in draft
@@ -641,8 +588,23 @@ export function ChatPane() {
     suggest_mitigation(cool_quench=True)`
 
   const handleSend = async () => {
-    if (!draft.trim() || isPending || awaitingHumanApproval) return
-    const text = draft.trim()
+    if ((!draft.trim() && temporaryAttachments.length === 0) || isPending || awaitingHumanApproval) return
+    let text = draft.trim()
+
+    if (temporaryAttachments.length > 0) {
+      const attDescriptions = temporaryAttachments
+        .map((att) => {
+          let desc = `[Temporary Attachment: ${att.name}]`
+          if (att.textContent) {
+            desc += `\n\`\`\`\n${att.textContent.slice(0, 3000)}\n\`\`\``
+          }
+          return desc
+        })
+        .join('\n\n')
+      text = text ? `${text}\n\n${attDescriptions}` : attDescriptions
+      setTemporaryAttachments([])
+    }
+
     setDraft('')
     addMessage('user', text)
     setIsPending(true)
@@ -1198,7 +1160,7 @@ export function ChatPane() {
                       className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
                       style={{ color: 'var(--color-text-faint)' }}
                     >
-                      Add to Sources
+                      Temporary Attachments (This Chat)
                     </div>
 
                     {/* 1. Add Document */}
@@ -1216,9 +1178,9 @@ export function ChatPane() {
                         <FilePlus size={13} strokeWidth={2.2} />
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className="font-medium text-xs">Add Document</span>
+                        <span className="font-medium text-xs">Attach Document</span>
                         <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                          PDF, DOCX, XLSX, TXT
+                          Temporary PDF, DOCX, XLSX, TXT
                         </span>
                       </div>
                     </button>
@@ -1238,12 +1200,21 @@ export function ChatPane() {
                         <ImageIcon size={13} strokeWidth={2.2} />
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className="font-medium text-xs">Add Photo</span>
+                        <span className="font-medium text-xs">Attach Photo / Scan</span>
                         <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                          Inspection photos, P&amp;ID scans
+                          Photos, P&amp;ID scans, defect images
                         </span>
                       </div>
                     </button>
+
+                    <div className="my-1 border-t" style={{ borderColor: 'var(--color-border)' }} />
+
+                    <div
+                      className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
+                      style={{ color: 'var(--color-text-faint)' }}
+                    >
+                      Permanent Knowledge Base
+                    </div>
 
                     {/* 3. Add Source Directory */}
                     <button
@@ -1260,9 +1231,9 @@ export function ChatPane() {
                         <FolderPlus size={13} strokeWidth={2.2} />
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className="font-medium text-xs">Add Source Directory</span>
+                        <span className="font-medium text-xs">Add Permanent Sources…</span>
                         <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                          Index local folder in-place
+                          Index into long-term corpus
                         </span>
                       </div>
                     </button>
@@ -1311,6 +1282,35 @@ export function ChatPane() {
 
           {/* Input field (Multi-line auto-resizing textarea with code/markdown detection) */}
           <div className="flex-1 flex flex-col min-w-0 py-0.5">
+            {/* Temporary Attachment Chips */}
+            {temporaryAttachments.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mb-2 px-1">
+                {temporaryAttachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: 'var(--color-border)',
+                      color: 'var(--color-text)',
+                    }}
+                  >
+                    <FileText size={11} className="text-[var(--color-accent)]" />
+                    <span className="font-medium truncate max-w-[120px]">{att.name}</span>
+                    <span className="text-[9px] text-[var(--color-text-muted)]">
+                      ({Math.round(att.size / 1024)}KB)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTemporaryAttachments((prev) => prev.filter((x) => x.id !== att.id))}
+                      className="w-3.5 h-3.5 rounded flex items-center justify-center hover:bg-[var(--color-overlay)] text-[var(--color-text-muted)] hover:text-red-500 cursor-pointer"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {isCodeOrMarkdown && (
               <div
                 className="flex items-center gap-1.5 px-2 py-0.5 mb-1.5 rounded text-[10px] font-mono select-none w-fit border animate-fade-in"

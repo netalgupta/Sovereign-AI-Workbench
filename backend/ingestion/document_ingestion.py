@@ -108,6 +108,10 @@ def _check_ingestible(file_path: str) -> None:
         )
 
     size = resolved.stat().st_size
+    if size == 0:
+        raise ValueError(
+            f"{path.name} is empty (0 bytes). Empty documents cannot be chunked or embedded."
+        )
     if size > MAX_DOCUMENT_BYTES:
         raise ValueError(
             f"{path.name} is {size / 1024 / 1024:.1f} MB, over the "

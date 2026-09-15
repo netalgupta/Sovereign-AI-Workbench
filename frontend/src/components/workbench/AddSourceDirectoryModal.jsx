@@ -21,11 +21,19 @@ import { useIngestionStore } from '../../store/ingestionStore'
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
   return new Promise((resolve, reject) => {
+    if (!file || file.size === 0) {
+      resolve('')
+      return
+    }
     const reader = new FileReader()
     reader.onload = () => {
       const result = reader.result
-      const base64 = typeof result === 'string' ? result.split(',')[1] || '' : ''
-      resolve(base64)
+      if (typeof result === 'string') {
+        const comma = result.indexOf(',')
+        resolve(comma >= 0 ? result.slice(comma + 1) : result)
+      } else {
+        resolve('')
+      }
     }
     reader.onerror = (err) => reject(err)
     reader.readAsDataURL(file)
@@ -87,9 +95,17 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       const filesToUpload = []
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i]
+        if (file.size === 0) {
+          showToast(`Skipped 0-byte empty file: ${file.name}`, 'warning')
+          continue
+        }
         setUploadStatus(`Reading ${i + 1}/${filesArray.length}: ${file.name}...`)
         try {
           const base64 = await readFileAsBase64(file)
+          if (!base64) {
+            showToast(`Could not read ${file.name} (file may be locked or empty)`, 'error')
+            continue
+          }
           const relPath = file.webkitRelativePath || file.name
           filesToUpload.push({
             name: file.name,
@@ -103,7 +119,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       }
 
       if (filesToUpload.length === 0) {
-        throw new Error('No files could be read from selected directory')
+        throw new Error('No readable non-empty files found to upload')
       }
 
       const res = await fetch('/api/sources/upload', {
@@ -118,11 +134,13 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
 
       // Start tracking AFTER the backend has registered the job
       if (data.job_id) {
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        // Do NOT dispatch corpus-updated here — ingestion has not happened
+        // yet. The useEffect watching activeJob.state === 'complete' handles
+        // the refresh at the right moment (after all documents are indexed).
         startTracking(data.job_id)
         setJobStarted(true)
       } else {
-        // Synchronous upload path — just close
+        // Synchronous path (no background job) — safe to refresh now
         window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
         if (onDirectoriesUpdated) onDirectoriesUpdated(data)
         onClose()
@@ -163,7 +181,8 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       // Call startTracking BEFORE setJobStarted so activeJob is non-null
       // when the effect first evaluates jobStarted=true.
       if (data.job_id) {
-        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        // Do NOT dispatch corpus-updated here — ingestion is still running.
+        // The completion useEffect dispatches it once the job is done.
         startTracking(data.job_id)
         setJobStarted(true)
       } else {
@@ -179,73 +198,17 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
   }
 
-  // Native OS or Browser folder selection handler
+  // Native OS folder picker — instantly opens native folder dialog
   const handleBrowseFolder = async () => {
-    // 1. Try native backend folder picker (opens Windows Folder Selection dialog directly on host)
-    try {
-      setIsSubmitting(true)
-      setUploadStatus('Opening native Windows folder picker... Please select a folder')
-      const pickRes = await fetch('/api/sources/dialog/pick-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (pickRes.ok) {
-        const pickData = await pickRes.json()
-        if (pickData.cancelled || !pickData.path) {
-          setIsSubmitting(false)
-          setUploadStatus('')
-          return
-        }
-
-        const folderName = pickData.name || pickData.path.split(/[\\/]/).pop() || 'folder'
-        setUploadStatus(`Indexing "${folderName}" in-place... Generating embeddings & updating local corpus`)
-
-        const addRes = await fetch('/api/sources', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: pickData.path, recursive: true }),
-        })
-        const addData = await addRes.json()
-        if (!addRes.ok) {
-          throw new Error(addData.error || addData.detail || 'Failed to index selected folder')
-        }
-
-        showToast(addData.message || `Source "${folderName}" queued for indexing`, 'success')
-        // Start tracking AFTER backend confirms job exists.
-        // Call startTracking BEFORE setJobStarted (race-condition safety).
-        if (addData.job_id) {
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
-          startTracking(addData.job_id)
-          setJobStarted(true)
-        } else {
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: addData }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(addData)
-          onClose()
-        }
-        return
-      }
-    } catch (err) {
-      console.warn('Native folder dialog failed, falling back to browser picker', err)
-      if (err.message && !err.message.includes('fetch')) {
-        showToast(err.message, 'error')
-        setIsSubmitting(false)
-        setUploadStatus('')
-        return
-      }
-    } finally {
-      setIsSubmitting(false)
-      setUploadStatus('')
-    }
-
-    // 2. Fallback: window.showDirectoryPicker (modern Chromium File System Access API)
+    // 1. Try modern directory picker (Chrome, Edge, Opera, Chromium)
     if (typeof window.showDirectoryPicker === 'function') {
       try {
         const dirHandle = await window.showDirectoryPicker({ mode: 'read' })
         if (dirHandle) {
           setIsSubmitting(true)
-          setUploadStatus(`Reading contents of folder "${dirHandle.name}"...`)
+          setUploadStatus(`Reading contents of "${dirHandle.name}"…`)
           const files = []
-          async function scanHandle(handle, pathPrefix = '') {
+          const scanHandle = async (handle, pathPrefix = '') => {
             for await (const entry of handle.values()) {
               const rel = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
               if (entry.kind === 'file') {
@@ -256,7 +219,8 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
                 })
                 files.push(f)
               } else if (entry.kind === 'directory') {
-                if (!['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode'].includes(entry.name)) {
+                const skip = ['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode', 'dist', 'build']
+                if (!skip.includes(entry.name) && !entry.name.startsWith('.')) {
                   await scanHandle(entry, rel)
                 }
               }
@@ -266,88 +230,33 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           if (files.length > 0) {
             await uploadFiles(files)
             return
+          } else {
+            showToast('No valid documents found in selected folder', 'info')
+            setIsSubmitting(false)
+            setUploadStatus('')
+            return
           }
         }
-      } catch (err) {
-        if (err.name === 'AbortError') return
-        console.warn('showDirectoryPicker error:', err)
-      } finally {
-        setIsSubmitting(false)
-        setUploadStatus('')
-      }
-    }
-
-    // 3. Fallback: hidden <input type="file" webkitdirectory>
-    folderInputRef.current?.click()
-  }
-
-  // Native OS or Browser files selection handler
-  const handleBrowseFiles = async () => {
-    // 1. Try native backend file picker (opens Windows Open File dialog on host)
-    try {
-      setIsSubmitting(true)
-      setUploadStatus('Opening native Windows file picker... Please select document(s)')
-      const pickRes = await fetch('/api/sources/dialog/pick-files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (pickRes.ok) {
-        const pickData = await pickRes.json()
-        if (pickData.cancelled || !pickData.paths || pickData.paths.length === 0) {
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          // User closed folder picker
           setIsSubmitting(false)
           setUploadStatus('')
           return
         }
-
-        setUploadStatus(`Indexing ${pickData.paths.length} document(s) in-place... Generating embeddings & updating local corpus`)
-
-        // Multi-file: use one shared job tracked via the last response's job_id
-        let lastResult = null
-        for (let i = 0; i < pickData.paths.length; i++) {
-          const filePath = pickData.paths[i]
-          const fileName = filePath.split(/[\\/]/).pop() || filePath
-          setUploadStatus(`Indexing ${i + 1}/${pickData.paths.length}: ${fileName}...`)
-          const addRes = await fetch('/api/sources', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath, recursive: false }),
-          })
-          const addData = await addRes.json()
-          if (addRes.ok) {
-            lastResult = addData
-          }
-        }
-
-        showToast(`Queued ${pickData.paths.length} document(s) for indexing — watch the progress indicator`, 'success')
-        if (lastResult?.job_id) {
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
-          startTracking(lastResult.job_id)
-          setJobStarted(true)
-        } else {
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: lastResult }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(lastResult)
-          onClose()
-        }
-        return
+        console.warn('showDirectoryPicker cancelled or error, falling back to input:', e)
       }
-    } catch (err) {
-      console.warn('Native files dialog failed, falling back to browser picker', err)
-      if (err.message && !err.message.includes('fetch')) {
-        showToast(err.message, 'error')
-        setIsSubmitting(false)
-        setUploadStatus('')
-        return
-      }
-    } finally {
-      setIsSubmitting(false)
-      setUploadStatus('')
     }
+    // 2. Fallback: trigger native OS folder picker input
+    folderInputRef.current?.click()
+  }
 
-    // 2. Fallback: hidden <input type="file" multiple>
+  // Native OS file picker — instantly opens native Windows file explorer dialog
+  const handleBrowseFiles = () => {
     fileInputRef.current?.click()
   }
 
-  // Handle native folder browse fallback input
+  // Handle native folder browse input
   const handleFolderPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -355,7 +264,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     e.target.value = ''
   }
 
-  // Handle native files browse fallback input
+  // Handle native files browse input
   const handleFilesPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -471,24 +380,6 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             }}
             onClick={(e) => e.stopPropagation()}
           >
-        {/* Hidden inputs for native browser file/folder dialogs */}
-        <input
-          type="file"
-          ref={folderInputRef}
-          onChange={handleFolderPicked}
-          webkitdirectory="true"
-          directory="true"
-          multiple
-          className="hidden"
-        />
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFilesPicked}
-          multiple
-          accept=".pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.txt,.json,.csv,.md,.markdown,.yaml,.yml,.log,.py,.sql"
-          className="hidden"
-        />
 
         {/* Header */}
         <div
@@ -524,6 +415,25 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             <X size={15} />
           </button>
         </div>
+
+        {/* Hidden inputs for instant native file & folder picking */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.docx,.xlsx,.xls,.txt,.csv,.json,.md,.yaml,.yml,.py,.sql,.png,.jpg,.jpeg"
+          style={{ display: 'none' }}
+          onChange={handleFilesPicked}
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          webkitdirectory=""
+          directory=""
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleFolderPicked}
+        />
 
         {/* Modal Body */}
         <div className="p-5 flex flex-col gap-4 overflow-y-auto max-h-[75vh]">
@@ -593,7 +503,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           {/* Active Ingestion Progress Card (Live Polling via backend ProgressTracker) */}
           {(isSubmitting || (activeJob && (activeJob.state === 'running' || activeJob.state === 'complete' || activeJob.state === 'failed'))) && (
             <div
-              className="flex flex-col gap-2.5 p-4 rounded-xl border animate-fade-in"
+              className="flex flex-col gap-3 p-4 rounded-xl border animate-fade-in"
               style={{
                 background: activeJob?.state === 'complete'
                   ? 'rgba(16, 185, 129, 0.08)'
@@ -607,119 +517,167 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
                   : 'var(--color-accent)',
               }}
             >
-              {/* Header: Processing X/Y files + ETA / Elapsed */}
+              {/* ── Stage pipeline header ── */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {activeJob?.state === 'complete' ? (
-                    <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0" />
+                    <CheckCircle2 size={15} className="text-emerald-500 flex-shrink-0" />
                   ) : activeJob?.state === 'failed' ? (
-                    <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+                    <AlertCircle size={15} className="text-red-500 flex-shrink-0" />
                   ) : (
-                    <Loader2 size={15} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
+                    <Loader2 size={14} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
                   )}
                   <span className="font-bold text-xs" style={{ color: 'var(--color-text)' }}>
                     {activeJob?.state === 'complete'
-                      ? `Ingestion complete! ${activeJob.completed || activeJob.total_documents} file(s) indexed into local FAISS index`
+                      ? `Done \u2014 ${activeJob.completed || activeJob.total_documents} file(s) indexed`
                       : activeJob?.state === 'failed'
-                      ? `Ingestion failed: ${activeJob.error || 'Unknown error'}`
+                      ? `Failed: ${activeJob.error || 'Unknown error'}`
                       : activeJob?.total_documents
-                      ? `Processing ${activeJob.completed}/${activeJob.total_documents} file(s)...`
-                      : uploadStatus || 'Processing documents...'}
+                      ? (activeJob.total_documents > 1
+                          ? `Processing ${Math.min((activeJob.completed || 0) + 1, activeJob.total_documents)} / ${activeJob.total_documents} file(s)`
+                          : 'Processing 1 / 1 file')
+                      : uploadStatus || 'Initialising\u2026'}
                   </span>
                 </div>
+                {/* Live elapsed timer */}
                 {activeJob?.elapsed_seconds != null && (
-                  <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
-                    {activeJob.state === 'complete' ? `Done in ${activeJob.elapsed_seconds}s` : `${activeJob.elapsed_seconds}s`}
-                    {activeJob.state === 'running' && activeJob.estimated_remaining_seconds ? ` · ~${activeJob.estimated_remaining_seconds}s left` : ''}
+                  <span className="text-[10px] font-mono tabular-nums flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                    {activeJob.state === 'complete'
+                      ? `\u2713 ${activeJob.elapsed_seconds}s`
+                      : activeJob.state === 'running' && activeJob.estimated_remaining_seconds
+                      ? `${activeJob.elapsed_seconds}s \u00b7 ~${activeJob.estimated_remaining_seconds}s left`
+                      : `${activeJob.elapsed_seconds}s`}
                   </span>
                 )}
               </div>
 
-              {/* Progress Bar */}
-              {(activeJob?.total_documents > 0 || activeJob?.state === 'complete') && (
-                <div className="w-full h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
-                  <div
-                    className="h-full transition-all duration-300 rounded-full"
-                    style={{
-                      background: activeJob?.state === 'complete' ? '#10b981' : 'var(--color-accent)',
-                      width: activeJob?.state === 'complete'
-                        ? '100%'
-                        : `${Math.min(100, Math.round(((activeJob.completed || 0) / (activeJob.total_documents || 1)) * 100))}%`,
-                    }}
-                  />
-                </div>
-              )}
+              {/* ── 4-step pipeline visualiser ── */}
+              {(() => {
+                const STAGES = [
+                  { key: 'extracting', label: 'Extract', desc: 'Reading & OCR' },
+                  { key: 'chunking',   label: 'Chunk',   desc: 'Splitting text' },
+                  { key: 'embedding',  label: 'Embed',   desc: 'Vectorising' },
+                  { key: 'indexing',   label: 'Index',   desc: 'Writing FAISS' },
+                ]
+                const currentStage = activeJob?.current_document?.stage || ''
+                let stageIdx = STAGES.findIndex(s => s.key === currentStage)
+                if (stageIdx === -1 && (currentStage === 'queued' || activeJob?.state === 'running')) {
+                  stageIdx = 0
+                }
+                const isComplete = activeJob?.state === 'complete'
+                const isFailed   = activeJob?.state === 'failed'
+                // Within-file pseudo-progress: each of 4 stages = 25%, active = midpoint
+                const stageProgress = isComplete ? 100
+                  : isFailed ? 100
+                  : stageIdx >= 0 ? Math.max(14, Math.round((stageIdx + 0.55) * 25))
+                  : activeJob?.total_documents > 0
+                    ? Math.max(10, Math.round(((activeJob.completed || 0) / activeJob.total_documents) * 100))
+                    : activeJob?.state === 'running' ? 12 : 0
+                return (
+                  <div className="flex flex-col gap-2.5">
+                    {/* Stage bubbles + connectors */}
+                    <div className="flex items-start">
+                      {STAGES.map((s, i) => {
+                        const done    = isComplete || stageIdx > i
+                        const active  = !isComplete && !isFailed && stageIdx === i
+                        const failed  = isFailed && stageIdx === i
+                        const pending = !done && !active && !failed
+                        return (
+                          <div key={s.key} className="flex items-center flex-1 min-w-0">
+                            <div className="flex flex-col items-center" style={{ flex: 1 }}>
+                              {/* Circle */}
+                              <div
+                                className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-500"
+                                style={{
+                                  background: done ? 'rgba(16,185,129,0.18)' : active ? 'var(--color-accent)' : failed ? 'rgba(239,68,68,0.18)' : 'var(--color-overlay)',
+                                  border: done ? '1.5px solid rgba(16,185,129,0.5)' : active ? '1.5px solid var(--color-accent)' : failed ? '1.5px solid rgba(239,68,68,0.4)' : '1.5px solid var(--color-border)',
+                                  color: done ? '#10b981' : active ? '#fff' : failed ? '#ef4444' : 'var(--color-text-faint)',
+                                  boxShadow: active ? '0 0 0 3px rgba(37,99,235,0.18)' : 'none',
+                                }}
+                              >
+                                {done ? '\u2713' : failed ? '\u2715' : i + 1}
+                              </div>
+                              {/* Label */}
+                              <span className="text-[9px] font-semibold mt-0.5 uppercase tracking-wide" style={{ color: done ? '#10b981' : active ? 'var(--color-accent)' : 'var(--color-text-faint)' }}>
+                                {s.label}
+                              </span>
+                              {/* Sub-desc only on active */}
+                              {active && (
+                                <span className="text-[8.5px] mt-0.5 text-center leading-tight" style={{ color: 'var(--color-text-muted)' }}>
+                                  {s.desc}
+                                </span>
+                              )}
+                            </div>
+                            {/* Connector */}
+                            {i < STAGES.length - 1 && (
+                              <div className="h-px flex-1 mx-0.5 transition-all duration-500" style={{ background: done ? 'rgba(16,185,129,0.4)' : 'var(--color-border)', marginTop: '-14px' }} />
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
 
-              {/* Current Active File & Stage Banner */}
-              {activeJob?.current_document && (
-                <div
-                  className="flex items-center justify-between px-3 py-2 rounded-lg border text-xs"
-                  style={{
-                    background: 'var(--color-surface)',
-                    borderColor: 'var(--color-border)',
-                  }}
-                >
-                  <div className="flex items-center gap-2 min-w-0 pr-2">
-                    <FileText size={13} className="flex-shrink-0 text-[var(--color-accent)]" />
-                    <span className="font-semibold text-xs truncate" style={{ color: 'var(--color-text)' }}>
-                      {activeJob.current_document.name}
-                    </span>
+                    {/* Progress bar */}
+                    <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                      <div
+                        className="h-full rounded-full transition-all duration-700"
+                        style={{
+                          width: `${stageProgress}%`,
+                          background: isComplete
+                            ? 'linear-gradient(90deg,#10b981,#34d399)'
+                            : isFailed
+                            ? '#ef4444'
+                            : 'linear-gradient(90deg,var(--color-accent),#60a5fa)',
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[9px]" style={{ color: 'var(--color-text-faint)' }}>
+                        {isComplete
+                          ? 'All stages complete'
+                          : isFailed
+                          ? 'Pipeline failed'
+                          : stageIdx >= 0
+                          ? `Stage ${stageIdx + 1} of 4 \u2014 ${STAGES[stageIdx]?.desc}`
+                          : activeJob?.state === 'running'
+                          ? 'Stage 1 of 4 \u2014 Starting pipeline\u2026'
+                          : 'Ready'}
+                      </span>
+                      <span className="text-[9px] font-mono tabular-nums" style={{ color: 'var(--color-text-faint)' }}>
+                        {stageProgress}%
+                      </span>
+                    </div>
                   </div>
-                  <span
-                    className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded font-semibold border flex-shrink-0"
-                    style={{
-                      background: 'var(--color-accent-tint)',
-                      borderColor: 'var(--color-accent-border)',
-                      color: 'var(--color-accent)',
-                    }}
-                  >
+                )
+              })()}
+
+              {/* ── Current file banner ── */}
+              {activeJob?.current_document && activeJob.state !== 'complete' && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+                  <FileText size={12} className="flex-shrink-0" style={{ color: 'var(--color-accent)' }} />
+                  <span className="font-mono text-[10.5px] truncate flex-1" style={{ color: 'var(--color-text)' }}>
+                    {activeJob.current_document.name}
+                  </span>
+                  <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded font-semibold flex-shrink-0"
+                    style={{ background: 'var(--color-accent-tint)', border: '1px solid var(--color-accent-border)', color: 'var(--color-accent)' }}>
                     {activeJob.current_document.stage}
                   </span>
                 </div>
               )}
 
-              {/* Per-document list if multiple documents exist */}
+              {/* ── Per-doc list (multi-file) ── */}
               {activeJob?.documents && activeJob.documents.length > 1 && (
-                <div className="flex flex-col gap-1 max-h-36 overflow-y-auto pr-1">
+                <div className="flex flex-col gap-0.5 max-h-28 overflow-y-auto pr-1">
                   {activeJob.documents.map((doc, idx) => {
-                    const isDone = doc.stage === 'indexed'
-                    const isRunning = ['extracting', 'chunking', 'embedding', 'indexing'].includes(doc.stage)
-                    const isFailed = doc.stage === 'failed'
-
+                    const done    = doc.stage === 'indexed'
+                    const running = ['extracting','chunking','embedding','indexing'].includes(doc.stage)
+                    const failed  = doc.stage === 'failed'
                     return (
-                      <div
-                        key={doc.path || idx}
-                        className="flex items-center justify-between py-1 px-2 rounded text-[11px]"
-                        style={{
-                          background: isRunning ? 'var(--color-surface)' : 'transparent',
-                        }}
-                      >
-                        <span className="truncate pr-2 font-mono text-[10.5px]" style={{ color: 'var(--color-text)' }}>
-                          {doc.name}
+                      <div key={doc.path || idx} className="flex items-center justify-between py-1 px-2 rounded text-[10.5px]" style={{ background: running ? 'var(--color-surface)' : 'transparent' }}>
+                        <span className="truncate pr-2 font-mono" style={{ color: 'var(--color-text)' }}>{doc.name}</span>
+                        <span className="flex-shrink-0 font-semibold text-[9.5px]" style={{ color: done ? '#10b981' : running ? 'var(--color-accent)' : failed ? '#ef4444' : 'var(--color-text-faint)' }}>
+                          {done ? '\u2713 indexed' : running ? `\u27f3 ${doc.stage}` : failed ? '\u2715 failed' : 'queued'}
                         </span>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {isDone && (
-                            <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
-                              <CheckCircle2 size={12} />
-                              <span>indexed</span>
-                            </span>
-                          )}
-                          {isRunning && (
-                            <span className="flex items-center gap-1 text-[10px] font-semibold text-[var(--color-accent)]">
-                              <Loader2 size={11} className="animate-spin" />
-                              <span>{doc.stage}</span>
-                            </span>
-                          )}
-                          {isFailed && (
-                            <span className="flex items-center gap-1 text-[10px] font-semibold text-red-500" title={doc.detail}>
-                              <AlertCircle size={12} />
-                              <span>failed</span>
-                            </span>
-                          )}
-                          {!isDone && !isRunning && !isFailed && (
-                            <span className="text-[10px] text-[var(--color-text-faint)]">queued</span>
-                          )}
-                        </div>
                       </div>
                     )
                   })}

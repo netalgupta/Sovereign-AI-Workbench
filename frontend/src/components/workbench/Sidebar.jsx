@@ -543,16 +543,17 @@ export function Sidebar() {
                   type="button"
                   id="sidebar-add-source-btn"
                   onClick={() => setIsAddDirModalOpen(true)}
-                  className="p-1.5 rounded-lg text-xs transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] flex-shrink-0 border shadow-xs"
+                  className="px-2 py-1 rounded-md text-xs font-semibold transition-fast cursor-pointer hover:opacity-90 flex items-center gap-1.5 border shadow-xs"
                   style={{
-                    background: 'var(--color-accent-tint)',
-                    borderColor: 'var(--color-accent-border)',
-                    color: 'var(--color-accent)',
+                    background: 'var(--color-accent)',
+                    borderColor: 'var(--color-accent)',
+                    color: '#fff',
                   }}
                   title="Add permanent source — directory or files to knowledge base"
                   aria-label="Add source"
                 >
-                  <Plus size={13} strokeWidth={2.4} />
+                  <Plus size={12} strokeWidth={2.6} />
+                  <span className="text-[11px] font-semibold leading-none">Add Sources</span>
                 </button>
                 {/* Single Filter Button */}
                 <div className="relative" ref={filterDropdownRef}>
@@ -919,6 +920,16 @@ export function Sidebar() {
              *
              * A feature nobody can navigate to does not exist as far as
              * a demo is concerned. */}
+          <Link
+            to="/sources"
+            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+            style={{ color: 'var(--color-text-muted)' }}
+            title="Sources & Knowledge Base Hub (/sources)"
+            aria-label="Sources Hub"
+          >
+            <Database size={14} strokeWidth={2} />
+          </Link>
+
           <Link
             to="/graph"
             className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
