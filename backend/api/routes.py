@@ -979,12 +979,13 @@ def categorise_source(extension: str) -> tuple[str, str]:
     return _CATEGORY_BY_EXTENSION.get(extension.lower(), ("documents", "other"))
 
 
-@router.get("/corpus")
-def get_corpus(response: Response) -> dict:
-    """Native corpus endpoint matching configured sources and directory tree."""
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
+def _get_corpus_data() -> dict:
+    """Compute and return corpus data — shared by the HTTP route and internal callers.
+
+    Extracted from get_corpus() so orchestrator/retrieval_tools can call it
+    without a FastAPI Response argument (which caused a TypeError in callers
+    that imported the route function directly).
+    """
     import json
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
     deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
@@ -1233,13 +1234,14 @@ def get_corpus(response: Response) -> dict:
     chunk_count = 0
     try:
         from backend.api.state import CORPUS_CACHE_PATH
+        import json as _json
         st = get_state()
         if st._store is not None and getattr(st._store, "index", None) is not None:
             chunk_count = st._store.index.ntotal
         elif st._cached_chunks:
             chunk_count = len(st._cached_chunks)
         elif CORPUS_CACHE_PATH.exists():
-            data = json.loads(CORPUS_CACHE_PATH.read_text(encoding="utf-8"))
+            data = _json.loads(CORPUS_CACHE_PATH.read_text(encoding="utf-8"))
             chunk_count = len(data.get("chunks", []))
     except Exception:
         pass
@@ -1256,6 +1258,16 @@ def get_corpus(response: Response) -> dict:
         "totalSizeBytes": total_bytes,
         "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 1)} MB",
     }
+
+
+@router.get("/corpus")
+def get_corpus(response: Response) -> dict:
+    """Native corpus endpoint — sets no-cache headers and returns corpus data."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return _get_corpus_data()
+
 
 
 @router.post("/sources")

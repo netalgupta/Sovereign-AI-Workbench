@@ -622,16 +622,31 @@ class PipelineState:
         # waiting for, and the graph catches up behind it.
         #
         # Cannot fail this call: see backend/graph/auto_extract.py.
-        if newly_ingested:
-            try:
-                from backend.graph import auto_extract
-
-                auto_extract.schedule(
-                    newly_ingested, reason=f"ingest of {Path(target_path).name}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
+        if newly_ingested:\r
+            try:\r
+                from backend.graph import auto_extract\r
+\r
+                auto_extract.schedule(\r
+                    newly_ingested, reason=f"ingest of {Path(target_path).name}"\r
+                )\r
+            except Exception:  # noqa: BLE001\r
+                pass\r
+\r
+        # PERSIST the updated store so the next boot loads from cache.\r
+        #\r
+        # ingest_path() extended self._chunks and added vectors to\r
+        # self._store, but _write_corpus_cache() was never called here --\r
+        # so a server restart (uvicorn --reload on any file save) would\r
+        # re-check the cache, find newly added documents missing from\r
+        # scanned_files, declare it stale, and trigger a full re-ingest.\r
+        # Writing the cache immediately after each successful ingest\r
+        # means the next boot is always fast.\r
+        if newly_ingested and self._chunks:\r
+            try:\r
+                self._write_corpus_cache(self._chunks)\r
+            except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness\r
+                pass\r
+\r
         return total_chunks, details
 
     def delete_source(self, target_path: str) -> dict:
