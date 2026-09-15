@@ -29,13 +29,15 @@ RUN pip install --no-cache-dir --target=/deps \
     networkx==3.3 \
     pypdf==4.2.0 \
     python-docx==1.1.2 \
+    python-pptx==1.0.2 \
     openpyxl==3.1.2 \
     beautifulsoup4==4.12.3 \
     pyyaml==6.0.1 \
     markdown==3.6 \
     pillow==10.3.0 \
     regex==2024.5.15 \
-    jsonschema==4.22.0
+    jsonschema==4.22.0 \
+    pydantic==2.7.1
 
 FROM nikolaik/python-nodejs:python3.11-nodejs20-slim
 
@@ -59,6 +61,12 @@ COPY --from=builder /deps /usr/local/lib/python3.11/site-packages
 # pool.py runs containers as `1000:1000`, so the id must exist and must
 # not be root. The NAME is irrelevant to that.
 RUN if getent passwd 1000 >/dev/null; then         echo "UID 1000 already present as $(getent passwd 1000 | cut -d: -f1); reusing it";     else         useradd -u 1000 -m sandboxuser;     fi
+
+# Internal libraries and static assets (PPTX generation)
+RUN mkdir -p /sandbox/lib && chown -R 1000:1000 /sandbox
+COPY backend/tools/generation/slide_kit.py /sandbox/lib/slide_kit.py
+COPY PPTX/Gemini_MRPL.pptx /sandbox/lib/mrpl_template.pptx
+ENV PYTHONPATH="/sandbox/lib"
 
 WORKDIR /sandbox
 CMD ["sleep", "infinity"]

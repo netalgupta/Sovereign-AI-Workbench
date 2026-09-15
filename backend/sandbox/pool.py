@@ -226,7 +226,14 @@ class WorkerPool:
         # is the portable spelling and returns "Darwin" on macOS just
         # the same.
         if platform.system() == "Darwin" or "DOCKER_DEFAULT_PLATFORM" in os.environ:
-            extra_kwargs["platform"] = os.environ.get("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
+            try:
+                img_arch = self.client.images.get(resolved_img).attrs.get("Architecture")
+                if img_arch in ("arm64", "aarch64"):
+                    extra_kwargs["platform"] = "linux/arm64"
+                else:
+                    extra_kwargs["platform"] = "linux/amd64"
+            except Exception:
+                extra_kwargs["platform"] = os.environ.get("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
 
         # useradd UID 1000 is baked into mrpl-sandbox:combined
         # if using plain python-slim, standard numeric user or root can run
@@ -319,6 +326,14 @@ class WorkerPool:
         is momentarily full. Raises WorkerPoolExhausted if none free up
         in time -- caller should surface this as a "system busy" message,
         not a code error."""
+        with self.lock:
+            if not self.workers:
+                logger.info("worker pool empty on acquire — auto-starting %d workers", self.size)
+                for i in range(self.size):
+                    self.workers.append(self._spawn(f"sandbox-worker-{i}"))
+                self._reaper_thread = threading.Thread(target=self._reaper_loop, daemon=True)
+                self._reaper_thread.start()
+
         deadline = time.time() + wait_timeout
         while True:
             with self.lock:

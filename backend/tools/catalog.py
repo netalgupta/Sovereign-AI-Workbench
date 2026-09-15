@@ -242,6 +242,22 @@ def register_all() -> None:
         tools_md_row=34,
     )(run_in_sandbox)
 
+    # ---- presentation generation (PPTX_AGENT_SPEC.md, TOOLS.md row 40) ----
+    from backend.orchestrator.slide_agent import run_slide_pipeline
+
+    tool(
+        name="generate_deck",
+        description=(
+            "Generate an on-brand, sovereign, grounded PowerPoint (.pptx) presentation "
+            "from the MRPL master template. Organizes topics into structured slide molds, "
+            "fetches deterministic RAG citations, renders cleanly with python-pptx, and "
+            "validates with automated QA. Delivers a presentation download card."
+        ),
+        category="documents",
+        priority="🔴",
+        tools_md_row=40,
+    )(run_slide_pipeline)
+
 
 register_all()
 
