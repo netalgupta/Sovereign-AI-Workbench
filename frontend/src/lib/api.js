@@ -229,14 +229,41 @@ export async function checkBackendHealth() {
  */
 export async function resolveApproval(requestId, confirmed = true, operator = 'operator') {
   try {
-    const res = await fetch('/api/approvals/resolve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request_id: requestId, confirmed, operator }),
-    })
-    if (res.ok) return await res.json()
+    if (confirmed) {
+      const appRes = await fetch('/api/approvals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: requestId, decided_by: operator }),
+      })
+      if (!appRes.ok) {
+        const errJson = await appRes.json().catch(() => ({}))
+        throw new Error(errJson.detail || `Approve failed with status ${appRes.status}`)
+      }
+      const appData = await appRes.json()
+
+      const execRes = await fetch('/api/approvals/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: requestId, token: appData.token }),
+      })
+      if (!execRes.ok) {
+        const errJson = await execRes.json().catch(() => ({}))
+        throw new Error(errJson.detail || `Execute failed with status ${execRes.status}`)
+      }
+      const execData = await execRes.json()
+      return { status: 'executed', result: execData.result }
+    } else {
+      const refRes = await fetch('/api/approvals/refuse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: requestId, decided_by: operator, reason: 'Operator cancelled action' }),
+      })
+      if (refRes.ok) {
+        return await refRes.json()
+      }
+    }
   } catch (err) {
-    console.warn('[API] /api/approvals/resolve error:', err)
+    console.warn('[API] resolveApproval error:', err)
   }
   return { status: confirmed ? 'approved' : 'refused' }
 }

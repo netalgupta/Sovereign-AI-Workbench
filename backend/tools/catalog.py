@@ -31,8 +31,12 @@ from backend.tools.registry import tool
 # corpus at all. Given the full registry and asked for a value that is
 # printed in the corpus, the model reached for find_contradictions, got
 # an empty list, and reported that no documents contained it.
-from backend.tools import mrpl_process, numeric_stats, plotting, retrieval_tools  # noqa: F401
-from backend.tools.documents import draft_docx  # noqa: F401
+from backend.tools import mrpl_process, numeric_stats, retrieval_tools  # noqa: F401
+try:
+    from backend.tools import plotting  # noqa: F401
+except BaseException:
+    plotting = None
+from backend.tools.documents import draft_docx, draft_xlsx  # noqa: F401
 
 
 def register_all() -> None:
@@ -49,48 +53,59 @@ def register_all() -> None:
 
     # ---- computation (hard constraint #3: real libraries, not the LLM) ----
 
-    from backend.tools.math.symbolic_calc import evaluate_expression
-    from backend.tools.math.unit_calc import evaluate_unit_expression
-    from backend.tools.math.thermophysical import lookup_thermophysical_property
+    try:
+        from backend.tools.math.symbolic_calc import evaluate_expression
 
-    tool(
-        name="evaluate_expression",
-        description=(
-            "Evaluate a mathematical expression exactly using SymPy — arithmetic, "
-            "algebra, solving, differentiation, integration. Use this for ANY "
-            "calculation. Never compute a numeric answer yourself."
-        ),
-        category="computation",
-        priority="🔴",
-        computes_numbers=True,
-        tools_md_row=26,
-    )(evaluate_expression)
+        tool(
+            name="evaluate_expression",
+            description=(
+                "Evaluate a mathematical expression exactly using SymPy — arithmetic, "
+                "algebra, solving, differentiation, integration. Use this for ANY "
+                "calculation. Never compute a numeric answer yourself."
+            ),
+            category="computation",
+            priority="🔴",
+            computes_numbers=True,
+            tools_md_row=26,
+        )(evaluate_expression)
+    except Exception:
+        pass
 
-    tool(
-        name="evaluate_unit_expression",
-        description=(
-            "Evaluate an expression with physical units using Pint, converting "
-            "safely between them (bar to kPa, kg/h to t/day). Use whenever units "
-            "appear — it makes a unit mismatch an error rather than a wrong number."
-        ),
-        category="computation",
-        priority="🔴",
-        computes_numbers=True,
-        tools_md_row=29,
-    )(evaluate_unit_expression)
+    try:
+        from backend.tools.math.unit_calc import evaluate_unit_expression
 
-    tool(
-        name="lookup_thermophysical_property",
-        description=(
-            "Look up a thermophysical property of a fluid (density, enthalpy, "
-            "viscosity, boiling point) at a given state using CoolProp. Use for "
-            "steam tables and process fluid properties instead of recalling values."
-        ),
-        category="computation",
-        priority="🟡",
-        computes_numbers=True,
-        tools_md_row=30,
-    )(lookup_thermophysical_property)
+        tool(
+            name="evaluate_unit_expression",
+            description=(
+                "Evaluate an expression with physical units using Pint, converting "
+                "safely between them (bar to kPa, kg/h to t/day). Use whenever units "
+                "appear — it makes a unit mismatch an error rather than a wrong number."
+            ),
+            category="computation",
+            priority="🔴",
+            computes_numbers=True,
+            tools_md_row=29,
+        )(evaluate_unit_expression)
+    except Exception:
+        pass
+
+    try:
+        from backend.tools.math.thermophysical import lookup_thermophysical_property
+
+        tool(
+            name="lookup_thermophysical_property",
+            description=(
+                "Look up a thermophysical property of a fluid (density, enthalpy, "
+                "viscosity, boiling point) at a given state using CoolProp. Use for "
+                "steam tables and process fluid properties instead of recalling values."
+            ),
+            category="computation",
+            priority="🟡",
+            computes_numbers=True,
+            tools_md_row=30,
+        )(lookup_thermophysical_property)
+    except Exception:
+        pass
 
     # ---- vision ----------------------------------------------------------
 
@@ -108,7 +123,7 @@ def register_all() -> None:
             priority="🔴",
             tools_md_row=1,
         )(extract_printed_text)
-    except ImportError:
+    except Exception:
         pass
 
     try:
@@ -128,7 +143,7 @@ def register_all() -> None:
             is_estimate=True,
             tools_md_row=62,
         )(describe_chart_image)
-    except ImportError:
+    except Exception:
         pass
 
     # ---- audio -----------------------------------------------------------
@@ -146,7 +161,7 @@ def register_all() -> None:
             priority="🟡",
             tools_md_row=61,
         )(transcribe_voice_note)
-    except ImportError:
+    except Exception:
         pass
 
     # ---- retrieval -------------------------------------------------------

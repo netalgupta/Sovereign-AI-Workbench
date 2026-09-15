@@ -17,13 +17,14 @@ would make this tool slow for no benefit — the registry is stateless
 across calls, so one shared instance is correct and free.
 """
 
-import pint
+try:
+    import pint
+    _ureg = pint.UnitRegistry()
+    _ureg.define("Nm = meter")
+except Exception:
+    pint = None
+    _ureg = None
 from pydantic import BaseModel
-
-# One registry for the whole process — see module docstring for why.
-_ureg = pint.UnitRegistry()
-# Define Normal cubic meter base unit (Nm) commonly used in refinery hydrogen balance
-_ureg.define("Nm = meter")
 
 
 class UnitCalcResult(BaseModel):

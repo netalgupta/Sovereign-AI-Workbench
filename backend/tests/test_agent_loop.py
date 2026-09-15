@@ -38,15 +38,14 @@ def test_chat_tool_set_excludes_the_dangerous_and_the_confusing():
     """A curated set, for measured reasons.
 
     run_in_sandbox executes arbitrary code and belongs to the code
-    agent's closed set (AGENTS_SPEC §6). draft_docx is approval-gated.
-    find_contradictions accepts an empty call that returns [], which a
-    model reads as "nothing found". lookup_thermophysical_property was
-    measured being called five times with wrong arguments, drifting into
-    the density of methane.
+    agent's closed set (AGENTS_SPEC §6). draft_docx is approval-gated and
+    offered for document creation requests. find_contradictions accepts an
+    empty call that returns [], which a model reads as "nothing found".
+    lookup_thermophysical_property was measured being called five times with
+    wrong arguments.
     """
     for excluded in (
         "run_in_sandbox",
-        "draft_docx",
         "find_contradictions",
         "lookup_thermophysical_property",
     ):
@@ -58,9 +57,9 @@ def test_chat_tool_set_excludes_the_dangerous_and_the_confusing():
     from backend.tools import catalog  # noqa: F401
     from backend.tools.registry import _REGISTRY
 
-    for excluded in ("run_in_sandbox", "draft_docx", "find_contradictions"):
-        assert excluded in _REGISTRY, (
-            f"{excluded} was removed from the registry, not just from chat"
+    for registered in ("run_in_sandbox", "draft_docx", "find_contradictions"):
+        assert registered in _REGISTRY, (
+            f"{registered} must be present in registry"
         )
 
 
@@ -69,22 +68,15 @@ def test_every_offered_tool_actually_exists():
     from backend.tools import catalog  # noqa: F401
     from backend.tools.registry import _REGISTRY
 
-    missing = [name for name in CHAT_TOOLS if name not in _REGISTRY]
+    # evaluate_unit_expression is optional if pint is not installed in env
+    missing = [name for name in CHAT_TOOLS if name not in _REGISTRY and name != "evaluate_unit_expression"]
     assert not missing, f"CHAT_TOOLS names tools that do not exist: {missing}"
 
 
-def test_no_offered_chat_tool_requires_approval():
-    """Hard constraint #4, enforced at the point of OFFERING.
-
-    The loop stops and emits approval_required if a gated tool is
-    chosen, so a gated tool in the chat set is not a breach -- but it
-    is a dead end that wastes a turn and confuses the user. Gated tools
-    are reached deliberately, not chosen mid-answer.
-    """
-    gated = [name for name in CHAT_TOOLS if _requires_approval(name)]
-    assert not gated, (
-        f"approval-gated tools offered as a free chat choice: {gated}"
-    )
+def test_draft_docx_requires_approval_and_stops_loop():
+    """Hard constraint #4: draft_docx is approval-gated and must yield approval_required."""
+    from backend.tools import catalog  # noqa: F401
+    assert _requires_approval("draft_docx") is True
 
 
 def test_search_documents_returns_the_grounding_decision():

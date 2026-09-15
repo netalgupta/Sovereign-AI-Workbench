@@ -124,6 +124,8 @@ CHAT_TOOLS = (
     "describe_series",
     "select_images_for_request",
     "extract_printed_text",
+    "draft_docx",
+    "draft_xlsx",
 )
 
 # ORDERED AND EXPLICIT, because a 7B model choosing among 19 tools picks
@@ -165,6 +167,13 @@ _SYSTEM_PROMPT = (
     "- After a tool returns, say what it gave you before moving on.\n"
     "- Never do arithmetic yourself; call the calculation tool.\n"
     "- Name the source document when you use a retrieved passage.\n"
+    "- If asked to draft, create, write, or generate a Word document, text report, "
+    "or .docx file, call draft_docx with appropriate title, sections "
+    "(including source citations), and output_path (e.g. \"storage/outputs/filename.docx\").\n"
+    "- If asked to build, draft, create, or generate a spreadsheet, Excel file, "
+    "comparison table, matrix, or .xlsx file, call draft_xlsx with appropriate title, "
+    "sheets (headers, rows with sources and Excel formulas), and output_path (e.g. \"storage/outputs/filename.xlsx\"). "
+    "Use draft_docx for prose documents, draft_xlsx for tabular data/spreadsheets.\n"
     "- When you have enough, give the final answer and stop.\n"
     "- If a tool call fails twice, stop calling it and say what is "
     "missing. Do not keep retrying with different arguments.\n"
@@ -437,18 +446,45 @@ def run_agent_loop(
             # executed, the model is not asked whether it should be, and
             # there is no parameter that skips this.
             if _requires_approval(name):
+                from backend.audit.approval_gate import ApprovalGate
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
 
                 spec = _REGISTRY.get(name)
                 effect = getattr(spec, "description", "") or name
-                T.warn(f"{name} requires approval - loop stopped")
+                if name == "draft_docx":
+                    from backend.tools.documents.draft_docx import describe_effect
+
+                    try:
+                        effect = describe_effect(
+                            arguments.get("title", ""),
+                            arguments.get("sections", []),
+                            arguments.get("output_path", ""),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif name == "draft_xlsx":
+                    from backend.tools.documents.draft_xlsx import describe_effect
+
+                    try:
+                        effect = describe_effect(
+                            arguments.get("title", ""),
+                            arguments.get("sheets", []),
+                            arguments.get("output_path", ""),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                gate = ApprovalGate()
+                app_req = gate.request(tool_name=name, arguments=arguments, effect=effect)
+
+                T.warn(f"{name} requires approval - loop stopped (request {app_req.request_id})")
                 yield {
                     "type": "approval_required",
-                    "id": call_id,
+                    "id": app_req.request_id,
                     "name": name,
                     "arguments": arguments,
-                    "effect": effect,
+                    "effect": app_req.effect,
                 }
                 yield {
                     "type": "done",

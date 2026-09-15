@@ -1531,31 +1531,49 @@ def chat(body: ChatRequestBody) -> dict:
             # know are ABSENT rather than filled with plausible
             # placeholders -- an empty field reads as unknown, a
             # plausible one reads as measured.
-            category = req.arguments.get("category") or "operator action"
-            command = req.arguments.get("command") or req.effect
+            if req.tool_name in ("draft_docx", "draft_xlsx"):
+                kind_name = "Excel Spreadsheet" if req.tool_name == "draft_xlsx" else "Word Document"
+                title_val = req.arguments.get("title") or kind_name
+                output_path_val = req.arguments.get("output_path") or "storage/outputs/"
+                approval_action = {
+                    "id": req.request_id,
+                    "title": f"Confirm {kind_name} Draft ({title_val})",
+                    "action_type": "FILE_WRITE",
+                    "target": output_path_val,
+                    "description": req.effect,
+                    "detail": f'Draft {kind_name} "{title_val}" to {output_path_val}',
+                    "requested_by_operator": req.effect,
+                    "resolved_parameters": True,
+                    "risk_level": "REQUIRES_REVIEW",
+                    "warning": (
+                        f"Drafting an {kind_name} will generate a file on disk at the path shown. "
+                        "Review the tables, formulas, and citations in the description before authorizing."
+                    ),
+                    "token": req.token,
+                }
+            else:
+                category = req.arguments.get("category") or "operator action"
+                command = req.arguments.get("command") or req.effect
 
-            approval_action = {
-                "id": req.request_id,
-                "title": f"Confirm {category}",
-                "action_type": _ACTION_TYPES.get(category, "OPERATOR_ACTION"),
-                # The operator's own words. The system has not resolved a
-                # device, a file path or a magnitude, and says so rather
-                # than guessing one.
-                "target": None,
-                "description": req.effect,
-                "detail": command,
-                "requested_by_operator": command,
-                "resolved_parameters": False,
-                "risk_level": "REQUIRES_REVIEW",
-                "warning": (
-                    "The workbench has NOT resolved a target device, file "
-                    "path or value for this instruction. Approving records "
-                    "your authorisation for the action exactly as worded "
-                    "above — confirm the specifics yourself before "
-                    "authorising."
-                ),
-                "token": req.token,
-            }
+                approval_action = {
+                    "id": req.request_id,
+                    "title": f"Confirm {category}",
+                    "action_type": _ACTION_TYPES.get(category, "OPERATOR_ACTION"),
+                    "target": None,
+                    "description": req.effect,
+                    "detail": command,
+                    "requested_by_operator": command,
+                    "resolved_parameters": False,
+                    "risk_level": "REQUIRES_REVIEW",
+                    "warning": (
+                        "The workbench has NOT resolved a target device, file "
+                        "path or value for this instruction. Approving records "
+                        "your authorisation for the action exactly as worded "
+                        "above — confirm the specifics yourself before "
+                        "authorising."
+                    ),
+                    "token": req.token,
+                }
         except Exception:
             pass
 

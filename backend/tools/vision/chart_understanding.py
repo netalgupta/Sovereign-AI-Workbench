@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Vision-model chart description — for chart IMAGES with no underlying
 data (an embedded picture in a PDF page, or a standalone chart PNG), as
 opposed to xlsx_charts.py's exact native-chart-DATA extraction.

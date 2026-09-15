@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """SymPy verified calculation tool — VIBECODING_SPEC.md CARD 08.
 
 WHY THIS FILE EXISTS AT ALL (read this before touching anything below):

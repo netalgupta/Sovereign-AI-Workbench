@@ -96,13 +96,9 @@ export const useChatStore = create((set, get) => ({
    *
    * @param {boolean} confirmed - True if operator approved; False if cancelled
    */
-  resolveApproval: (confirmed) => {
+  resolveApproval: async (confirmed) => {
     const action = get().pendingApprovalAction
-    const actionDesc = action?.description || 'HCU feed rate modification'
-
-    if (action?.id) {
-      apiResolveApproval(action.id, confirmed, 'operator').catch(() => {})
-    }
+    const actionDesc = action?.description || action?.title || 'Action'
 
     set({
       awaitingHumanApproval: false,
@@ -110,16 +106,26 @@ export const useChatStore = create((set, get) => ({
       isApprovalModalOpen: false,
     })
 
-    if (confirmed) {
-      get().addMessage(
-        'assistant',
-        `✅ **Action Authorized by Operator:** Safety gate passed. DCS feed-forward controller FFC-201 accepted parameter update: **115% (1,667 m³/h)**. Continuous interlock monitoring active.`
-      )
-    } else {
-      get().addMessage(
-        'assistant',
-        `❌ **Action Cancelled by Operator:** Parameter modification was rejected. ${actionDesc} aborted. Setpoint retained at nominal **100% (1,450 m³/h)**.`
-      )
+    if (action?.id) {
+      const res = await apiResolveApproval(action.id, confirmed, 'operator')
+      if (confirmed) {
+        if (res?.result?.file_path) {
+          get().addMessage(
+            'assistant',
+            `✅ **Action Authorized & Executed by Operator:** Generated Word document **"${res.result.title || action.title}"** at \`${res.result.file_path}\` (${res.result.section_count} section(s), ${res.result.total_sources} source citation(s), ${res.result.byte_size} bytes).`
+          )
+        } else {
+          get().addMessage(
+            'assistant',
+            `✅ **Action Authorized & Executed by Operator:** Safety gate passed. Action **"${action.title || actionDesc}"** executed successfully.`
+          )
+        }
+      } else {
+        get().addMessage(
+          'assistant',
+          `❌ **Action Cancelled by Operator:** Action **"${action.title || actionDesc}"** was rejected. No file or system state was modified.`
+        )
+      }
     }
   },
 

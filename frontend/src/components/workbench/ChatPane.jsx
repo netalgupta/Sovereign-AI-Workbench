@@ -399,6 +399,9 @@ export function ChatPane() {
           plan: res.plan || [],
         })
       }
+      if (res.awaiting_human_approval && res.approval_action) {
+        setAwaitingApproval(true, res.approval_action)
+      }
     } catch (err) {
       showToast(err?.message || 'Error sending message', 'error')
     } finally {

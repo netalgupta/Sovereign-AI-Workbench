@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Answer "show me that image" — pick the RIGHT image and hand back the
 actual pixels, not a description of them.
 

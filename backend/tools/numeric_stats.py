@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Numerical and statistical analysis — TOOLS.md row 28 (🔴).
 
 Trend analysis and curve fitting over real operating data: WABT creep on
