@@ -86,3 +86,8 @@ frontend/public/pipeline/*.json
 # corpus export is what made one person's 13 documents hydrate every
 # teammate's backend and hide folders they had just added.
 .workbench/
+
+# Synthetic MRPL archive corpus (backend/evaluation/generate_archive.py).
+# Regeneratable in ~1hr from the checked-in generator; would otherwise
+# bloat the repo with tens of MB of synthetic spreadsheets and images.
+MRPL_Archive_Corpus/
