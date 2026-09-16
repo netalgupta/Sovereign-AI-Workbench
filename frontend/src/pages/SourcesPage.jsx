@@ -287,15 +287,9 @@ export function SourcesPage() {
               }
             } catch {}
           }
-          if (imgList.length === 0) {
-            try {
-              const snap = await fetch('/pipeline/images.json')
-              if (snap.ok) {
-                const d = await snap.json()
-                imgList = d.images || (Array.isArray(d) ? d : [])
-              }
-            } catch {}
-          }
+          // No /pipeline/images.json fallback: that is a committed export
+          // from another machine, and rendering it here shows someone
+          // else's scans as this corpus (Review Rule 5). Empty is honest.
           if (!cancelled) {
             setImages(imgList)
             const worst = imgList.find((im) => im.scored?.fabricated_value_count > 0)
@@ -363,7 +357,14 @@ export function SourcesPage() {
   }, [chunks, chunkFilter])
 
   const nearestNeighbours = useMemo(() => {
-    if (!chunks?.similarity || !chunks.chunks) return []
+    if (!chunks?.chunks) return []
+    // Served per chunk, so this works when the full matrix is omitted
+    // for a large corpus.
+    const served = chunks.chunks[selectedChunkIdx]?.neighbours
+    if (Array.isArray(served)) {
+      return served.map(([idx, simVal]) => ({ simVal, idx }))
+    }
+    if (!chunks.similarity) return []
     const row = chunks.similarity[selectedChunkIdx]
     if (!row) return []
     return row
@@ -678,7 +679,7 @@ export function SourcesPage() {
                     Total Ingested Footprint
                   </span>
                   <span className="font-mono font-bold text-xs" style={{ color: 'var(--color-text)' }}>
-                    {corpusData.totalSizeDisplay} • {corpusData.chunkCount || (corpusData.corpusCount ? `${corpusData.corpusCount * 8}` : '248')} chunks indexed ({corpusData.corpusCount || 27} files)
+                    {corpusData.totalSizeDisplay} • {corpusData.chunkCount ?? '—'} chunks indexed ({corpusData.corpusCount ?? '—'} files)
                   </span>
                 </div>
                 <div
@@ -1396,7 +1397,7 @@ export function SourcesPage() {
                 </div>
                 <VectorScatter
                   chunks={chunks?.chunks || []}
-                  pcaExplained={chunks?.pcaExplained || [0.28, 0.19]}
+                  pcaExplained={chunks?.pcaExplained || []}
                   height={420}
                 />
               </div>
@@ -1407,11 +1408,17 @@ export function SourcesPage() {
                   <h3 className="text-xs font-bold uppercase tracking-wider text-muted">Cosine Similarity Heatmap</h3>
                   <span className="text-[10px] font-mono text-muted">N × N Matrix</span>
                 </div>
-                <SimilarityHeatmap
-                  similarity={chunks?.similarity || []}
-                  chunks={chunks?.chunks || []}
-                  height={420}
-                />
+                {chunks?.similarityOmitted ? (
+                  <p className="text-xs text-muted" style={{ minHeight: 120 }}>
+                    {chunks.similarityOmitted.reason}
+                  </p>
+                ) : (
+                  <SimilarityHeatmap
+                    similarity={chunks?.similarity || []}
+                    chunks={chunks?.chunks || []}
+                    height={420}
+                  />
+                )}
               </div>
             </div>
           </div>

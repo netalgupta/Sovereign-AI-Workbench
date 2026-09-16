@@ -84,10 +84,21 @@ class PipelineState:
     def __init__(self, corpus_dir: str = DEFAULT_CORPUS_DIR):
         self.corpus_dir = corpus_dir
         self._lock = Lock()
+        # ONE INGEST AT A TIME, across every entry point. Two overlapping
+        # ingests of the same folder each saw the file as "not indexed
+        # yet" and both added it: MEASURED 6,797 chunks for 3,523
+        # distinct passages after adding one 195-file folder, so every
+        # search result arrived twice. Held for a whole ingest, never by
+        # a read, so it cannot stall a page load.
+        self._ingest_lock = Lock()
         self._store = None
         self._chunks = None
         self._snapshot = None
         self._cached_chunks = None
+        # The background job indexing files the cache has not seen, if
+        # one is running. Exposed so the UI can show it rather than a
+        # corpus that silently lacks a folder.
+        self.catch_up_job_id: str | None = None
 
     def reset(self):
         with self._lock:
@@ -400,13 +411,25 @@ class PipelineState:
                 # corpus of scans on every boot is minutes of silence.
                 # It is now CHECKED against what is actually configured
                 # first, and discarded the moment those disagree.
+                #
+                # A STALE CACHE IS STILL LOADED, then caught up in the
+                # background. Its chunks are real and still searchable;
+                # only the files it has never seen are missing, and those
+                # are indexed by a tracked job (see _schedule_catch_up)
+                # rather than inside this lock. Ingesting them HERE held
+                # the lock for the whole ingest, so every page that
+                # touched the corpus hung behind it -- and the files were
+                # then ingested a second time by the request that added
+                # them.
+                #
+                # The committed inspector snapshot is only trusted while
+                # it matches; it describes one machine's 13 documents.
                 hydrate_from = None
                 if CORPUS_CACHE_PATH.exists():
                     hydrate_from = CORPUS_CACHE_PATH
                     self._cache_matches_sources(CORPUS_CACHE_PATH)
-                elif SNAPSHOT_PATH.exists():
+                elif SNAPSHOT_PATH.exists() and self._snapshot_matches_sources():
                     hydrate_from = SNAPSHOT_PATH
-                    self._snapshot_matches_sources()
 
                 if hydrate_from is not None:
                     try:
@@ -439,33 +462,16 @@ class PipelineState:
                                 vecs = embed_texts([c.text for c in self._chunks])
                                 self._store.add_chunks(self._chunks, vecs)
                                 self._write_index()
-
-                        # Incremental ingest for any missing documents in configured sources
-                        missing = getattr(self, "_last_staleness", None)
-                        if missing:
-                            from backend.ingestion.document_ingestion import ingest_document
-                            missing_set = set(missing)
-                            folders = self._configured_folders() or [Path(self.corpus_dir)]
-                            new_chunks = []
-                            for folder in folders:
-                                if not folder.exists():
-                                    continue
-                                cands = [folder] if folder.is_file() else folder.rglob("*")
-                                for cand in cands:
-                                    if cand.is_file() and cand.name in missing_set and not cand.name.startswith("."):
-                                        try:
-                                            nc = ingest_document(str(cand))
-                                            new_chunks.extend(nc)
-                                            missing_set.discard(cand.name)
-                                        except Exception:
-                                            pass
-                            if new_chunks:
-                                n_vecs = embed_texts([c.text for c in new_chunks])
-                                self._store.add_chunks(new_chunks, n_vecs)
-                                self._chunks.extend(new_chunks)
-                                self._write_corpus_cache(self._chunks)
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception(
+                            "Could not hydrate the corpus from %s; files will be "
+                            "re-indexed in the background.", hydrate_from,
+                        )
+                    missing = list(getattr(self, "_last_staleness", None) or [])
+                    if missing:
+                        # Scheduled after the lock is released: see the
+                        # thread body, which re-enters ensure_corpus.
+                        self._pending_catch_up = missing
                 else:
                     # EVERY CONFIGURED FOLDER, not just the built-in
                     # corpus directory. Ingesting only self.corpus_dir
@@ -518,7 +524,63 @@ class PipelineState:
                         # problem for another: a stale corpus becomes an
                         # 88-second startup, every time, forever.
                         self._write_corpus_cache(collected)
+        pending = getattr(self, "_pending_catch_up", None)
+        if pending:
+            self._pending_catch_up = None
+            self._schedule_catch_up(pending)
         return self._store, self._chunks
+
+    def _schedule_catch_up(self, missing_names: list[str]) -> str | None:
+        """Index configured files the cache has never seen, in the
+        background, as a tracked job.
+
+        Tracked, not silent: the UI polls /api/ingestion like any other
+        add, so a folder that is still being indexed says so instead of
+        looking like a corpus that is missing it.
+        """
+        import threading
+
+        from backend.ingestion.ingestion_progress import get_tracker
+
+        # Files an ingest in flight has already claimed are its job, not
+        # this one's; taking them would show the user's add stuck at 0
+        # while a second job does its work.
+        wanted = set(missing_names) - set(getattr(self, "_ingesting_names", None) or ())
+        files: list[Path] = []
+        seen: set[str] = set()
+        for entry in self._configured_folders() or []:
+            if not entry.exists():
+                continue
+            candidates = [entry] if entry.is_file() else entry.rglob("*")
+            for cand in candidates:
+                if (
+                    cand.is_file()
+                    and cand.name in wanted
+                    and cand.name not in seen
+                    and not cand.name.startswith(".")
+                ):
+                    seen.add(cand.name)
+                    files.append(cand)
+        if not files:
+            return None
+
+        tracker = get_tracker()
+        job = tracker.create("configured sources (catch-up)", files)
+        self.catch_up_job_id = job.job_id
+        logging.getLogger(__name__).info(
+            "Indexing %d file(s) the corpus cache has not seen, in the background "
+            "(job %s).", len(files), job.job_id,
+        )
+
+        def _run():
+            try:
+                self.ingest_files(files, job_id=job.job_id)
+                tracker.finish(job.job_id)
+            except Exception as exc:  # noqa: BLE001 - recorded on the job
+                tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_run, name=f"corpus-catch-up-{job.job_id}", daemon=True).start()
+        return job.job_id
 
     def ingest_path(
         self, target_path: str | Path, job_id: str | None = None
@@ -534,26 +596,6 @@ class PipelineState:
         when everything is finished, which on a folder of scans is
         minutes of silence.
         """
-        from backend.ingestion.ingestion_progress import DocumentStage, get_tracker
-
-        tracker = get_tracker() if job_id else None
-
-        def _stage(file_path, stage, **kw):
-            if tracker:
-                tracker.set_stage(job_id, str(file_path), stage, **kw)
-        from backend.ingestion.document_ingestion import ingest_document
-        from backend.ingestion.document_types import detect_document_type
-        from backend.ingestion.embeddings import embed_texts
-        def _ocr_fn(img_path: str) -> str:
-            try:
-                from backend.tools.vision.ocr_printed import extract_printed_text
-                res = extract_printed_text(img_path).full_text
-                return res if res.strip() else f"[Image Document: {Path(img_path).name}]"
-            except Exception:
-                return f"[Image Document: {Path(img_path).name}]"
-
-        newly_ingested: list = []
-
         p = Path(target_path).resolve()
         if not p.exists():
             raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
@@ -581,134 +623,174 @@ class PipelineState:
 
             files = sorted(f for f in p.rglob("*") if _is_safe_doc(f))
 
-        # IMMEDIATELY signal the first file as EXTRACTING in the tracker
-        # so the poll endpoint returns non-null current_document from the
-        # very first tick — before any lock acquisition or corpus check.
-        if tracker and files:
-            tracker.set_stage(job_id, str(files[0]), DocumentStage.EXTRACTING)
+        return self.ingest_files(files, job_id=job_id, label=Path(target_path).name)
 
-        # FAST PATH: if the store is already in memory, use it directly.
-        with self._lock:
-            if self._store is not None:
-                store = self._store
-                existing_chunks = self._chunks or []
-            else:
-                store = None
+    def ingest_files(
+        self, files: list[Path], job_id: str | None = None, label: str = "files"
+    ) -> tuple[int, list[dict]]:
+        """Index these files. THE ONE PLACE INGESTION HAPPENS.
 
-        if store is None:
-            store, existing_chunks = self.ensure_corpus()
+        Every route that adds sources, and the background catch-up,
+        comes through here, so two rules hold for all of them:
 
-        total_chunks = 0
-        details = []
+          * one ingest at a time (self._ingest_lock), and
+          * a file already in the index is SKIPPED, not appended again.
 
-        for f in files:
-            _stage(f, DocumentStage.EXTRACTING)
+        Identity is the bare filename because that is what the store
+        records as source_document; the store cannot tell two same-named
+        files apart either, so a stricter check here would not help.
+        """
+        from backend.ingestion.ingestion_progress import DocumentStage, get_tracker
+
+        tracker = get_tracker() if job_id else None
+
+        def _stage(file_path, stage, **kw):
+            if tracker:
+                tracker.set_stage(job_id, str(file_path), stage, **kw)
+
+        from backend.ingestion.document_ingestion import ingest_document
+        from backend.ingestion.document_types import detect_document_type
+        from backend.ingestion.embeddings import embed_texts
+
+        def _ocr_fn(img_path: str) -> str:
             try:
-                type_info = detect_document_type(str(f))
-                chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
-            except Exception as exc:
-                # Reported as a terminal FAILED state with the reason, not
-                # skipped quietly. A folder ingest that silently drops
-                # three unreadable PDFs and reports success is what makes
-                # people distrust the corpus later, when an answer is
-                # missing and nobody knows why.
-                _stage(f, DocumentStage.FAILED, detail=f"{type(exc).__name__}: {exc}")
-                details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
-                continue
-            _stage(f, DocumentStage.CHUNKING, chunks=len(chunks))
+                from backend.tools.vision.ocr_printed import extract_printed_text
+                res = extract_printed_text(img_path).full_text
+                return res if res.strip() else f"[Image Document: {Path(img_path).name}]"
+            except Exception:
+                return f"[Image Document: {Path(img_path).name}]"
 
-            if not chunks:
-                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
-                import datetime
-                fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
-                chunks = [
-                    IngestedChunk(
-                        text=fallback_text,
-                        metadata=ChunkMetadata(
-                            source_document=f.name,
-                            document_type=getattr(type_info, "detected_type", "txt"),
-                            page_number=1,
-                            chunk_index=0,
-                            ingestion_date=datetime.date.today().isoformat(),
-                            image_ids=[],
-                        ),
-                    )
-                ]
+        newly_ingested: list = []
 
-            if chunks:
-                _stage(f, DocumentStage.EMBEDDING, chunks=len(chunks))
-                vectors = embed_texts([c.text for c in chunks])
-                _stage(f, DocumentStage.INDEXING)
-                store.add_chunks(chunks, vectors)
+        with self._ingest_lock:
+            # Claimed BEFORE ensure_corpus, so a stale-cache catch-up it
+            # schedules leaves these files to this call instead of racing
+            # it for them.
+            self._ingesting_names = {f.name for f in files}
+            try:
+                store, existing_chunks = self.ensure_corpus()
                 with self._lock:
-                    self._chunks.extend(chunks)
-                    # Invalidate cached static snapshot so live chunks are served
-                    self._snapshot = None
-                    self._cached_chunks = None
-                # register() only takes file_path — the second arg (document_type)
-                # was causing a silent TypeError on every successful ingest, meaning
-                # nothing was ever recorded in the registry.
-                try:
-                    self.registry.register(str(f))
-                except Exception:
-                    pass
-                total_chunks += len(chunks)
-                details.append({
-                    "filename": f.name,
-                    "path": str(f),
-                    "chunks": len(chunks),
-                    "document_type": type_info.detected_type,
-                })
-                _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
-                newly_ingested.extend(chunks)
+                    indexed_names = {c.metadata.source_document for c in (self._chunks or [])}
 
-        # THE GRAPH FOLLOWS THE CORPUS NOW.
-        #
-        # Adding a source used to update the chunk index and leave the
-        # graph exactly as it was, because entity extraction only ever
-        # ran by hand. With 63 documents loaded the graph still described
-        # the 13 somebody extracted weeks earlier -- real data, correctly
-        # stored, silently covering a fraction of what every other tab
-        # showed.
-        #
-        # Scheduled rather than awaited: extraction is one model call per
-        # chunk (10-25s each), so doing it inline would hold this request
-        # open for the better part of an hour. Ingestion returns as soon
-        # as the documents are SEARCHABLE, which is what the user is
-        # waiting for, and the graph catches up behind it.
-        #
-        # Cannot fail this call: see backend/graph/auto_extract.py.
-        if newly_ingested:
-            try:
-                from backend.graph import auto_extract
+                total_chunks = 0
+                details = []
 
-                auto_extract.schedule(
-                    newly_ingested, reason=f"ingest of {Path(target_path).name}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
+                for f in files:
+                    if f.name in indexed_names:
+                        # Already searchable. Indexing it again does not refresh
+                        # it, it DUPLICATES it: the store appends, so every
+                        # passage would come back twice in every search.
+                        _stage(f, DocumentStage.SKIPPED, detail="already indexed")
+                        details.append({"filename": f.name, "path": str(f), "chunks": 0, "skipped": "already indexed"})
+                        continue
+                    _stage(f, DocumentStage.EXTRACTING)
+                    try:
+                        type_info = detect_document_type(str(f))
+                        chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
+                    except Exception as exc:
+                        # Reported as a terminal FAILED state with the reason, not
+                        # skipped quietly. A folder ingest that silently drops
+                        # three unreadable PDFs and reports success is what makes
+                        # people distrust the corpus later, when an answer is
+                        # missing and nobody knows why.
+                        _stage(f, DocumentStage.FAILED, detail=f"{type(exc).__name__}: {exc}")
+                        details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
+                        continue
+                    _stage(f, DocumentStage.CHUNKING, chunks=len(chunks))
 
-        # PERSIST the updated store so the next boot loads from cache.
-        #
-        # ingest_path() extended self._chunks and added vectors to
-        # self._store, but _write_corpus_cache() was never called here --
-        # so a server restart (uvicorn --reload on any file save) would
-        # re-check the cache, find newly added documents missing from
-        # scanned_files, declare it stale, and trigger a full re-ingest.
-        # Writing the cache immediately after each successful ingest
-        # means the next boot is always fast.
-        if newly_ingested and self._chunks:
-            # Snapshot the chunk list UNDER the lock so a concurrent ingest
-            # that extends self._chunks between the lock release and the disk
-            # write does not produce a partially-modified cache file.
-            with self._lock:
-                chunks_snapshot = list(self._chunks)
-            try:
-                self._write_corpus_cache(chunks_snapshot)
-            except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness
-                pass
+                    if not chunks:
+                        from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                        import datetime
+                        fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
+                        chunks = [
+                            IngestedChunk(
+                                text=fallback_text,
+                                metadata=ChunkMetadata(
+                                    source_document=f.name,
+                                    document_type=getattr(type_info, "detected_type", "txt"),
+                                    page_number=1,
+                                    chunk_index=0,
+                                    ingestion_date=datetime.date.today().isoformat(),
+                                    image_ids=[],
+                                ),
+                            )
+                        ]
 
-        return total_chunks, details
+                    if chunks:
+                        _stage(f, DocumentStage.EMBEDDING, chunks=len(chunks))
+                        vectors = embed_texts([c.text for c in chunks])
+                        _stage(f, DocumentStage.INDEXING)
+                        store.add_chunks(chunks, vectors)
+                        with self._lock:
+                            self._chunks.extend(chunks)
+                            # Invalidate cached static snapshot so live chunks are served
+                            self._snapshot = None
+                            self._cached_chunks = None
+                            indexed_names.add(f.name)
+                        # register() only takes file_path — the second arg (document_type)
+                        # was causing a silent TypeError on every successful ingest, meaning
+                        # nothing was ever recorded in the registry.
+                        try:
+                            self.registry.register(str(f))
+                        except Exception:
+                            pass
+                        total_chunks += len(chunks)
+                        details.append({
+                            "filename": f.name,
+                            "path": str(f),
+                            "chunks": len(chunks),
+                            "document_type": type_info.detected_type,
+                        })
+                        _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
+                        newly_ingested.extend(chunks)
+
+                # THE GRAPH FOLLOWS THE CORPUS NOW.
+                #
+                # Adding a source used to update the chunk index and leave the
+                # graph exactly as it was, because entity extraction only ever
+                # ran by hand. With 63 documents loaded the graph still described
+                # the 13 somebody extracted weeks earlier -- real data, correctly
+                # stored, silently covering a fraction of what every other tab
+                # showed.
+                #
+                # Scheduled rather than awaited: extraction is one model call per
+                # chunk (10-25s each), so doing it inline would hold this request
+                # open for the better part of an hour. Ingestion returns as soon
+                # as the documents are SEARCHABLE, which is what the user is
+                # waiting for, and the graph catches up behind it.
+                #
+                # Cannot fail this call: see backend/graph/auto_extract.py.
+                if newly_ingested:
+                    try:
+                        from backend.graph import auto_extract
+
+                        auto_extract.schedule(newly_ingested, reason=f"ingest of {label}")
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # PERSIST the updated store so the next boot loads from cache.
+                #
+                # ingest_path() extended self._chunks and added vectors to
+                # self._store, but _write_corpus_cache() was never called here --
+                # so a server restart (uvicorn --reload on any file save) would
+                # re-check the cache, find newly added documents missing from
+                # scanned_files, declare it stale, and trigger a full re-ingest.
+                # Writing the cache immediately after each successful ingest
+                # means the next boot is always fast.
+                if newly_ingested and self._chunks:
+                    # Snapshot the chunk list UNDER the lock so a concurrent ingest
+                    # that extends self._chunks between the lock release and the disk
+                    # write does not produce a partially-modified cache file.
+                    with self._lock:
+                        chunks_snapshot = list(self._chunks)
+                    try:
+                        self._write_corpus_cache(chunks_snapshot)
+                    except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness
+                        pass
+
+                return total_chunks, details
+            finally:
+                self._ingesting_names = set()
 
 
     def delete_source(self, target_path: str) -> dict:
@@ -738,11 +820,12 @@ class PipelineState:
         # 3. Remove from VectorStore SQLite metadata table
         if self._store and getattr(self._store, "_conn", None):
             try:
-                self._store._conn.execute(
-                    "DELETE FROM chunks WHERE LOWER(source_document) = LOWER(?) OR LOWER(source_document) LIKE LOWER(?)",
-                    (doc_name, f"%{doc_name}%")
-                )
-                self._store._conn.commit()
+                with self._store._rw:
+                    self._store._conn.execute(
+                        "DELETE FROM chunks WHERE LOWER(source_document) = LOWER(?) OR LOWER(source_document) LIKE LOWER(?)",
+                        (doc_name, f"%{doc_name}%")
+                    )
+                    self._store._conn.commit()
             except Exception:
                 pass
 
@@ -802,15 +885,37 @@ class PipelineState:
         Neo4j and the graph appears within twenty seconds, without a
         restart.
         """
+        import threading
         import time as _time
+
+        from backend.evaluation.export_inspection_data import export_graph
 
         cached = getattr(self, "_graph_failure", None)
         if cached is not None:
             result, failed_at = cached
             if (_time.time() - failed_at) < self._GRAPH_FAILURE_TTL_SECONDS:
                 return result
+            # EXPIRED: answer with the known failure NOW and re-probe
+            # behind it. Re-probing inline still cost one poller 4.1s
+            # every twenty seconds -- MEASURED as a /api/health stall
+            # recurring on exactly that period while Neo4j was down.
+            # Recovery is noticed on the next call after the probe lands.
+            if not getattr(self, "_graph_probe_running", False):
+                self._graph_probe_running = True
 
-        from backend.evaluation.export_inspection_data import export_graph
+                def _probe():
+                    try:
+                        fresh = export_graph(uri, user, password)
+                        self._graph_failure = (
+                            None if fresh.get("available") else (fresh, _time.time())
+                        )
+                    except Exception:  # noqa: BLE001 - keep the old failure
+                        self._graph_failure = (result, _time.time())
+                    finally:
+                        self._graph_probe_running = False
+
+                threading.Thread(target=_probe, name="graph-probe", daemon=True).start()
+            return result
 
         result = export_graph(uri, user, password)
 

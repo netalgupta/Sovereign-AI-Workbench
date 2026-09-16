@@ -108,6 +108,8 @@ export const api = {
     withFallback('/api/chunks', '/pipeline/chunks.json', (d) => ({
       chunks: d.chunks ?? [],
       similarity: d.similarity ?? [],
+      // Set when the corpus is too large to send the N x N matrix.
+      similarityOmitted: d.similarity_omitted ?? null,
       chunking: d.chunking ?? null,
       embeddingDim: d.embedding_dim ?? null,
       pcaExplained: d.pca_explained_variance ?? [],

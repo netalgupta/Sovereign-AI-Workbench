@@ -52,6 +52,15 @@ def _ocr_device_status() -> str:
         return "unavailable"
 
 
+def _embedding_device_status() -> str:
+    try:
+        from backend.ingestion.embeddings import active_device
+
+        return active_device()
+    except Exception as exc:  # noqa: BLE001
+        return f"unknown ({type(exc).__name__})"
+
+
 def _embedding_backend_status() -> tuple[str, str | None]:
     """(backend name, degradation reason or None) without forcing a load."""
     try:
@@ -92,6 +101,12 @@ def health() -> dict:
         # guessing. Measured difference on this box: 21.08s vs 0.61s.
         "ocr_device": _ocr_device_status(),
         "embedding_backend": _embedding_status[0],
+        # WHERE embeddings run. "The CPU is stuck at 100%" during an
+        # ingest is expected on a CPU-only torch build and a bug on a
+        # CUDA one; without this field the two look identical.
+        "embedding_device": _embedding_device_status(),
+        # A background job indexing files the corpus cache had not seen.
+        "catch_up_job_id": state.catch_up_job_id,
         "embeddings_degraded": _embedding_status[1] is not None,
         "embeddings_degraded_reason": _embedding_status[1],
         "graph_available": graph.get("available", False),
@@ -189,7 +204,14 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
     from backend.evaluation.export_inspection_data import _pca_2d
     from backend.ingestion.embeddings import embed_texts
 
-    _store, chunks = state.ensure_corpus()
+    store, live_chunks = state.ensure_corpus()
+    # A COPY, taken under the lock. The live list grows while an ingest
+    # runs; iterating it after computing vectors for a shorter prefix
+    # raised "IndexError: index 3510 is out of bounds for axis 0 with
+    # size 3510" -- MEASURED, mid-ingest, after the request had already
+    # spent five minutes.
+    with state._lock:
+        chunks = list(live_chunks or [])
     if not chunks:
         result = {
             "source": "live",
@@ -207,9 +229,31 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
         state._cached_chunks = result
         return result
 
-    vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
+    vectors = _stored_vectors(store, len(chunks))
+    if vectors is None:
+        vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
     coords, explained = _pca_2d(vectors) if len(chunks) > 1 else (np.zeros((len(chunks), 2)), [1.0, 0.0])
-    similarity = (vectors @ vectors.T).tolist()
+    neighbours = _nearest_neighbours(vectors, k=CHUNK_NEIGHBOURS)
+
+    # The full matrix is N² numbers. At 236 chunks that is 56k and fine;
+    # at the 6,797 chunks one archive folder produced it is 46 MILLION,
+    # hundreds of MB of JSON the browser cannot parse. Above the limit
+    # the heatmap is omitted AND SAYS WHY, and the per-chunk nearest
+    # neighbours -- the part of the matrix the page actually reads -- are
+    # still served for every chunk.
+    if len(chunks) <= SIMILARITY_MATRIX_MAX_CHUNKS:
+        similarity = [[round(float(v), 4) for v in row] for row in (vectors @ vectors.T)]
+        similarity_omitted = None
+    else:
+        similarity = []
+        similarity_omitted = {
+            "chunk_count": len(chunks),
+            "limit": SIMILARITY_MATRIX_MAX_CHUNKS,
+            "reason": (
+                f"A {len(chunks):,} x {len(chunks):,} similarity matrix is too large to "
+                f"send; nearest neighbours are provided per chunk instead."
+            ),
+        }
 
     result = {
         "source": "live",
@@ -233,13 +277,60 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
                 "image_ids": c.metadata.image_ids,
                 "x": float(coords[i][0]),
                 "y": float(coords[i][1]),
+                "neighbours": neighbours[i],
             }
             for i, c in enumerate(chunks)
         ],
-        "similarity": [[round(v, 4) for v in row] for row in similarity],
+        "similarity": similarity,
+        "similarity_omitted": similarity_omitted,
     }
     state._cached_chunks = result
     return result
+
+
+# Above this many chunks the full similarity matrix is not sent. 600² is
+# 360k cells (a few MB of JSON); the heatmap is unreadable well before
+# that anyway, at one pixel per cell.
+SIMILARITY_MATRIX_MAX_CHUNKS = 600
+CHUNK_NEIGHBOURS = 5
+
+
+def _stored_vectors(store, n: int):
+    """The vectors already in the index, or None.
+
+    /api/chunks re-embedded every chunk on each cache miss -- 11.5s for
+    236 chunks, MEASURED, and a cache miss follows every document of an
+    ingest -- to recompute vectors sitting in the FAISS index. Positions
+    line up because chunks and vectors are appended together, one ingest
+    at a time (PipelineState._ingest_lock).
+    """
+    # Through the store, which holds its lock: reading the FAISS index
+    # directly while an ingest added to it segfaulted the API (exit 139).
+    try:
+        return store.vectors(n)
+    except Exception:  # noqa: BLE001 - an index type without reconstruct
+        return None
+
+
+def _nearest_neighbours(vectors, k: int) -> list[list[list[float]]]:
+    """For each chunk, its k most similar other chunks as [index, score].
+
+    Computed in blocks so memory stays at block x N rather than N².
+    """
+    n = len(vectors)
+    if n < 2:
+        return [[] for _ in range(n)]
+    k = min(k, n - 1)
+    out: list[list[list[float]]] = []
+    block = 512
+    for start in range(0, n, block):
+        sims = vectors[start:start + block] @ vectors.T
+        for row_i, row in enumerate(sims):
+            row[start + row_i] = -np.inf  # a chunk is not its own neighbour
+            top = np.argpartition(-row, k)[:k]
+            top = top[np.argsort(-row[top])]
+            out.append([[int(j), round(float(row[j]), 4)] for j in top])
+    return out
 
 
 # ---------------------------------------------------------------- images
@@ -1231,22 +1322,19 @@ def _get_corpus_data() -> dict:
         tree.insert(0, files_node)
 
     total_bytes = sum(i["sizeBytes"] for i in all_items)
-    chunk_count = 0
-    try:
-        from backend.api.state import CORPUS_CACHE_PATH
-        import json as _json
-        st = get_state()
-        if st._store is not None and getattr(st._store, "index", None) is not None:
-            chunk_count = st._store.index.ntotal
-        elif st._cached_chunks:
-            chunk_count = len(st._cached_chunks)
-        elif CORPUS_CACHE_PATH.exists():
-            data = _json.loads(CORPUS_CACHE_PATH.read_text(encoding="utf-8"))
-            chunk_count = len(data.get("chunks", []))
-    except Exception:
-        pass
-    if chunk_count == 0:
-        chunk_count = len(all_items) * 8
+    # THE REAL COUNT OR NONE. This fell back to `files x 8` -- a number
+    # nobody measured, shown as "chunks indexed". Unknown is reported as
+    # null and rendered as unknown (Review Rule 4).
+    #
+    # Not read from the cache file either: at one archive folder that is
+    # a 15 MB JSON parse on every sidebar refresh.
+    # No lock: a first-boot corpus build holds it for minutes, and the
+    # sidebar must not wait on that to list folders. len() of a list
+    # reference is safe to read without it.
+    chunk_count = None
+    loaded = getattr(get_state(), "_chunks", None)
+    if loaded is not None:
+        chunk_count = len(loaded)
 
     return {
         "directories": dirs,

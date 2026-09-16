@@ -7,7 +7,7 @@
         --incidents 40 --correspondence 40 --board-reviews 28
 
 RESUMABLE. Narrative generation checkpoints every document to
-MRPL_Archive_Corpus/manifest.json as it is produced. Killing this
+MRPL_Archive_Corpus/.manifest.json as it is produced. Killing this
 script and re-running it skips everything already done -- see
 archive_corpus/narrative_docs.py for why that matters at LLM-call cost.
 
@@ -62,7 +62,7 @@ maintenance log.
     py -3 -m backend.evaluation.generate_archive
 
 Resumable — already-generated narrative documents are skipped via
-manifest.json. Increase any --count flag and re-run to grow the corpus
+.manifest.json. Increase any --count flag and re-run to grow the corpus
 further; nothing already done is regenerated or duplicated.
 """
     (root / "README.md").write_text(readme, encoding="utf-8")

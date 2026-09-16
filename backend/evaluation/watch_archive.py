@@ -5,7 +5,7 @@ Run this in its own terminal WHILE generate_archive.py is running
 
     py -3 -m backend.evaluation.watch_archive
 
-Reads MRPL_Archive_Corpus/manifest.json — the same checkpoint file
+Reads MRPL_Archive_Corpus/.manifest.json — the same checkpoint file
 generate_archive.py writes after EVERY document, not a log scrape — so
 what you see here is the actual on-disk state, not a guess at it.
 Refreshes every 2 seconds until you Ctrl+C.
@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 ROOT = Path("MRPL_Archive_Corpus")
-MANIFEST = ROOT / "manifest.json"
+MANIFEST = ROOT / ".manifest.json"
 
 CATEGORIES = ["sop", "inspection", "incident", "correspondence", "board_review"]
 CATEGORY_LABEL = {

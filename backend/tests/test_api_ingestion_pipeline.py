@@ -88,17 +88,36 @@ def test_sources_upload_endpoint(tmp_path):
         ]
     }
 
+    target = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads" / "test_pump_log.txt"
+    # A leftover from an interrupted run would be skipped as already
+    # indexed, which is correct behaviour and not what this test checks.
+    client.delete("/api/sources", params={"path": str(target)})
+
     res = client.post("/api/sources/upload", json=payload)
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True
     assert data["count"] == 1
-    assert data["total_chunks"] >= 1
-    assert len(data["details"]) == 1
-    assert data["details"][0]["filename"] == "test_pump_log.txt"
+
+    # Ingestion runs in the background now, so "indexed" is checked on
+    # the JOB, not assumed from a 200. A response that returns before
+    # the work is done proves nothing about the work.
+    import time
+
+    deadline = time.time() + 120
+    job = None
+    while time.time() < deadline:
+        job = client.get(f"/api/ingestion/{data['job_id']}").json()
+        if job.get("state") in ("complete", "failed"):
+            break
+        time.sleep(0.5)
+    assert job and job["state"] == "complete", job
+    docs = [d for d in job["documents"] if d["name"] == "test_pump_log.txt"]
+    assert len(docs) == 1
+    assert docs[0]["stage"] == "indexed", docs[0]
+    assert docs[0]["chunks"] >= 1
 
     # Verify file exists on disk in 07_User_Uploads
-    target = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads" / "test_pump_log.txt"
     assert target.exists()
 
     # Clean up test artifact from disk

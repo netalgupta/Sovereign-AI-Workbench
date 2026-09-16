@@ -4,7 +4,7 @@ RESUMABLE, THE SAME WAY extract_corpus.py IS, AND FOR THE SAME REASON.
 Each document costs one real model call -- measured elsewhere in this
 repo at 10-25s depending on length -- so a run of a hundred documents is
 tens of minutes. A crash, a Ctrl-C, or an Ollama restart partway through
-must not mean starting over. A manifest (manifest.json in the output
+must not mean starting over. A manifest (.manifest.json in the output
 root) records every completed document by its deterministic id, and
 generate_batch() skips anything already in it.
 
@@ -29,7 +29,11 @@ from pathlib import Path
 
 from . import vocab
 
-MANIFEST_NAME = "manifest.json"
+# A DOTFILE so ingestion skips it. As "manifest.json" it was indexed as
+# 66 chunks of doc ids and statuses -- generator bookkeeping mixed into
+# retrieval results as though it were a refinery document.
+MANIFEST_NAME = ".manifest.json"
+LEGACY_MANIFEST_NAME = "manifest.json"
 
 
 @dataclass
@@ -324,6 +328,9 @@ _WRITER = {".docx": _write_docx, ".pdf": _write_pdf}
 
 def _load_manifest(root: Path) -> dict:
     path = root / MANIFEST_NAME
+    legacy = root / LEGACY_MANIFEST_NAME
+    if not path.exists() and legacy.exists():
+        legacy.rename(path)  # keep resuming a run started before the rename
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))

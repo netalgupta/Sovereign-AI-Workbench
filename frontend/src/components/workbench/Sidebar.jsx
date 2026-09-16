@@ -75,7 +75,7 @@ export function Sidebar() {
   const [sources, setSources] = useState(INITIAL_SOURCES)
   const [tree, setTree] = useState([])
   const [directories, setDirectories] = useState([])
-  const [totalSizeDisplay, setTotalSizeDisplay] = useState('2.83 MB')
+  const [totalSizeDisplay, setTotalSizeDisplay] = useState(null)
   const [chunkCount, setChunkCount] = useState(null)
   const [isAddDirModalOpen, setIsAddDirModalOpen] = useState(false)
 
@@ -142,9 +142,8 @@ export function Sidebar() {
         if (data?.totalSizeDisplay) {
           setTotalSizeDisplay(data.totalSizeDisplay)
         }
-        if (data?.chunkCount) {
-          setChunkCount(data.chunkCount)
-        }
+        // null (corpus not loaded yet) is kept as null and shown as "—".
+        setChunkCount(data?.chunkCount ?? null)
       })
       .catch(() => {})
   }, [setActiveDocuments])
@@ -732,7 +731,7 @@ export function Sidebar() {
                   >
                     <span className="font-medium">Storage utilization</span>
                     <span className="font-mono font-semibold text-[var(--color-text)]">
-                      {totalSizeDisplay} • {chunkCount || (totalCount > 0 ? `${totalCount * 8}` : '0')} chunks
+                      {totalSizeDisplay ?? '—'} • {chunkCount ?? '—'} chunks
                     </span>
                   </div>
                   <div

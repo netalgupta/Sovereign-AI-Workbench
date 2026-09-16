@@ -218,12 +218,19 @@ class ProgressTracker:
             job = self._jobs.get(job_id)
             if job is None:
                 return
-            target_norm = Path(path).resolve().as_posix().lower() if path else ""
-            target_name = Path(path).name.lower() if path else ""
+            # Exact match first, then the same path spelled differently
+            # (case, separators, relative vs absolute) -- string
+            # normalisation, NOT Path.resolve(). Resolving every document
+            # on every stage change is a filesystem call per document per
+            # transition, O(n²) for a folder, all while holding the lock
+            # the 450ms progress poll needs.
+            #
+            # Never by bare filename: two README.md files in different
+            # folders are different documents, and matching on the name
+            # marked the wrong one done.
+            target_norm = _norm(path)
             for doc in job.documents:
-                doc_norm = Path(doc.path).resolve().as_posix().lower() if doc.path else ""
-                doc_name = doc.name.lower() if doc.name else ""
-                if doc.path != path and doc_norm != target_norm and doc_name != target_name:
+                if doc.path != path and _norm(doc.path) != target_norm:
                     continue
                 if doc.started_at is None and stage is not DocumentStage.QUEUED:
                     doc.started_at = time.time()
@@ -254,6 +261,12 @@ class ProgressTracker:
                     doc.stage = DocumentStage.FAILED
                     doc.detail = doc.detail or "Ingestion stopped before this document finished."
                     doc.finished_at = time.time()
+
+
+def _norm(path: str | None) -> str:
+    import os
+
+    return os.path.normcase(os.path.abspath(path)) if path else ""
 
 
 _tracker: ProgressTracker | None = None
