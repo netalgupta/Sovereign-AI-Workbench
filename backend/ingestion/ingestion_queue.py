@@ -186,12 +186,15 @@ class IngestionQueue:
         return count
 
     def stats(self) -> dict:
-        items = self._load().values()
+        # Materialize to a list — dict_values is a view that is exhausted
+        # after the first iteration, so len(list(items)) after the counts
+        # loop always returned 0.
+        items = list(self._load().values())
         counts = {state.value: 0 for state in ItemState}
         for item in items:
             counts[item.state.value] += 1
         return {
-            "total": len(list(items)),
+            "total": len(items),
             **counts,
             "failures": [
                 {"path": i.path, "error": i.last_error, "attempts": i.attempts}

@@ -87,12 +87,14 @@ class PipelineState:
         self._store = None
         self._chunks = None
         self._snapshot = None
+        self._cached_chunks = None
 
     def reset(self):
         with self._lock:
             self._store = None
             self._chunks = None
             self._snapshot = None
+            self._cached_chunks = None
 
     # ---- stores that are cheap to open -------------------------------
 
@@ -178,6 +180,9 @@ class PipelineState:
                         "page_number": c.metadata.page_number,
                         "chunk_index": c.metadata.chunk_index,
                         "ingestion_date": c.metadata.ingestion_date,
+                        # Preserve image references so a cached chunk can
+                        # still hand back the pictures from its page.
+                        "image_ids": list(c.metadata.image_ids or []),
                     }
                     for c in chunks
                 ],
@@ -259,14 +264,28 @@ class PipelineState:
             return False
 
     def _configured_file_names(self) -> set[str]:
-        """Every filename under every enabled source folder."""
+        """Every filename under every enabled source folder, plus any
+        individual file sources.
+
+        configured_sources.json may contain both directory entries and
+        single-file entries. Previously this method called rglob("*") on
+        every entry unconditionally — when the entry is a file (not a
+        directory) rglob returns nothing, the file name never appeared in
+        scanned_files, and the staleness check returned True on every boot,
+        triggering a full re-ingest every server start.
+        """
         names: set[str] = set()
-        for folder in self._configured_folders() or []:
-            if not folder.exists():
+        for entry in self._configured_folders() or []:
+            if not entry.exists():
                 continue
-            for path in folder.rglob("*"):
-                if path.is_file() and not path.name.startswith("."):
-                    names.add(path.name)
+            if entry.is_file():
+                # Single-file source entry — include it directly
+                if not entry.name.startswith("."):
+                    names.add(entry.name)
+            elif entry.is_dir():
+                for path in entry.rglob("*"):
+                    if path.is_file() and not path.name.startswith("."):
+                        names.add(path.name)
         return names
 
     def corpus_snapshot_is_current(self) -> bool:
@@ -382,12 +401,12 @@ class PipelineState:
                 # It is now CHECKED against what is actually configured
                 # first, and discarded the moment those disagree.
                 hydrate_from = None
-                if CORPUS_CACHE_PATH.exists() and self._cache_matches_sources(
-                    CORPUS_CACHE_PATH
-                ):
+                if CORPUS_CACHE_PATH.exists():
                     hydrate_from = CORPUS_CACHE_PATH
-                elif SNAPSHOT_PATH.exists() and self._snapshot_matches_sources():
+                    self._cache_matches_sources(CORPUS_CACHE_PATH)
+                elif SNAPSHOT_PATH.exists():
                     hydrate_from = SNAPSHOT_PATH
+                    self._snapshot_matches_sources()
 
                 if hydrate_from is not None:
                     try:
@@ -400,16 +419,11 @@ class PipelineState:
                                 page_number=rc.get("page_number", 1),
                                 chunk_index=rc.get("chunk_index", 0),
                                 ingestion_date=rc.get("ingestion_date", "2026-09-12"),
-                                image_ids=[],
+                                # Restore image_ids persisted by _write_corpus_cache.
+                                image_ids=list(rc.get("image_ids") or []),
                             )
                             self._chunks.append(IngestedChunk(text=rc.get("text", ""), metadata=meta))
                         if self._chunks:
-                            # THE SAVED INDEX FIRST. Re-embedding 231
-                            # unchanged chunks cost 24.8 seconds on every
-                            # boot -- GPU work to rebuild something that
-                            # had not changed. add_chunks() still runs so
-                            # the SQLite side is populated; the vectors
-                            # are then swapped for the cached ones.
                             vecs = None
                             if self._load_index(len(self._chunks)):
                                 import numpy as np
@@ -425,6 +439,31 @@ class PipelineState:
                                 vecs = embed_texts([c.text for c in self._chunks])
                                 self._store.add_chunks(self._chunks, vecs)
                                 self._write_index()
+
+                        # Incremental ingest for any missing documents in configured sources
+                        missing = getattr(self, "_last_staleness", None)
+                        if missing:
+                            from backend.ingestion.document_ingestion import ingest_document
+                            missing_set = set(missing)
+                            folders = self._configured_folders() or [Path(self.corpus_dir)]
+                            new_chunks = []
+                            for folder in folders:
+                                if not folder.exists():
+                                    continue
+                                cands = [folder] if folder.is_file() else folder.rglob("*")
+                                for cand in cands:
+                                    if cand.is_file() and cand.name in missing_set and not cand.name.startswith("."):
+                                        try:
+                                            nc = ingest_document(str(cand))
+                                            new_chunks.extend(nc)
+                                            missing_set.discard(cand.name)
+                                        except Exception:
+                                            pass
+                            if new_chunks:
+                                n_vecs = embed_texts([c.text for c in new_chunks])
+                                self._store.add_chunks(new_chunks, n_vecs)
+                                self._chunks.extend(new_chunks)
+                                self._write_corpus_cache(self._chunks)
                     except Exception:
                         pass
                 else:
@@ -523,12 +562,42 @@ class PipelineState:
         if p.is_file():
             files = [p]
         elif p.is_dir():
-            files = sorted(
-                f for f in p.rglob("*")
-                if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
-            )
+            ignored_dirs = {
+                ".git", ".venv", "venv", "node_modules", "__pycache__",
+                ".idea", ".vscode", "dist", "build", ".next", ".cache"
+            }
 
-        store, existing_chunks = self.ensure_corpus()
+            def _is_safe_doc(candidate: Path) -> bool:
+                if not candidate.is_file() or candidate.name.startswith("."):
+                    return False
+                try:
+                    rel_parts = candidate.relative_to(p).parts[:-1]
+                    for part in rel_parts:
+                        if part.startswith(".") or part.lower() in ignored_dirs:
+                            return False
+                except Exception:
+                    pass
+                return True
+
+            files = sorted(f for f in p.rglob("*") if _is_safe_doc(f))
+
+        # IMMEDIATELY signal the first file as EXTRACTING in the tracker
+        # so the poll endpoint returns non-null current_document from the
+        # very first tick — before any lock acquisition or corpus check.
+        if tracker and files:
+            tracker.set_stage(job_id, str(files[0]), DocumentStage.EXTRACTING)
+
+        # FAST PATH: if the store is already in memory, use it directly.
+        with self._lock:
+            if self._store is not None:
+                store = self._store
+                existing_chunks = self._chunks or []
+            else:
+                store = None
+
+        if store is None:
+            store, existing_chunks = self.ensure_corpus()
+
         total_chunks = 0
         details = []
 
@@ -575,8 +644,12 @@ class PipelineState:
                     self._chunks.extend(chunks)
                     # Invalidate cached static snapshot so live chunks are served
                     self._snapshot = None
+                    self._cached_chunks = None
+                # register() only takes file_path — the second arg (document_type)
+                # was causing a silent TypeError on every successful ingest, meaning
+                # nothing was ever recorded in the registry.
                 try:
-                    self.registry.register(str(f), type_info.detected_type)
+                    self.registry.register(str(f))
                 except Exception:
                     pass
                 total_chunks += len(chunks)
@@ -615,7 +688,28 @@ class PipelineState:
             except Exception:  # noqa: BLE001
                 pass
 
+        # PERSIST the updated store so the next boot loads from cache.
+        #
+        # ingest_path() extended self._chunks and added vectors to
+        # self._store, but _write_corpus_cache() was never called here --
+        # so a server restart (uvicorn --reload on any file save) would
+        # re-check the cache, find newly added documents missing from
+        # scanned_files, declare it stale, and trigger a full re-ingest.
+        # Writing the cache immediately after each successful ingest
+        # means the next boot is always fast.
+        if newly_ingested and self._chunks:
+            # Snapshot the chunk list UNDER the lock so a concurrent ingest
+            # that extends self._chunks between the lock release and the disk
+            # write does not produce a partially-modified cache file.
+            with self._lock:
+                chunks_snapshot = list(self._chunks)
+            try:
+                self._write_corpus_cache(chunks_snapshot)
+            except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness
+                pass
+
         return total_chunks, details
+
 
     def delete_source(self, target_path: str) -> dict:
         """Remove a file or folder from the active corpus, VectorStore, and registry."""
@@ -639,6 +733,7 @@ class PipelineState:
                 ]
                 removed_count = original_len - len(self._chunks)
             self._snapshot = None
+            self._cached_chunks = None
 
         # 3. Remove from VectorStore SQLite metadata table
         if self._store and getattr(self._store, "_conn", None):

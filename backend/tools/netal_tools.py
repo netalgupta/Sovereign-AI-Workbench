@@ -452,6 +452,15 @@ def graph_analytics(
             shortest_path_result = {"found": False, "path": [], "edge_types": [], "length": -1,
                                     "note": f"Nodes not found: {', '.join(missing)}"}
 
+    subgraph = None
+    if shortest_path_result and shortest_path_result.get("found"):
+        sub_nodes = [{"id": pid, "name": node_name_map.get(pid, pid), "labels": [node_label_map.get(pid, "Entity")]} for pid in path_ids]
+        sub_rels = [
+            {"id": f"e{i}", "source": path_ids[i], "target": path_ids[i+1], "type": edge_types[i]}
+            for i in range(len(path_ids) - 1)
+        ]
+        subgraph = {"nodes": sub_nodes, "relationships": sub_rels}
+
     return {
         "source": source_label,
         "node_count": node_count,
@@ -459,7 +468,107 @@ def graph_analytics(
         "metric": m,
         "top_nodes": top_nodes,
         "shortest_path": shortest_path_result,
+        "subgraph": subgraph,
         "note": f"Analytics on {node_count} nodes, {edge_count} edges ({source_label}).",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph neighborhood and entity query
+# ---------------------------------------------------------------------------
+
+@tool(
+    name="query_knowledge_graph",
+    category="retrieval",
+    description=(
+        "Query the Neo4j knowledge graph for entities and their relationships. "
+        "Use this for questions about equipment tags, pipeline segments, refinery units, "
+        "or connections between documents and physical refinery assets. "
+        "Pass an entity name or keyword (e.g. 'MS Block', 'H-101', 'Segment-A', 'Hydrocracker')."
+    ),
+)
+def query_knowledge_graph(
+    entity_name: str,
+    relationship_type: Optional[str] = None,
+    depth: int = 1,
+) -> dict:
+    """Look up an entity in the knowledge graph and return its connected neighborhood subgraph."""
+    graph_data, source_label = _load_graph()
+    if not graph_data or not graph_data.get("nodes"):
+        return {
+            "found": False,
+            "entity": entity_name,
+            "nodes": [],
+            "relationships": [],
+            "message": "Knowledge graph data unavailable.",
+        }
+
+    q = entity_name.lower().strip()
+    nodes = graph_data.get("nodes", [])
+    relationships = graph_data.get("relationships", [])
+
+    # Find best matching target node
+    target_node = None
+    for n in nodes:
+        props = n.get("properties", {})
+        name = props.get("name") or props.get("tag") or props.get("segment_name") or props.get("summary") or props.get("filename") or str(n.get("id"))
+        if q == str(name).lower():
+            target_node = n
+            break
+        if not target_node and (q in str(name).lower() or any(q in str(v).lower() for v in props.values())):
+            target_node = n
+
+    if not target_node:
+        target_node = nodes[0] if nodes else None
+
+    if not target_node:
+        return {"found": False, "entity": entity_name, "nodes": [], "relationships": []}
+
+    target_id = target_node["id"]
+    connected_rels = []
+    connected_node_ids = {target_id}
+
+    for r in relationships:
+        if r.get("source") == target_id or r.get("target") == target_id:
+            if relationship_type and r.get("type", "").lower() != relationship_type.lower():
+                continue
+            connected_rels.append(r)
+            connected_node_ids.add(r.get("source"))
+            connected_node_ids.add(r.get("target"))
+
+    # Cap nodes to a concise readable subgraph (5-7 nodes)
+    sub_node_ids = list(connected_node_ids)[:7]
+    sub_nodes = [n for n in nodes if n["id"] in sub_node_ids]
+    sub_rels = [r for r in connected_rels if r.get("source") in sub_node_ids and r.get("target") in sub_node_ids]
+
+    def _display_name(node_obj):
+        props = node_obj.get("properties", {})
+        return props.get("name") or props.get("tag") or props.get("segment_name") or props.get("summary") or props.get("filename") or str(node_obj.get("id"))
+
+    return {
+        "found": True,
+        "target": _display_name(target_node),
+        "target_id": target_id,
+        "nodes": [
+            {
+                "id": n["id"],
+                "name": _display_name(n),
+                "labels": n.get("labels", []),
+                "is_target": n["id"] == target_id,
+            }
+            for n in sub_nodes
+        ],
+        "relationships": [
+            {
+                "id": r.get("id"),
+                "source": r.get("source"),
+                "target": r.get("target"),
+                "type": r.get("type"),
+            }
+            for r in sub_rels
+        ],
+        "total_connected": len(connected_rels),
+        "source": source_label,
     }
 
 

@@ -91,3 +91,6 @@ frontend/public/pipeline/*.json
 # Regeneratable in ~1hr from the checked-in generator; would otherwise
 # bloat the repo with tens of MB of synthetic spreadsheets and images.
 MRPL_Archive_Corpus/
+MRPL_RAG_Test_Corpus/07_User_Uploads/*
+!MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
+/*.png

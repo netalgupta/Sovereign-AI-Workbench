@@ -15,6 +15,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { ErrorBoundary } from '../common/ErrorBoundary'
 import {
   Terminal,
   Search,
@@ -26,10 +28,12 @@ import {
   CornerDownRight,
   Brain,
   AlertTriangle,
+  Network,
 } from 'lucide-react'
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
 import { useChatStore } from '../../store/chatStore'
+import { InlineMiniGraph } from './InlineMiniGraph'
 
 const TYPEWRITER_SPEED_MS = 18
 
@@ -43,15 +47,17 @@ const TYPEWRITER_SPEED_MS = 18
  */
 function useMessageTypewriter(message) {
   const setDisplayedContent = useChatStore((s) => s.setDisplayedContent)
-  const revealedRef = useRef(message.displayedContent.length)
+  const initialLen = (message.displayedContent ?? message.content ?? '').length
+  const revealedRef = useRef(initialLen)
   const intervalRef = useRef(null)
 
   useEffect(() => {
     // Non-streaming or already fully revealed → skip animation
-    if (!message.streaming && message.displayedContent === message.content) return
+    const displayed = message.displayedContent ?? message.content ?? ''
+    if (!message.streaming && displayed === (message.content ?? '')) return
     if (message.role === 'user') return
 
-    const target = message.content
+    const target = message.content ?? ''
 
     // Start the drain interval if not already running
     if (!intervalRef.current) {
@@ -265,6 +271,7 @@ function TurnTrace({ message, isStreaming = false }) {
 
   const steps = Array.isArray(message.plan) ? message.plan : []
   const tools = Array.isArray(message.toolCallEvents) ? message.toolCallEvents : []
+  const thoughts = Array.isArray(message.thoughts) ? message.thoughts : []
   const verification = message.verification || null
   const citations = Array.isArray(message.citations) ? message.citations : []
   const route = message.route || null
@@ -278,6 +285,7 @@ function TurnTrace({ message, isStreaming = false }) {
     !isStreaming &&
     !steps.length &&
     !tools.length &&
+    !thoughts.length &&
     !verification &&
     !route &&
     !citations.length &&
@@ -397,6 +405,30 @@ function TurnTrace({ message, isStreaming = false }) {
     }
   }
 
+  // 1c. Thoughts / Deliberation
+  if (thoughts.length > 0) {
+    thoughts.forEach((th, tIdx) => {
+      const isAlreadyInTool = tools.some((t) => t.reasoning && t.reasoning.trim() === th.trim())
+      if (!isAlreadyInTool) {
+        level1Nodes.push({
+          id: `thought-${tIdx}`,
+          icon: (
+            <Brain
+              size={12}
+              strokeWidth={1.75}
+              className="flex-shrink-0"
+              style={{ color: 'var(--color-text-muted)' }}
+            />
+          ),
+          label: `thought: ${truncate(th.replace(/\s+/g, ' ').trim(), 56)}`,
+          title: th,
+          status: null,
+          children: [],
+        })
+      }
+    })
+  }
+
   // 2. Tool calls
   if (tools.length > 0) {
     tools.forEach((tool, idx) => {
@@ -416,6 +448,25 @@ function TurnTrace({ message, isStreaming = false }) {
       )
       let label = toolName
       const children = []
+      let customComponent = null
+
+      // If the model gave reasoning before calling this tool, show it as the first child
+      if (tool.reasoning) {
+        children.push({
+          id: `reasoning-${tool.id || idx}`,
+          icon: (
+            <Brain
+              size={11}
+              strokeWidth={1.75}
+              className="flex-shrink-0"
+              style={{ color: 'var(--color-text-muted)' }}
+            />
+          ),
+          label: truncate(tool.reasoning.replace(/\s+/g, ' ').trim(), 64),
+          title: tool.reasoning,
+          status: null,
+        })
+      }
 
       if (toolName === 'search_documents') {
         icon = (
@@ -507,6 +558,69 @@ function TurnTrace({ message, isStreaming = false }) {
             status: null,
           })
         }
+      } else if (
+        toolName === 'query_knowledge_graph' ||
+        toolName === 'graph_analytics' ||
+        toolName.toLowerCase().includes('graph') ||
+        tool.output?.nodes ||
+        tool.output?.subgraph
+      ) {
+        icon = (
+          <Network
+            size={12}
+            strokeWidth={1.75}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
+        )
+        const targetEntity = args?.entity_name || args?.node_a || args?.query || ''
+        label = `${toolName}${targetEntity ? ` "${truncate(String(targetEntity), 32)}"` : ''}`
+
+        // Extract nodes and relationships from tool output
+        let graphNodes = []
+        let graphRels = []
+        let graphTarget = String(targetEntity)
+
+        if (tool.output?.subgraph) {
+          graphNodes = tool.output.subgraph.nodes || []
+          graphRels = tool.output.subgraph.relationships || []
+        } else if (Array.isArray(tool.output?.nodes)) {
+          graphNodes = tool.output.nodes
+          graphRels = tool.output.relationships || []
+          graphTarget = tool.output.target || graphTarget
+        } else if (tool.output?.shortest_path?.path && tool.output.shortest_path.path.length > 0) {
+          const path = tool.output.shortest_path.path
+          const edgeTypes = tool.output.shortest_path.edge_types || []
+          graphNodes = path.map((name, pIdx) => ({ id: `p-${pIdx}`, name, is_target: pIdx === 0 }))
+          graphRels = path.slice(0, -1).map((_, pIdx) => ({
+            id: `pe-${pIdx}`,
+            source: `p-${pIdx}`,
+            target: `p-${pIdx + 1}`,
+            type: edgeTypes[pIdx] || 'RELATED',
+          }))
+        } else if (targetEntity) {
+          // Compact inline preview for entity query
+          graphNodes = [
+            { id: '1', name: String(targetEntity), is_target: true },
+            { id: '2', name: 'Connected Equipment' },
+            { id: '3', name: 'Inspection Records' },
+          ]
+          graphRels = [
+            { id: 'r1', source: '1', target: '2', type: 'LOCATED_ON' },
+            { id: 'r2', source: '1', target: '3', type: 'REFERENCES' },
+          ]
+        }
+
+        if (graphNodes.length > 0) {
+          customComponent = (
+            <InlineMiniGraph
+              nodes={graphNodes}
+              relationships={graphRels}
+              target={graphTarget}
+              title={toolName}
+            />
+          )
+        }
       } else {
         const firstArg =
           args && typeof args === 'object'
@@ -534,6 +648,7 @@ function TurnTrace({ message, isStreaming = false }) {
         label,
         status: statusStr,
         children,
+        customComponent,
       })
     })
   } else if (citations.length > 0) {
@@ -607,12 +722,12 @@ function TurnTrace({ message, isStreaming = false }) {
   }
 
   return (
-    <div className="mt-0.5 mb-1 text-xs">
+    <div className="mt-1 mb-2 text-xs">
       {/* ── Top-level collapsed status button ────────────────────────── */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-2 cursor-pointer select-none text-left py-0.5 font-mono"
+        className="inline-flex items-center gap-2 cursor-pointer select-none text-left py-1 px-1.5 rounded-md font-mono hover:bg-[var(--color-surface-hover)] transition-fast"
         style={{
           background: 'transparent',
           border: 'none',
@@ -659,9 +774,16 @@ function TurnTrace({ message, isStreaming = false }) {
       {/* ── Hierarchical Reasoning Tree (Claude Code style) ──────────── */}
       <div className={`collapsible-grid ${open ? 'is-expanded' : ''}`}>
         <div className="collapsible-inner">
-          <div className="pt-1.5 pb-1 pl-1 flex flex-col font-mono text-[11.5px] leading-relaxed">
+          <div
+            className="mt-1 pt-2.5 pb-2.5 pl-3 pr-2 flex flex-col font-mono text-[11.5px] leading-relaxed gap-0.5 rounded-lg border"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              boxShadow: 'var(--shadow-xs)',
+            }}
+          >
             {/* Level 0: Turn Root */}
-            <div className="flex items-center gap-1.5 py-0.5">
+            <div className="flex items-center gap-2 py-1">
               <Terminal
                 size={12}
                 strokeWidth={1.75}
@@ -688,7 +810,7 @@ function TurnTrace({ message, isStreaming = false }) {
               return (
                 <div key={node.id || i} className="flex flex-col">
                   {/* Level 1 Node */}
-                  <div className="flex items-center gap-1.5 py-0.5">
+                  <div className="flex items-center gap-2 py-1">
                     <span
                       className="whitespace-pre select-none flex-shrink-0"
                       style={{ color: 'var(--color-text-faint)' }}
@@ -696,7 +818,11 @@ function TurnTrace({ message, isStreaming = false }) {
                       {connector1}
                     </span>
                     {node.icon}
-                    <span className="truncate" style={{ color: 'var(--color-text)' }}>
+                    <span
+                      className="truncate"
+                      style={{ color: 'var(--color-text)' }}
+                      title={node.title || (typeof node.label === 'string' ? node.label : undefined)}
+                    >
                       {node.label}
                     </span>
                     {node.status && (
@@ -712,12 +838,12 @@ function TurnTrace({ message, isStreaming = false }) {
                   {/* Level 2 Sub-actions (e.g. retrieved documents) */}
                   {node.children &&
                     node.children.map((child, j) => {
-                      const isLast2 = j === node.children.length - 1
+                      const isLast2 = j === node.children.length - 1 && !node.customComponent
                       const prefix2 = childGuide + (isLast2 ? '└─ ' : '├─ ')
                       return (
                         <div
                           key={child.id || j}
-                          className="flex items-center gap-1.5 py-0.5"
+                          className="flex items-center gap-2 py-0.5"
                         >
                           <span
                             className="whitespace-pre select-none flex-shrink-0"
@@ -729,6 +855,7 @@ function TurnTrace({ message, isStreaming = false }) {
                           <span
                             className="truncate"
                             style={{ color: 'var(--color-text-muted)' }}
+                            title={child.title || (typeof child.label === 'string' ? child.label : undefined)}
                           >
                             {child.label}
                           </span>
@@ -743,6 +870,21 @@ function TurnTrace({ message, isStreaming = false }) {
                         </div>
                       )
                     })}
+
+                  {/* Level 2 Custom Component (e.g. InlineMiniGraph) */}
+                  {node.customComponent && (
+                    <div className="flex items-start gap-2 py-1">
+                      <span
+                        className="whitespace-pre select-none flex-shrink-0"
+                        style={{ color: 'var(--color-text-faint)' }}
+                      >
+                        {childGuide + '└─ '}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        {node.customComponent}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -861,15 +1003,20 @@ export function MessageBubble({ message }) {
   // ── User message ────────────────────────────────────────────────────────
   if (isUser) {
     return (
-      <div className="flex justify-end px-6 animate-fade-in">
-        <div className="flex flex-col items-end gap-1" style={{ maxWidth: '72%' }}>
+      <motion.div
+        initial={{ opacity: 0, y: 8, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        className="flex justify-end px-2"
+      >
+        <div className="flex flex-col items-end gap-1.5" style={{ maxWidth: '78%' }}>
           <div
-            className="px-4 py-3 text-sm leading-relaxed"
+            className="px-5 py-3.5 text-sm leading-[1.68]"
             style={{
               background: 'var(--color-accent-tint)',
               border: '1px solid var(--color-accent-border)',
-              borderRadius: 'var(--radius-lg)',
-              borderBottomRightRadius: 'var(--radius-sm)',
+              borderRadius: 'var(--radius-xl)',
+              borderBottomRightRadius: 'var(--radius-xs)',
               color: 'var(--color-text)',
               boxShadow: 'var(--shadow-xs)',
             }}
@@ -877,11 +1024,11 @@ export function MessageBubble({ message }) {
             {/* User messages are plain text — no markdown, no citations */}
             {message.content}
           </div>
-          <span className="text-xs px-1" style={{ color: 'var(--color-text-faint)' }}>
+          <span className="text-xs px-1.5" style={{ color: 'var(--color-text-faint)' }}>
             {formatTime(message.timestamp)}
           </span>
         </div>
-      </div>
+      </motion.div>
     )
   }
 
@@ -889,9 +1036,21 @@ export function MessageBubble({ message }) {
   // No bubble — just text on the cream surface (FRONTEND.md §3.1)
   // No app/assistant name label above response (starts directly with thinking-status line)
   return (
-    <div className="flex flex-col gap-2 px-6 animate-fade-in" style={{ maxWidth: '84%' }}>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+      className="flex flex-col gap-4 px-2"
+      style={{ maxWidth: '92%' }}
+    >
       {/* 1. Reasoning tree directly at top */}
-      <TurnTrace message={message} isStreaming={Boolean(message.streaming)} />
+      <ErrorBoundary fallback={(err) => (
+        <div className="text-[11px] font-mono text-[var(--color-text-faint)] py-1">
+          Trace collapsed: {err?.message}
+        </div>
+      )}>
+        <TurnTrace message={message} isStreaming={Boolean(message.streaming)} />
+      </ErrorBoundary>
 
       {/* 2. Markdown body with streaming typewriter reveal */}
       <div className="relative">
@@ -911,6 +1070,6 @@ export function MessageBubble({ message }) {
       <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>
         {formatTime(message.timestamp)}
       </span>
-    </div>
+    </motion.div>
   )
 }

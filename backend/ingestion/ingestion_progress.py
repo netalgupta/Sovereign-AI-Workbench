@@ -97,6 +97,12 @@ class IngestionJob(BaseModel):
              and d.stage is not DocumentStage.QUEUED),
             None,
         )
+        # Never leave current_document null while a job is running with unfinished docs
+        if current is None and self.state == JobState.RUNNING:
+            current = next(
+                (d for d in self.documents if d.stage not in TERMINAL_STAGES),
+                None,
+            )
         elapsed = (self.finished_at or time.time()) - self.started_at
 
         # An ETA from the documents that have ACTUALLY FINISHED, not from
@@ -159,9 +165,10 @@ class ProgressTracker:
         self._order: list[str] = []
         self._lock = threading.Lock()
 
-    def create(self, root_path: str, files: list[Path]) -> IngestionJob:
+    def create(self, root_path: str, files: list[Path], job_id: str | None = None) -> IngestionJob:
+        jid = job_id or f"job-{uuid.uuid4().hex[:10]}"
         job = IngestionJob(
-            job_id=f"job-{uuid.uuid4().hex[:10]}",
+            job_id=jid,
             root_path=str(root_path),
             documents=[
                 DocumentProgress(
@@ -173,6 +180,9 @@ class ProgressTracker:
                 for f in files
             ],
         )
+        if job.documents:
+            job.documents[0].stage = DocumentStage.EXTRACTING
+            job.documents[0].started_at = time.time()
         with self._lock:
             self._jobs[job.job_id] = job
             self._order.append(job.job_id)
@@ -208,8 +218,12 @@ class ProgressTracker:
             job = self._jobs.get(job_id)
             if job is None:
                 return
+            target_norm = Path(path).resolve().as_posix().lower() if path else ""
+            target_name = Path(path).name.lower() if path else ""
             for doc in job.documents:
-                if doc.path != path:
+                doc_norm = Path(doc.path).resolve().as_posix().lower() if doc.path else ""
+                doc_name = doc.name.lower() if doc.name else ""
+                if doc.path != path and doc_norm != target_norm and doc_name != target_name:
                     continue
                 if doc.started_at is None and stage is not DocumentStage.QUEUED:
                     doc.started_at = time.time()

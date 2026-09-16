@@ -16,22 +16,40 @@ import { Link } from 'react-router-dom'
 import { ChevronRight, FileText, ExternalLink, FileCode, FileSpreadsheet } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// Derive a file-type icon from the doc extension — mirrors Sources rail icons
+// Standardized file-type icon tile for citations — matching Sources Rail
 // ---------------------------------------------------------------------------
 function DocIcon({ filename }) {
   const ext = filename?.split('.').pop()?.toLowerCase()
-  const style = { flexShrink: 0 }
+  let color = '#94a3b8'
+  let bg = 'rgba(148, 163, 184, 0.12)'
+  let border = 'rgba(148, 163, 184, 0.25)'
+  let Icon = FileCode
 
   if (ext === 'pdf') {
-    return <FileText size={12} strokeWidth={1.8} style={{ ...style, color: 'var(--color-accent)' }} />
+    color = '#f87171'
+    bg = 'rgba(248, 113, 113, 0.12)'
+    border = 'rgba(248, 113, 113, 0.28)'
+    Icon = FileText
+  } else if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
+    color = '#34d399'
+    bg = 'rgba(52, 211, 153, 0.12)'
+    border = 'rgba(52, 211, 153, 0.28)'
+    Icon = FileSpreadsheet
+  } else if (ext === 'docx' || ext === 'doc') {
+    color = '#60a5fa'
+    bg = 'rgba(96, 165, 250, 0.12)'
+    border = 'rgba(96, 165, 250, 0.28)'
+    Icon = FileText
   }
-  if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
-    return <FileSpreadsheet size={12} strokeWidth={1.8} style={{ ...style, color: '#2d7a3a' }} />
-  }
-  if (ext === 'docx' || ext === 'doc') {
-    return <FileText size={12} strokeWidth={1.8} style={{ ...style, color: '#1a5db5' }} />
-  }
-  return <FileCode size={12} strokeWidth={1.8} style={{ ...style, color: 'var(--color-text-muted)' }} />
+
+  return (
+    <div
+      className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 shadow-xs"
+      style={{ background: bg, border: `1px solid ${border}`, color }}
+    >
+      <Icon size={11} strokeWidth={1.9} />
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +67,7 @@ function SourceRow({ citation }) {
       <button
         type="button"
         onClick={() => setIsOpen((o) => !o)}
-        className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
+        className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit row-hover-lift rounded"
         style={{ background: 'transparent', border: 'none' }}
         aria-expanded={isOpen}
       >
