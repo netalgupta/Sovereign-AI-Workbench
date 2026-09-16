@@ -65,7 +65,7 @@ RUN if getent passwd 1000 >/dev/null; then         echo "UID 1000 already presen
 # Internal libraries and static assets (PPTX generation)
 RUN mkdir -p /sandbox/lib && chown -R 1000:1000 /sandbox
 COPY backend/tools/generation/slide_kit.py /sandbox/lib/slide_kit.py
-COPY PPTX/Gemini_MRPL.pptx /sandbox/lib/mrpl_template.pptx
+COPY PPTX/MRPL_Template.pptx /sandbox/lib/mrpl_template.pptx
 ENV PYTHONPATH="/sandbox/lib"
 
 WORKDIR /sandbox
