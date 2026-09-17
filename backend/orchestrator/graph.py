@@ -178,6 +178,10 @@ def classify_action_request(msg: str) -> str | None:
         re.I,
     ):
         return None
+    # Presentations / slide decks are safe deliverables rendered with a download card,
+    # and should not trigger hazardous action approval interlocks (§8 Safe Deliverable Exemption).
+    if re.search(r"\b(pptx|presentation|slides?|deck|powerpoint)\b", text, re.I):
+        return None
     for pattern, label in _COMPILED_WRITE_ACTIONS:
         if pattern.search(text):
             return label
@@ -559,6 +563,20 @@ def planner_node(state: AgentState) -> dict[str, Any]:
         T.note(T.DIM("  single-intent lookup - skipping the LLM planner"))
         return {"plan": simple_plan(state.original_request), "current_step_index": 0}
 
+    # Presentation / slide deck generation intent
+    if re.search(r"\b(presentation|slides?|deck|powerpoint|pptx)\b", state.original_request, re.I):
+        T.note(T.CYAN("  presentation request detected — dispatching slide_agent plan"))
+        slide_steps = [
+            PlanStep(
+                step_id="generate_presentation",
+                description=f"Generate on-brand technical slide deck for: {state.original_request.strip()[:100]}",
+                assigned_agent="slide",
+                status="pending",
+                depends_on=[],
+            )
+        ]
+        return {"plan": slide_steps, "current_step_index": 0}
+
     try:
         with T.stage("plan_request (LLM)"):
             updated = plan_request(state)
@@ -783,6 +801,22 @@ def dispatch_node(state: AgentState) -> dict[str, Any]:
                     )
                     step.status = "failed"
 
+            elif step.assigned_agent == "slide":
+                from backend.orchestrator.dispatch import run_slide_step
+
+                try:
+                    tool_log.append(run_slide_step(step, state))
+                except Exception as exc:  # noqa: BLE001
+                    tool_log.append(
+                        ToolCallEvent(
+                            tool_name="generate_deck",
+                            input_params={"task": step.description},
+                            output={"error": str(exc)},
+                            status="failed",
+                        )
+                    )
+                    step.status = "failed"
+
             elif step.assigned_agent in ("vision", "reasoning"):
                 step.status = "done"
 
@@ -856,6 +890,29 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     # question never takes this path and skips grounding.
     if is_corpus_question(state.original_request):
         return {"draft_output": answer_corpus_question(state.original_request)}
+
+    # Presentation delivery check
+    for event in state.tool_call_log:
+        if event.tool_name == "generate_deck" and event.status == "done" and event.output:
+            # Only what the pipeline reported. This defaulted to "40 KB"
+            # and 5 slides when a field was missing -- a plausible size and
+            # count for a file nobody measured (Review Rule 4).
+            deck_info = event.output
+            fn = deck_info.get("filename") or str(deck_info.get("deck_path", "")).replace("\\", "/").rsplit("/", 1)[-1]
+            size = deck_info.get("file_size")
+            cites = deck_info.get("citations") or []
+            omitted = deck_info.get("omitted_sections") or []
+            lines = [
+                "**Presentation generated.**",
+                "",
+                f"- **Deliverable:** `{fn}`" + (f" ({size})" if size else ""),
+                f"- **Slides:** {deck_info.get('slide_count', '—')}",
+                "- **Sources:** " + ("; ".join(cites) if cites else "none"),
+            ]
+            if omitted:
+                lines.append("- **Left out, no source in the corpus:** " + ", ".join(omitted))
+            reply = "\n".join(lines)
+            return {"draft_output": reply}
 
     # Memory was loaded HERE, inside synthesis, which meant a turn that
     # never reached synthesis -- a greeting, an approval interception --
