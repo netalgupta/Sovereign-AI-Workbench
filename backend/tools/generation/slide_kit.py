@@ -244,6 +244,9 @@ def _build_replacements_for_slide(slide_data: dict[str, Any]) -> dict[str, str]:
     cite_str = "".join(f" [{c}]" for c in citations) if citations else ""
     if title:
         replacements["title"] = f"{title}{cite_str}"
+    # The small label above the title. Only what the plan supplies; the
+    # template's own ("EXECUTIVE BRIEFING") is sample text.
+    replacements["section_label"] = str(slide_data.get("section_label", ""))
 
     if mold_id == "title_bullets":
         bullets = slide_data.get("bullets", [])
@@ -361,32 +364,34 @@ def _replace_in_shape(shape: Any, replacements: dict[str, str]) -> None:
     if not getattr(shape, "has_text_frame", False):
         return
 
-    tf = shape.text_frame
-    for p in tf.paragraphs:
-        full_text = "".join(r.text for r in p.runs) if p.runs else p.text
+    for p in shape.text_frame.paragraphs:
+        _replace_in_paragraph(p, replacements)
 
-        # Detect and substitute placeholders
-        matched = False
-        for k, v in replacements.items():
-            pattern = f"{{{{{k}}}}}"
-            if pattern in full_text:
-                full_text = full_text.replace(pattern, str(v))
-                matched = True
 
-        # Clean up any remaining unreplaced placeholder tags (e.g. empty optional bullets)
-        if re.search(r"\{\{[^}]+\}\}", full_text):
-            # If the placeholder is empty and preceded by a bullet or dash, clean it cleanly
-            full_text = re.sub(r"•\s*\{\{[^}]+\}\}\s*(?:—\s*)?", "", full_text)
-            full_text = re.sub(r"\{\{[^}]+\}\}", "", full_text).strip()
-            matched = True
+# A slot is `{{key}}` OR `{{key: sample text}}`. The updated template
+# carries sample text in almost every slot -- "{{title: Q3 FY26 Refinery
+# Performance Review}}" -- and matching only the bare form meant no title,
+# bullet or label was ever filled: the cleanup below then erased them, and
+# decks rendered as a logo, a footer and a few unlabelled numbers.
+_SLOT = re.compile(r"\{\{\s*(\w+)\s*(?::[^}]*)?\}\}")
 
-        if matched:
-            if p.runs:
-                p.runs[0].text = full_text
-                for r in p.runs[1:]:
-                    r.text = ""
-            else:
-                p.text = full_text
+
+def _replace_in_paragraph(p: Any, replacements: dict[str, str]) -> None:
+    full_text = "".join(r.text for r in p.runs) if p.runs else p.text
+    if "{{" not in full_text:
+        return
+    # EVERY slot is resolved: filled from the slide, or emptied. The
+    # sample text after the colon is the template author's example
+    # ("Crude throughput reached 15.2 MMTPA") and must never survive into
+    # a deliverable, where it would read as a sourced figure.
+    full_text = _SLOT.sub(lambda m: str(replacements.get(m.group(1), "")), full_text)
+    full_text = re.sub(r"•\s*(?:—\s*)?$", "", full_text).strip()
+    if p.runs:
+        p.runs[0].text = full_text
+        for r in p.runs[1:]:
+            r.text = ""
+    else:
+        p.text = full_text
 
 
 def _populate_table(shape: Any, headers: list[str], rows: list[list[str]]) -> None:
@@ -408,6 +413,14 @@ def _populate_table(shape: Any, headers: list[str], rows: list[list[str]]) -> No
         row_data = rows[r_idx]
         for c_idx in range(min(len(row_data), max_cols)):
             table.cell(r_idx + 1, c_idx).text = str(row_data[c_idx])
+
+    # Clear every cell the data did not reach. The template's rows hold
+    # sample figures ("{{row_4_col_2: 3.7 ...}}"); a three-row source left
+    # the fourth row of invented numbers in the delivered table.
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.text_frame.paragraphs:
+                _replace_in_paragraph(p, {})
 
 
 def _inject_image_into_placeholder(slide: Any, image_path: str, mold_id: str) -> None:

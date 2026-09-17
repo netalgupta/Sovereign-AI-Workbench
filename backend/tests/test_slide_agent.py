@@ -211,6 +211,50 @@ def test_slide_pipeline_refuses_a_topic_the_corpus_does_not_cover():
         )
 
 
+def test_deck_slots_are_filled_and_no_template_sample_text_survives(tmp_path):
+    """The template writes slots as {{key: sample}}. Only {{key}} was
+    matched, so titles and bullets were never filled -- decks rendered as
+    a logo and a footer -- and a table with fewer rows than the template
+    kept the template's invented sample figures."""
+    plan = {
+        "slides": [
+            {
+                "mold_id": "title_bullets",
+                "title": "CATALYST CHANGEOUT",
+                "bullets": ["Beds purged with nitrogen before unloading.", "Oxygen held below 0.5 percent."],
+                "citations": ["SOP-114-Rev3.docx p.2"],
+            },
+            {
+                "mold_id": "table_data",
+                "title": "INLET LIMITS",
+                "headers": ["Tag", "Limit"],
+                "rows": [["TC-201A", "400 C"]],
+                "citations": ["SOP-114-Rev3.docx p.2"],
+            },
+        ]
+    }
+    out = tmp_path / "deck.pptx"
+    build_deck(plan, out_path=str(out))
+
+    prs = Presentation(str(out))
+    all_text = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                all_text.append(shape.text_frame.text)
+            if getattr(shape, "has_table", False):
+                all_text.extend(c.text for r in shape.table.rows for c in r.cells)
+    text = "\n".join(all_text)
+
+    assert "CATALYST CHANGEOUT" in text
+    assert "Beds purged with nitrogen before unloading." in text
+    assert "TC-201A" in text and "400 C" in text
+    assert "{{" not in text
+    # Sample text from MRPL_Template.pptx, which must never ship.
+    for sample in ("Q3 FY26", "15.2 MMTPA", "Crude throughput", "EXECUTIVE BRIEFING", "DATA SUMMARY"):
+        assert sample not in text, f"template sample text {sample!r} leaked into the deck"
+
+
 def _bundle(snippet: str) -> dict:
     return {
         "section_title": "HYDROCRACKER LIMITS",
