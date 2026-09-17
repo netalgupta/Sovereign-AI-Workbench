@@ -65,7 +65,6 @@ _ALLOWED_TOOLS: dict[str, set[str]] = {
     # that could never be called. test_every_allowlisted_tool_is_registered
     # keeps them honest.
     "code_agent": {"run_in_sandbox"},
-    "slide_agent": {"generate_deck"},
 }
 
 # PlanStep.assigned_agent uses the short names; the graph nodes use the
@@ -79,7 +78,6 @@ _AGENT_TO_NODE = {
     "reasoning": "reasoning_agent",
     "math": "math_tool",
     "retrieval": "retrieval_agent",
-    "slide": "slide_agent",
 }
 
 
@@ -290,28 +288,3 @@ async def dispatch_code_agent_call(session_id: str, code: str, language: str = "
         "exit_code": result.exit_code,
         "timed_out": result.timed_out,
     }
-
-
-def run_slide_step(step: PlanStep, state: AgentState) -> ToolCallEvent:
-    """The `slide_agent` node — PowerPoint presentation generation."""
-    from backend.orchestrator.slide_agent import run_slide_pipeline
-
-    event = ToolCallEvent(
-        tool_name="generate_deck",
-        input_params={"request": state.original_request, "session_id": state.session_id},
-        status="running",
-        timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    )
-    try:
-        result = run_slide_pipeline(state.original_request, session_id=state.session_id)
-        event.status = "done"
-        event.output = result
-        step.status = "done"
-    except Exception as exc:
-        event.status = "failed"
-        event.output = {"error": f"{type(exc).__name__}: {exc}"}
-        step.status = "failed"
-        raise SubAgentError(str(exc)) from exc
-
-    return event
-

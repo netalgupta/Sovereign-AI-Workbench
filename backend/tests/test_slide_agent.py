@@ -27,7 +27,7 @@ from backend.orchestrator.slide_agent import (
     plan_deck_outline,
     fetch_section_content,
     fill_slide_content,
-    run_slide_pipeline,
+    prepare_deck,
     MAX_RETRIES,
 )
 from backend.orchestrator.graph import classify_action_request, is_action_approval_request
@@ -182,33 +182,40 @@ def test_slide_pipeline_end_to_end():
     Citations are now checked against the corpus.
     """
     from backend.api.state import get_state
+    from backend.tools import catalog  # noqa: F401
+    from backend.tools.registry import call_tool
 
-    result = run_slide_pipeline(
-        request="Hydrocracker catalyst changeout and inspection findings",
+    prepared = prepare_deck(
+        "Hydrocracker catalyst changeout and inspection findings",
         session_id="test_e2e_session",
         max_slides=3,
     )
-
-    assert Path(result["deck_path"]).exists()
-    assert 1 <= result["slide_count"] <= 3
-    assert result["defects"] == []
-    assert result["citations"], "a grounded deck must name its sources"
+    assert 1 <= len(prepared["slide_titles"]) <= 3
+    assert prepared["defects"] == []
+    assert prepared["citations"], "a grounded deck must name its sources"
 
     _store, chunks = get_state().ensure_corpus()
     corpus_docs = {c.metadata.source_document for c in chunks}
-    for ref in result["citations"]:
-        doc = ref.split(" p.")[0]
-        assert doc in corpus_docs, f"citation {ref!r} is not a document in the corpus"
+    for ref in prepared["citations"]:
+        assert ref.split(" p.")[0] in corpus_docs, f"citation {ref!r} is not a document in the corpus"
+
+    # The approved write renders exactly the prepared plan.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = Path(tmpdir) / "deck.pptx"
+        result = call_tool(
+            "generate_deck",
+            {"deck_plan": prepared["deck_plan"], "output_path": str(out)},
+            approved=True,
+        )
+        assert out.exists()
+        assert result["slide_count"] == len(prepared["slide_titles"])
+        assert len(Presentation(str(out)).slides) == result["slide_count"]
 
 
 def test_slide_pipeline_refuses_a_topic_the_corpus_does_not_cover():
     """Before: a full, "grounded" deck on anything, from invented figures."""
     with pytest.raises(ValueError, match="No document in the corpus covers"):
-        run_slide_pipeline(
-            request="The plot of Pride and Prejudice",
-            session_id="test_refusal_session",
-            max_slides=3,
-        )
+        prepare_deck("The plot of Pride and Prejudice", session_id="test_refusal_session", max_slides=3)
 
 
 def test_deck_slots_are_filled_and_no_template_sample_text_survives(tmp_path):
@@ -323,14 +330,34 @@ def test_unretrieved_section_is_ungrounded_not_given_a_citation(monkeypatch):
     assert bundle["citations"] == []
 
 
-def test_presentation_safe_deliverable_exemption():
-    """Verify presentations are exempt from the hazardous action interlock."""
-    # File writes or commands that should be gated:
-    assert is_action_approval_request("write this report to disk") is True
-    assert is_action_approval_request("save document to file") is True
+def test_presentations_go_through_the_approval_gate():
+    """Hard constraint #4: no file write without approval. Decks were
+    exempted as "safe deliverables"; a .pptx carrying refinery figures
+    that leaves the building is exactly what the gate is for."""
+    assert is_action_approval_request("Generate a presentation on crude distillation unit limits") is True
+    assert is_action_approval_request("Create a slide deck for hydrocracker operations") is True
+    assert is_action_approval_request("Make a pptx for board meeting") is True
+    # Questions about a deck are reads, not writes.
+    assert is_action_approval_request("What does the board presentation say about CCR-1?") is False
 
-    # Presentations should be safe deliverables exempt from the gate:
-    assert classify_action_request("Generate a presentation on crude distillation unit limits") is None
-    assert is_action_approval_request("Generate a presentation on crude distillation unit limits") is False
-    assert is_action_approval_request("Create a slide deck for hydrocracker operations") is False
-    assert is_action_approval_request("Make a pptx for board meeting") is False
+
+def test_generate_deck_refuses_to_write_without_approval(tmp_path):
+    from backend.tools import catalog  # noqa: F401
+    from backend.tools.registry import ApprovalRequired, call_tool
+
+    out = tmp_path / "deck.pptx"
+    plan = {"slides": [{"mold_id": "title_bullets", "title": "X", "bullets": ["A sourced line."]}]}
+    with pytest.raises(ApprovalRequired):
+        call_tool("generate_deck", {"deck_plan": plan, "output_path": str(out)})
+    assert not out.exists()
+
+
+def test_refinery_equipment_named_deck_or_slide_is_not_a_presentation():
+    """"Tray deck" and "slide valve" are equipment. The planner used to send
+    any request containing "deck" or "slide" to the slide agent."""
+    from backend.orchestrator.action_resolver import is_deck_request
+
+    assert not is_deck_request("Write a report on the slide valve inspection")
+    assert not is_deck_request("Draft a note on tray deck corrosion in the CDU")
+    assert is_deck_request("Create a presentation on slide valve inspection findings")
+    assert is_deck_request("Make a PowerPoint on CCR-1 regeneration")

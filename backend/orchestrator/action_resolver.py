@@ -101,7 +101,80 @@ def resolve(request: str, category: str, *, session_id: str = "default") -> Reso
             ),
         )
 
+    if is_deck_request(request):
+        return _resolve_deck(request, session_id=session_id)
     return _resolve_document_draft(request, session_id=session_id)
+
+
+_DECK_RE = re.compile(r"\b(pptx|powerpoint|presentation|slide\s*deck|slides)\b", re.I)
+
+
+def is_deck_request(request: str) -> bool:
+    """Does this file-write request ask for a presentation?
+
+    Deliberately NOT bare "deck" or "slide": "tray deck" and "slide valve"
+    are refinery equipment, and a request to write up a slide valve
+    inspection is a document, not a presentation.
+    """
+    return bool(_DECK_RE.search(request or ""))
+
+
+def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
+    """Plan the deck BEFORE asking, so the operator approves real slides.
+
+    Planning (model calls, retrieval, a QA render inside the sandbox)
+    writes nothing outside the sandbox. The approved call is generate_deck
+    with the finished plan, which renders exactly that plan.
+    """
+    from backend.orchestrator.slide_agent import prepare_deck
+
+    effect_request = f'Create a presentation for: "{request.strip()}"'
+    try:
+        prepared = prepare_deck(request, session_id=session_id)
+    except ValueError as exc:
+        return ResolvedAction(
+            category="file write", executable=False, effect=effect_request, reason=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ResolvedAction(
+            category="file write",
+            executable=False,
+            effect=effect_request,
+            reason=(
+                f"The presentation could not be prepared ({type(exc).__name__}: {exc}). "
+                f"Nothing will be written."
+            ),
+        )
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_path = OUTPUT_DIR / f"{Path(prepared['filename']).stem}-{stamp}.pptx"
+    titles = [t for t in prepared["slide_titles"] if t]
+    preview = [
+        f"Creates the file {output_path.name}",
+        f"{len(prepared['slide_titles'])} slide(s): " + "; ".join(titles),
+        "Sources: " + ("; ".join(prepared["citations"]) or "none"),
+    ]
+    if prepared["omitted_sections"]:
+        preview.append(
+            "Left out, no source in the corpus: " + ", ".join(prepared["omitted_sections"])
+        )
+    if prepared["defects"]:
+        preview.append(f"QA found {len(prepared['defects'])} layout issue(s) it could not fix")
+    preview.append(f"Written to {OUTPUT_DIR}")
+
+    return ResolvedAction(
+        category="file write",
+        executable=True,
+        tool_name="generate_deck",
+        arguments={"deck_plan": prepared["deck_plan"], "output_path": str(output_path)},
+        effect=(
+            f'Requested: "{request.strip()}"\n'
+            f"Effect: write a {len(prepared['slide_titles'])}-slide PowerPoint "
+            f"presentation to {output_path.name}, grounded in "
+            f"{len(prepared['citations'])} source reference(s)."
+        ),
+        preview=preview,
+    )
 
 
 def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:

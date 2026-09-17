@@ -386,49 +386,61 @@ def render_deck(
     return output_pptx
 
 
-# ── End-to-End Slide Agent Subgraph ─────────────────────────────────────────
+# ── Two phases: prepare (before approval), generate (the gated write) ────────
+#
+# WHY TWO FUNCTIONS. This was one call, run_slide_pipeline, that planned
+# the deck with a model AND wrote the .pptx, and it was exempted from the
+# approval gate. Hard constraint #4 allows no file write without approval,
+# and the gate's contract is that the operator approves the concrete call
+# that will run -- draft_docx shows its actual sections before anyone
+# signs. A deck cannot meet that while planning and writing are one step:
+# the slides do not exist until the model has written them.
+#
+# So planning happens first and writes nothing outside the sandbox; the
+# approval shows every slide title and source; and the gated tool renders
+# exactly the approved plan, deterministically, with no model call that
+# could change what was approved.
 
-def run_slide_pipeline(
+
+def prepare_deck(
     request: str,
     session_id: str = "default",
     max_slides: int = 6,
 ) -> dict[str, Any]:
-    """Execute full slide generation pipeline with QA and bounded self-correction retry."""
+    """Plan, fill and QA a deck. Writes nothing outside the sandbox.
+
+    Returns the deck plan the approval will show and generate_deck will
+    render, plus what the operator needs to judge it.
+
+    Raises:
+        ValueError: nothing in the corpus covers the request.
+    """
     from backend.api.state import get_state
-
-    pipeline_state = get_state()
-    audit = AuditLog()
-
-    logger.info(f"Starting slide_agent for request: '{request}'")
-
-    # 0. IS THE REQUEST ITSELF IN THE CORPUS?
-    #
-    # Section retrieval queries the request PLUS the planner's section
-    # title and content need -- "Thermocouple array readings and nominal
-    # design tolerances". Those words match a refinery corpus whatever
-    # was asked, so every section cleared the grounding gate and "The
-    # plot of Pride and Prejudice" produced a sourced-looking deck
-    # (MEASURED). The gate has to see the request on its own first.
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
+    pipeline_state = get_state()
+    logger.info("Preparing deck for request: %r", request)
+
+    # IS THE REQUEST ITSELF IN THE CORPUS? Section retrieval queries the
+    # request PLUS the planner's section title and content need --
+    # "Thermocouple array readings and nominal design tolerances". Those
+    # words match a refinery corpus whatever was asked, so every section
+    # cleared the grounding gate and "The plot of Pride and Prejudice"
+    # produced a sourced-looking deck (MEASURED). The gate has to see the
+    # request on its own first.
     store, _ = pipeline_state.ensure_corpus()
     gate = retrieve_with_grounding_check(store, request, top_k=3)
     if not gate.found:
         raise ValueError(
             "No document in the corpus covers this request, so no presentation was "
-            f"generated ({gate.reason or 'below the grounding threshold'})."
+            f"prepared ({gate.reason or 'below the grounding threshold'})."
         )
 
-    # 1. Planner Call
-    outline = plan_deck_outline(request)
-    if len(outline) > max_slides:
-        outline = outline[:max_slides]
+    outline = plan_deck_outline(request)[:max_slides]
 
-    # 2. Fetch + 3. Filler
-    all_citations: set[str] = set()
+    citations: list[str] = []
     slide_bundles: list[dict[str, Any]] = []
     filled_slides: list[dict[str, Any]] = []
-
     omitted_sections: list[str] = []
     for section in outline:
         bundle = fetch_section_content(section, request, pipeline_state)
@@ -442,81 +454,98 @@ def run_slide_pipeline(
         slide_bundles.append(bundle)
         filled_slides.append(slide_json)
         for c in bundle.get("citations", []):
-            all_citations.add(c)
+            if c not in citations:
+                citations.append(c)
 
-    # A deck with no sourced slide is a refusal, not a deliverable. The
-    # fabricating fallback meant this could never happen before, which is
-    # exactly how a deck on a topic the corpus lacks came out "grounded".
+    # A deck with no sourced slide is a refusal, not a deliverable.
     if not filled_slides:
         raise ValueError(
             "No document in the corpus covers this request, so no presentation was "
-            f"generated. Sections searched: {', '.join(omitted_sections) or 'none'}."
+            f"prepared. Sections searched: {', '.join(omitted_sections) or 'none'}."
         )
 
-    # 4. Assemble DeckPlan
     deck_plan = {
         "deck_title": f"MRPL Executive Briefing: {request[:40]}",
-        "session_id": session_id,
         "slides": filled_slides,
     }
 
-    # 5. Render
-    deck_path = render_deck(deck_plan, session_id=session_id)
-
-    # 6. QA Loop with Bounded Retry
+    # QA against a render INSIDE THE SANDBOX, with bounded model re-fills.
+    # This all happens before approval, so what the operator approves is
+    # the plan after correction, not before it.
+    preview_session = f"{session_id}-deck-preview"
+    deck_path = render_deck(deck_plan, session_id=preview_session)
     retry_count = 0
     defects = run_heuristic_qa(deck_path, deck_plan)
-
     while defects and retry_count < MAX_RETRIES:
         retry_count += 1
-        logger.info(f"QA defects detected (retry {retry_count}/{MAX_RETRIES}): {len(defects)} defect(s)")
-
-        # Target only the failing slides
-        defective_indices = {d["slide_index"] for d in defects if 0 <= d["slide_index"] < len(filled_slides)}
-        for idx in defective_indices:
-            defect_msg = "; ".join(d["issue"] for d in defects if d["slide_index"] == idx)
-            logger.info(f"Fixing slide {idx + 1} with feedback: {defect_msg}")
-            # Re-fill with feedback
-            new_slide = fill_slide_content(slide_bundles[idx], defect_feedback=defect_msg)
-            filled_slides[idx] = new_slide
-
+        logger.info("QA defects (retry %d/%d): %d", retry_count, MAX_RETRIES, len(defects))
+        defective = {d["slide_index"] for d in defects if 0 <= d["slide_index"] < len(filled_slides)}
+        for idx in defective:
+            feedback = "; ".join(d["issue"] for d in defects if d["slide_index"] == idx)
+            filled_slides[idx] = fill_slide_content(slide_bundles[idx], defect_feedback=feedback)
         deck_plan["slides"] = filled_slides
-        deck_path = render_deck(deck_plan, session_id=session_id)
+        deck_path = render_deck(deck_plan, session_id=preview_session)
         defects = run_heuristic_qa(deck_path, deck_plan)
 
-    # Optional visual QA if images exist
     try:
         images = convert_pptx_to_images(deck_path)
         if images:
-            visual_defects = run_visual_qa(images, deck_plan)
-            defects.extend(visual_defects)
-    except Exception:
-        pass
-
-    # Audit log entry
-    audit.log(
-        event="tool_executed",
-        request_id=session_id,
-        actor="slide_agent",
-        summary=f"Generated {len(filled_slides)}-slide on-brand presentation for query: '{request[:60]}'",
-        details={
-            "output_path": deck_path,
-            "slide_count": len(filled_slides),
-            "citations": sorted(list(all_citations)),
-            "retries": retry_count,
-            "defects_remaining": len(defects),
-        },
-    )
+            defects.extend(run_visual_qa(images, deck_plan))
+    except Exception as exc:  # noqa: BLE001 - visual QA is optional (needs LibreOffice)
+        logger.info("Visual QA unavailable: %s", exc)
 
     clean_name = re.sub(r"[^\w-]", "_", request[:30]).strip("_") or "Operations"
     return {
-        "deck_path": deck_path,
+        "deck_plan": deck_plan,
         "filename": f"MRPL_{clean_name}_Briefing.pptx",
-        # Measured or absent -- never a plausible default (Review Rule 4).
-        "file_size": f"{os.path.getsize(deck_path) // 1024} KB" if os.path.exists(deck_path) else None,
-        "slide_count": len(filled_slides),
-        "citations": sorted(all_citations),
+        "slide_titles": [s.get("title", "") for s in filled_slides],
+        "citations": citations,
         "omitted_sections": omitted_sections,
         "defects": defects,
         "retries": retry_count,
+    }
+
+
+def generate_deck(deck_plan: dict, output_path: str) -> dict:
+    """Render an approved deck plan to a .pptx file. WRITES A FILE.
+
+    Deterministic: renders exactly the plan it is given, in the sandbox,
+    with no model call -- so the file matches what was approved.
+
+    Args:
+        deck_plan: the plan from prepare_deck, as shown in the approval.
+        output_path: where to write the .pptx.
+
+    Raises:
+        ValueError: no slides, or an output path that is not .pptx.
+    """
+    import hashlib
+    import shutil
+
+    if not deck_plan.get("slides"):
+        raise ValueError("The deck plan has no slides.")
+    out = Path(output_path)
+    if out.suffix.lower() != ".pptx":
+        raise ValueError(f"Output must be a .pptx file, got {out.name}.")
+
+    digest = hashlib.sha256(json.dumps(deck_plan, sort_keys=True).encode()).hexdigest()[:12]
+    rendered = render_deck(deck_plan, session_id=f"deck-{digest}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(rendered, out)
+
+    citations = sorted({c for s in deck_plan["slides"] for c in s.get("citations", [])})
+    AuditLog().log(
+        event="tool_executed",
+        request_id=digest,
+        actor="generate_deck",
+        summary=f"Wrote {len(deck_plan['slides'])}-slide presentation {out.name}",
+        details={"output_path": str(out), "citations": citations},
+    )
+    return {
+        "deck_path": str(out),
+        "filename": out.name,
+        # Measured, never a plausible default (Review Rule 4).
+        "file_size": f"{out.stat().st_size // 1024} KB",
+        "slide_count": len(deck_plan["slides"]),
+        "citations": citations,
     }

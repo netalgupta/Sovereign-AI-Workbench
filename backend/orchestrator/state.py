@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AgentName = Literal["vision", "code", "reasoning", "math", "retrieval", "slide"]
+AgentName = Literal["vision", "code", "reasoning", "math", "retrieval"]
 StepStatus = Literal["pending", "running", "done", "failed"]
 
 

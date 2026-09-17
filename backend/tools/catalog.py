@@ -243,20 +243,23 @@ def register_all() -> None:
     )(run_in_sandbox)
 
     # ---- presentation generation (PPTX_AGENT_SPEC.md, TOOLS.md row 40) ----
-    from backend.orchestrator.slide_agent import run_slide_pipeline
+    from backend.orchestrator.slide_agent import generate_deck
 
     tool(
         name="generate_deck",
         description=(
-            "Generate an on-brand, sovereign, grounded PowerPoint (.pptx) presentation "
-            "from the MRPL master template. Organizes topics into structured slide molds, "
-            "fetches deterministic RAG citations, renders cleanly with python-pptx, and "
-            "validates with automated QA. Delivers a presentation download card."
+            "Render an approved deck plan (from prepare_deck) to a PowerPoint (.pptx) "
+            "file on the MRPL master template. WRITES A FILE, so it requires human "
+            "approval before it runs, like draft_docx."
         ),
         category="documents",
         priority="🔴",
+        # Hard constraint #4. Decks were exempted as "safe deliverables";
+        # a presentation that leaves the building carrying refinery figures
+        # is exactly the kind of file the gate exists for.
+        requires_approval=True,
         tools_md_row=40,
-    )(run_slide_pipeline)
+    )(generate_deck)
 
 
 register_all()

@@ -125,10 +125,19 @@ def test_code_step_refuses_rather_than_reporting_a_step_done_without_running():
     """A step that reports success without running is worse than one that
     fails: the plan continues on output that does not exist, and
     verification is then asked to check nothing."""
-    step = PlanStep(step_id="c1", description="Run the calc", assigned_agent="code")
+    # The pool state is SET, not assumed. This relied on the pool never
+    # having started, so it failed whenever an earlier test (the deck
+    # render) had started it -- and the code then correctly ran.
+    from backend.sandbox import pool
 
-    with pytest.raises(SubAgentError, match="sandbox"):
-        run_code_step(step, "print(1)")
+    step = PlanStep(step_id="c1", description="Run the calc", assigned_agent="code")
+    saved = pool.workers
+    pool.workers = []
+    try:
+        with pytest.raises(SubAgentError, match="sandbox"):
+            run_code_step(step, "print(1)")
+    finally:
+        pool.workers = saved
 
     assert step.status == "failed"
 
