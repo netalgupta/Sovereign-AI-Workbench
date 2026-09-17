@@ -1984,6 +1984,7 @@ _ACTION_TYPES = {
 # that is what will actually run.
 _TOOL_ACTION_TYPES = {
     "draft_docx": "FILE_WRITE",
+    "generate_deck": "FILE_WRITE",
     "run_in_sandbox": "CODE_EXECUTION",
 }
 
@@ -2071,7 +2072,17 @@ def chat(body: ChatRequestBody) -> dict:
             # know are ABSENT rather than filled with plausible
             # placeholders -- an empty field reads as unknown, a
             # plausible one reads as measured.
-            category = req.arguments.get("category") or "operator action"
+            # RESOLVED vs NOT. An unresolved action carries only the
+            # operator's command and a category. A resolved one carries the
+            # real tool's arguments -- for draft_docx and generate_deck an
+            # exact output_path -- and the card said "has NOT resolved a
+            # file path" directly above a preview naming that file.
+            resolved = "category" not in req.arguments
+            output_path = req.arguments.get("output_path") if resolved else None
+            category = (
+                "file write" if output_path
+                else req.arguments.get("category") or "operator action"
+            )
             command = req.arguments.get("command") or req.effect
 
             approval_action = {
@@ -2090,13 +2101,14 @@ def chat(body: ChatRequestBody) -> dict:
                 # The operator's own words. The system has not resolved a
                 # device, a file path or a magnitude, and says so rather
                 # than guessing one.
-                "target": None,
+                "target": output_path,
                 "description": req.effect,
                 "detail": command,
                 "requested_by_operator": command,
-                "resolved_parameters": False,
+                "resolved_parameters": resolved,
                 "risk_level": "REQUIRES_REVIEW",
                 "warning": (
+                    None if resolved else
                     "The workbench has NOT resolved a target device, file "
                     "path or value for this instruction. Approving records "
                     "your authorisation for the action exactly as worded "
