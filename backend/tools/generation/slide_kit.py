@@ -466,7 +466,14 @@ def build_deck(
         raise ValueError("Cannot build deck: plan contains no slides.")
 
     # 1. Clone required slides to the end of the presentation
-    blank_layout = prs.slide_layouts[6]  # Blank slide layout
+    #
+    # EACH CLONE USES ITS MOLD'S OWN LAYOUT. This was
+    # `prs.slide_layouts[6]` -- "Blank" in PowerPoint's DEFAULT template.
+    # The MRPL template has three layouts (DEFAULT, MRPL_LIGHT, MRPL_DARK),
+    # so the index raised on every deck once the template was updated,
+    # and no deck could be generated at all. Reusing the mold's layout
+    # is also what keeps a dark mold on the dark master.
+    template_slide_count = len(prs.slides)
     cloned_slides = []
 
     for idx, s_data in enumerate(slides_data):
@@ -477,7 +484,12 @@ def build_deck(
         mold_idx = MOLD_INDEX[mold_id]
         template_slide = prs.slides[mold_idx]
 
-        new_slide = prs.slides.add_slide(blank_layout)
+        new_slide = prs.slides.add_slide(template_slide.slide_layout)
+        # add_slide() creates the layout's empty placeholders; the mold's
+        # shapes are copied in below, so these would be duplicate empty
+        # boxes ("Click to add title") on the delivered slide.
+        for placeholder in list(new_slide.placeholders):
+            placeholder._element.getparent().remove(placeholder._element)
 
         # Clone all shapes from template slide
         for shape in template_slide.shapes:
@@ -509,9 +521,11 @@ def build_deck(
 
         cloned_slides.append(new_slide)
 
-    # 4. Drop the initial 19 template slides
+    # 4. Drop the template's own slides -- COUNTED, not assumed to be 19,
+    # so adding or removing a mold cannot leave template slides in (or
+    # delete generated ones from) the deliverable.
     sld_id_lst = prs.slides._sldIdLst
-    for _ in range(19):
+    for _ in range(template_slide_count):
         if len(sld_id_lst) > 0:
             r_id = sld_id_lst[0].rId
             prs.part.drop_rel(r_id)
