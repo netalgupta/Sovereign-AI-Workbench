@@ -295,6 +295,8 @@ Plan the deck as a narrative an operations manager can follow. Rules:
    why it happened, what must happen next. Name them in the language of the documents.
 3. Every slide names the facts it will use, quoting figures exactly as they appear.
 4. Use "chart" only where a source gives a value for each of several labelled periods.
+4a. A "process" slide holds the WHOLE sequence (3-5 steps), a "timeline" the whole run of
+   events, an "actions" slide every action. NEVER one step, event or action per slide.
 5. Use "alert" only for an incident, hazard, limit breach or interlock.
 6. If the sources recommend or require anything, the last section is an "actions" slide.
 7. Never plan a slide the sources cannot fill.
@@ -508,6 +510,35 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
 # ── assembly ────────────────────────────────────────────────────────────────
 
 
+# Types whose content is a list, and the field that holds it. Consecutive
+# slides of the same type each holding a single item are fragments of one
+# slide: the model returned eight "process" slides of one step each for a
+# changeout sequence, which rendered as eight slides with a lone numbered
+# circle. Merged here rather than re-prompted, because the content is
+# right and only its packaging is wrong -- and the renderer paginates
+# whatever the merge produces.
+_LIST_FIELD = {"process": "steps", "timeline": "events", "actions": "items", "points": "bullets"}
+
+
+def _merge_fragments(slides: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    for slide in slides:
+        field = _LIST_FIELD.get(slide.get("type"))
+        previous = merged[-1] if merged else None
+        if (
+            field
+            and previous is not None
+            and previous.get("type") == slide.get("type")
+            and len(slide.get(field) or []) <= 2
+            and len(previous.get(field) or []) <= 8
+        ):
+            previous[field] = list(previous.get(field) or []) + list(slide.get(field) or [])
+            previous["sources"] = sorted(set(previous.get("sources", []) + slide.get("sources", [])))
+            continue
+        merged.append(dict(slide))
+    return merged
+
+
 def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
     """The whole content pipeline: corpus in, validated DeckSpec out."""
     import datetime as dt
@@ -550,6 +581,10 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
                 "summary": str(section.get("summary") or "").strip(),
                 "slides": good,
             })
+
+    sections_out = [
+        {**sec, "slides": _merge_fragments(sec["slides"])} for sec in sections_out
+    ]
 
     if not sections_out:
         raise NotInCorpus(

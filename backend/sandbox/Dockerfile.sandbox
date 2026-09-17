@@ -62,11 +62,11 @@ COPY --from=builder /deps /usr/local/lib/python3.11/site-packages
 # not be root. The NAME is irrelevant to that.
 RUN if getent passwd 1000 >/dev/null; then         echo "UID 1000 already present as $(getent passwd 1000 | cut -d: -f1); reusing it";     else         useradd -u 1000 -m sandboxuser;     fi
 
-# Internal libraries and static assets (PPTX generation)
+# The deck renderer does NOT run in here. It is our own deterministic
+# code driven by validated data, so it runs in the backend; baking it
+# into the image made deck generation fail whenever Docker was not
+# running. python-pptx stays available for model-written code.
 RUN mkdir -p /sandbox/lib && chown -R 1000:1000 /sandbox
-COPY backend/tools/generation/slide_kit.py /sandbox/lib/slide_kit.py
-COPY PPTX/MRPL_Template.pptx /sandbox/lib/mrpl_template.pptx
-ENV PYTHONPATH="/sandbox/lib"
 
 WORKDIR /sandbox
 CMD ["sleep", "infinity"]
