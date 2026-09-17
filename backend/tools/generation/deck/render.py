@@ -23,6 +23,8 @@ DECK SPEC (all content; validated upstream in slide_agent):
       alert       severity, headline, what, impact, action
       comparison  columns: [{title, points: [str], status?}]
       actions     items: [{action, owner?, due?, priority?}]
+      exhibit     image_path (a REAL file from the corpus), caption?,
+                  observations: [str]?
 
 The cover, agenda, section dividers and sources appendix are generated
 here from the spec, not written by the model.
@@ -139,7 +141,18 @@ def _centre_y(block_h: float) -> float:
 
 
 def _chunks(items: list, size: int) -> list[list]:
-    return [items[i:i + size] for i in range(0, len(items), size)] or [[]]
+    """Split into pages of NEARLY EQUAL size, not greedy full pages.
+
+    Greedy splitting put five cards on one slide and one on the next,
+    where the lone card stretched the full width of the slide and looked
+    like a mistake. Five split 3+2 reads as two deliberate slides.
+    """
+    n = len(items)
+    if n == 0:
+        return [[]]
+    pages = math.ceil(n / size)
+    per = math.ceil(n / pages)
+    return [items[i:i + per] for i in range(0, n, per)]
 
 
 def _cont(i: int, n: int) -> str:
@@ -326,11 +339,15 @@ def _kpis(prs, ctx, sec_title, sd):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
         gap = 0.3
-        w = (theme.CONTENT_W - gap * (n - 1)) / n
+        # Capped at the width a full page of four would give, so a page
+        # of two is two cards, not two banners.
+        w = min((theme.CONTENT_W - gap * (n - 1)) / n, (theme.CONTENT_W - gap * 3) / 4 + 0.35)
         h = 3.6
         y = _centre_y(h)
+        row_w = w * n + gap * (n - 1)
+        x0 = theme.MARGIN_X + (theme.CONTENT_W - row_w) / 2
         for i, it in enumerate(page):
-            x = theme.MARGIN_X + i * (w + gap)
+            x = x0 + i * (w + gap)
             status = theme.status_colours(it.get("status"))
             accent = status[0] if status else C.teal
             P.rect(s, x, y, w, h, C.panel, radius=0.04)
@@ -651,7 +668,52 @@ def _actions(prs, ctx, sec_title, sd):
             P.hline(s, theme.MARGIN_X, y + row_h, theme.PAGE_W - theme.MARGIN_X, C.rule, 0.5)
 
 
+def _exhibit(prs, ctx, sec_title, sd):
+    """A real image from the corpus -- a P&ID, a scanned form, a chart.
+
+    THE IMAGE IS ALWAYS A FILE THAT EXISTS. Nothing here draws or
+    generates a picture of plant equipment: a plausible invented diagram
+    on an approval-bound deck is a fabricated record. The caption names
+    the document it came from.
+    """
+    image = sd.get("image_path")
+    if not image or not Path(image).exists():
+        return
+    s = _content_slide(prs, ctx, sec_title, sd)
+    obs = [o for o in sd.get("observations", []) if o][:4]
+    frame_w = theme.CONTENT_W - (3.9 if obs else 0)
+    frame_h = theme.BODY_H - (0.4 if sd.get("caption") else 0)
+    from PIL import Image as _Image
+
+    try:
+        with _Image.open(image) as im:
+            ratio = im.height / max(im.width, 1)
+    except Exception:  # noqa: BLE001 - an unreadable image is not a crash
+        return
+    w = min(frame_w, frame_h / ratio) if ratio else frame_w
+    h = w * ratio
+    x = theme.MARGIN_X + (frame_w - w) / 2
+    y = _centre_y(h + (0.4 if sd.get("caption") else 0))
+    P.rect(s, x - 0.06, y - 0.06, w + 0.12, h + 0.12, C.panel, line=C.rule)
+    s.shapes.add_picture(str(image), Inches(x), Inches(y), Inches(w), Inches(h))
+    if sd.get("caption"):
+        P.text(s, x, y + h + 0.16, w, 0.3, sd["caption"], size=11, colour=C.muted)
+    if obs:
+        px = theme.PAGE_W - theme.MARGIN_X - 3.7
+        P.rect(s, px, theme.BODY_Y, 3.7, theme.BODY_H - 0.25, C.panel, radius=0.03)
+        P.text(s, px + 0.35, theme.BODY_Y + 0.3, 3.0, 0.3, "Read from the drawing", size=11, colour=C.teal,
+               weight="semibold", caps=True, tracking=1.2)
+        size = fit.fit_many(obs, 2.75, theme.BODY_H - 1.2, 15, 11, 0.2) or 11
+        oy = theme.BODY_Y + 0.8
+        for o in obs:
+            oh = fit.text_height_in(o, 2.75, size)
+            P.rect(s, px + 0.35, oy + 0.09, 0.1, 0.1, C.amber)
+            P.text(s, px + 0.6, oy, 2.75, oh + 0.05, o, size=size, colour=C.ink)
+            oy += oh + 0.2
+
+
 LAYOUTS = {
+    "exhibit": _exhibit,
     "points": _points,
     "big_stat": _big_stat,
     "kpis": _kpis,

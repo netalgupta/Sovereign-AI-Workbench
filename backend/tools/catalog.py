@@ -248,8 +248,8 @@ def register_all() -> None:
     tool(
         name="generate_deck",
         description=(
-            "Render an approved deck plan (from prepare_deck) to a PowerPoint (.pptx) "
-            "file on the MRPL master template. WRITES A FILE, so it requires human "
+            "Render an approved deck spec (from prepare_deck) to a PowerPoint (.pptx) "
+            "file, designed by the deck design system. WRITES A FILE, so it requires human "
             "approval before it runs, like draft_docx."
         ),
         category="documents",

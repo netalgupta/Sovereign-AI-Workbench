@@ -155,18 +155,14 @@ def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
         "Sources: " + ("; ".join(prepared["citations"]) or "none"),
     ]
     if prepared["omitted_sections"]:
-        preview.append(
-            "Left out, no source in the corpus: " + ", ".join(prepared["omitted_sections"])
-        )
-    if prepared["defects"]:
-        preview.append(f"QA found {len(prepared['defects'])} layout issue(s) it could not fix")
+        preview.append("Left out for lack of a source: " + "; ".join(prepared["omitted_sections"][:3]))
     preview.append(f"Written to {OUTPUT_DIR}")
 
     return ResolvedAction(
         category="file write",
         executable=True,
         tool_name="generate_deck",
-        arguments={"deck_plan": prepared["deck_plan"], "output_path": str(output_path)},
+        arguments={"deck_spec": prepared["deck_spec"], "output_path": str(output_path)},
         effect=(
             f'Requested: "{request.strip()}"\n'
             f"Effect: write a {len(prepared['slide_titles'])}-slide PowerPoint "
