@@ -55,9 +55,17 @@ def text_width_pt(text: str, size_pt: float, weight: str = "regular") -> float:
     return font.getlength(text) / 4.0
 
 
+# PowerPoint wraps slightly earlier than these metrics predict -- kerning
+# and its own internal padding -- so a paragraph measured as exactly
+# fitting came out one line taller and ran past its panel. Measuring
+# against a slightly narrower box costs a few characters per line and
+# makes overflow impossible rather than marginal.
+WRAP_SAFETY = 0.96
+
+
 def wrap_lines(text: str, width_in: float, size_pt: float, weight: str = "regular") -> list[str]:
     """Greedy word wrap, the way PowerPoint wraps, in the box's inner width."""
-    width_pt = width_in * 72.0
+    width_pt = width_in * 72.0 * WRAP_SAFETY
     lines: list[str] = []
     for paragraph in (text or "").split("\n"):
         words = paragraph.split()

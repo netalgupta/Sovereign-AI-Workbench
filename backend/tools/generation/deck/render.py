@@ -465,10 +465,20 @@ def _table(prs, ctx, sec_title, sd):
         return
     pages = _chunks(rows, MAX_TABLE_ROWS)
     ncol = len(columns)
-    # Column widths proportional to the longest text in each column.
-    longest = [max([len(columns[c])] + [len(r[c]) if c < len(r) else 0 for r in rows]) for c in range(ncol)]
-    total = sum(max(6, min(l, 48)) for l in longest)
-    widths = [theme.CONTENT_W * max(6, min(l, 48)) / total for l in longest]
+    # Column widths proportional to content, but never narrower than the
+    # column's longest WORD: "Exceeded" in a status column was wrapping
+    # mid-word as "Exceede / d".
+    cells_by_col = [[columns[c]] + [r[c] if c < len(r) else "" for r in rows] for c in range(ncol)]
+    weights = [max(6, min(max(len(v) for v in col), 48)) for col in cells_by_col]
+    total = sum(weights)
+    widths = [theme.CONTENT_W * w / total for w in weights]
+    pad = 0.30  # cell margins, both sides
+    for c, col in enumerate(cells_by_col):
+        longest_word = max((w for v in col for w in v.split()), key=len, default="")
+        needed = fit.text_width_pt(longest_word, 14, "semibold") / 72.0 + pad
+        widths[c] = max(widths[c], min(needed, theme.CONTENT_W / 2))
+    scale = theme.CONTENT_W / sum(widths)
+    widths = [w * scale for w in widths]
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         caption_h = 0.35 if sd.get("caption") else 0
@@ -574,7 +584,8 @@ def _alert(prs, ctx, sec_title, sd):
     cols_preview = [t for t in (sd.get("what"), sd.get("impact"), sd.get("action")) if t]
     col_w = (theme.CONTENT_W - 0.9 - 0.4 * (max(len(cols_preview), 1) - 1)) / max(len(cols_preview), 1)
     body_h = max((fit.text_height_in(t, col_w, 15, "regular", 1.25) for t in cols_preview), default=0.6)
-    h = min(theme.BODY_H - 0.2, 2.5 + body_h)
+    head_h = fit.text_height_in(sd.get("headline", ""), theme.CONTENT_W - 0.9, 22, "semibold", 1.12)
+    h = min(theme.BODY_H - 0.2, 1.6 + min(head_h, 0.95) + body_h)
     y = _centre_y(h)
     P.rect(s, theme.MARGIN_X, y, theme.CONTENT_W, h, C.panel, radius=0.02)
     P.rect(s, theme.MARGIN_X, y, 0.12, h, status[0])
@@ -590,12 +601,20 @@ def _alert(prs, ctx, sec_title, sd):
     cols = [c for c in cols if c[1]]
     cw = (theme.CONTENT_W - 0.9 - 0.4 * (len(cols) - 1)) / max(len(cols), 1)
     body_y = y + 1.95
+    # ONE size for all three columns, fitted to the space left inside the
+    # panel. Sized per column against a fixed height, long text ran out of
+    # the panel and over the footer.
+    # 0.85 rather than a tight fit: measured line height runs a little
+    # under PowerPoint's, and the last line was landing on the panel edge.
+    avail = y + h - body_y - 0.85
+    body_size = min(
+        (fit.fit_size(body, cw, avail, 15, 9, "regular", 1.25) or 9) for _label, body in cols
+    ) if cols else 11
     for i, (label, body) in enumerate(cols):
         cx = x + i * (cw + 0.4)
         P.text(s, cx, body_y, cw, 0.3, label, size=11, colour=status[0] if i == 2 else C.teal,
                weight="semibold", caps=True, tracking=1.1)
-        bs = fit.fit_size(body, cw, h - 2.35, 15, 11, "regular", 1.25) or 11
-        P.text(s, cx, body_y + 0.4, cw, h - 2.4, body, size=bs, colour=C.ink, line_spacing=1.25)
+        P.text(s, cx, body_y + 0.4, cw, avail, body, size=body_size, colour=C.ink, line_spacing=1.25)
 
 
 def _comparison(prs, ctx, sec_title, sd):
