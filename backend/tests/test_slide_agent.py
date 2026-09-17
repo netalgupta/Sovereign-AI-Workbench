@@ -174,19 +174,109 @@ def test_fetch_and_fill_slide():
 
 
 def test_slide_pipeline_end_to_end():
-    """Verify complete end-to-end slide generation with QA passes."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result = run_slide_pipeline(
-            request="MRPL Diesel hydrotreating operations and throughput",
-            session_id="test_e2e_session",
+    """A deck on a topic the corpus covers: rendered, and every citation
+    names a real document.
+
+    This asserted `len(citations) > 0` and passed on any request --
+    because the fallback cited a sentence the code wrote itself.
+    Citations are now checked against the corpus.
+    """
+    from backend.api.state import get_state
+
+    result = run_slide_pipeline(
+        request="Hydrocracker catalyst changeout and inspection findings",
+        session_id="test_e2e_session",
+        max_slides=3,
+    )
+
+    assert Path(result["deck_path"]).exists()
+    assert 1 <= result["slide_count"] <= 3
+    assert result["defects"] == []
+    assert result["citations"], "a grounded deck must name its sources"
+
+    _store, chunks = get_state().ensure_corpus()
+    corpus_docs = {c.metadata.source_document for c in chunks}
+    for ref in result["citations"]:
+        doc = ref.split(" p.")[0]
+        assert doc in corpus_docs, f"citation {ref!r} is not a document in the corpus"
+
+
+def test_slide_pipeline_refuses_a_topic_the_corpus_does_not_cover():
+    """Before: a full, "grounded" deck on anything, from invented figures."""
+    with pytest.raises(ValueError, match="No document in the corpus covers"):
+        run_slide_pipeline(
+            request="The plot of Pride and Prejudice",
+            session_id="test_refusal_session",
             max_slides=3,
         )
 
-        assert "deck_path" in result
-        assert Path(result["deck_path"]).exists()
-        assert result["slide_count"] == 3
-        assert result["defects"] == []
-        assert len(result["citations"]) > 0
+
+def _bundle(snippet: str) -> dict:
+    return {
+        "section_title": "HYDROCRACKER LIMITS",
+        "provisional_mold": "stat_callout",
+        "text_snippets": [snippet],
+        "citations": ["SOP-114-Rev3.docx p.2"],
+        "grounded": True,
+    }
+
+
+def test_model_slide_with_a_number_no_source_contains_is_rejected():
+    from backend.orchestrator.slide_agent import _validated_slide
+
+    bundle = _bundle("Reactor inlet temperature must not exceed 400 °C during changeout.")
+    invented = {"mold_id": "stat_callout", "big_number": "1,450 m³/h", "label": "Design flow"}
+    sourced = {"mold_id": "stat_callout", "big_number": "400 °C", "label": "Inlet limit"}
+
+    assert _validated_slide(invented, bundle) is None
+    assert _validated_slide(sourced, bundle)["big_number"] == "400 °C"
+
+
+def test_table_rows_returned_as_objects_are_normalised_to_lists():
+    """The model returned rows keyed by header; rendering crashed KeyError: 0."""
+    from backend.orchestrator.slide_agent import _validated_slide
+
+    bundle = _bundle("TC-201A read 381 °C against a 400 °C limit.")
+    data = {
+        "mold_id": "table_data",
+        "headers": ["Tag", "Reading", "Limit"],
+        "rows": [{"Tag": "TC-201A", "Reading": "381 °C", "Limit": "400 °C"}],
+    }
+    slide = _validated_slide(data, bundle)
+    assert slide["rows"] == [["TC-201A", "381 °C", "400 °C"]]
+
+
+def test_fallback_slide_contains_only_source_sentences():
+    from backend.orchestrator.slide_agent import _build_fallback_slide
+
+    snippet = "Catalyst beds are purged with nitrogen before unloading. Oxygen must stay below 0.5 percent."
+    slide = _build_fallback_slide(_bundle(snippet), "multi_stat_row", ["SOP-114-Rev3.docx p.2"])
+
+    assert slide["mold_id"] == "title_bullets"
+    assert slide["bullets"]
+    for bullet in slide["bullets"]:
+        assert bullet in snippet
+    assert slide["citations"] == ["SOP-114-Rev3.docx p.2"]
+
+
+def test_unretrieved_section_is_ungrounded_not_given_a_citation(monkeypatch):
+    """This used to cite a sentence the function had just written."""
+    import backend.retrieval.grounded_retrieval as gr
+
+    class _Nothing:
+        found = False
+        chunks = []
+
+    class _State:
+        def ensure_corpus(self):
+            return object(), []
+
+    monkeypatch.setattr(gr, "retrieve_with_grounding_check", lambda *a, **k: _Nothing())
+    bundle = fetch_section_content({"section_title": "X"}, "anything", _State())
+
+    assert bundle["grounded"] is False
+    assert bundle["text_snippets"] == []
+    assert bundle["citations"] == []
 
 
 def test_presentation_safe_deliverable_exemption():

@@ -163,10 +163,14 @@ def run_visual_qa(
     import requests
     from backend.models.registry import resolve_model_name
 
+    # No fallback tag. Naming a model here is what hard constraint #2
+    # forbids: only models.yaml names a model. If the registry cannot
+    # resolve one, visual QA is skipped rather than aimed at a guess.
     try:
         vision_model = resolve_model_name("vision-model")
-    except Exception:
-        vision_model = "qwen2.5vl:7b"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Visual QA skipped: no vision model in the registry (%s).", exc)
+        return []
 
     defects: list[dict[str, Any]] = []
 

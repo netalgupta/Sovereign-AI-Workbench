@@ -894,18 +894,24 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     # Presentation delivery check
     for event in state.tool_call_log:
         if event.tool_name == "generate_deck" and event.status == "done" and event.output:
+            # Only what the pipeline reported. This defaulted to "40 KB"
+            # and 5 slides when a field was missing -- a plausible size and
+            # count for a file nobody measured (Review Rule 4).
             deck_info = event.output
-            fn = deck_info.get("filename", "MRPL_Briefing.pptx")
-            slides_ct = deck_info.get("slide_count", 5)
-            cites = deck_info.get("citations", [])
-            cite_str = " ".join(f"[{c}]" for c in cites) if cites else ""
-            reply = (
-                f"**Presentation generated successfully.**\n\n"
-                f"- **Deliverable:** `{fn}` ({deck_info.get('file_size', '40 KB')})\n"
-                f"- **Slides:** {slides_ct} on-brand slides formatted via MRPL master template\n"
-                f"- **Grounded Citations:** {len(cites)} verified citations {cite_str}\n\n"
-                f"The deliverable is available for immediate download in the **Output Cards** pane."
-            )
+            fn = deck_info.get("filename") or str(deck_info.get("deck_path", "")).replace("\\", "/").rsplit("/", 1)[-1]
+            size = deck_info.get("file_size")
+            cites = deck_info.get("citations") or []
+            omitted = deck_info.get("omitted_sections") or []
+            lines = [
+                "**Presentation generated.**",
+                "",
+                f"- **Deliverable:** `{fn}`" + (f" ({size})" if size else ""),
+                f"- **Slides:** {deck_info.get('slide_count', '—')}",
+                "- **Sources:** " + ("; ".join(cites) if cites else "none"),
+            ]
+            if omitted:
+                lines.append("- **Left out, no source in the corpus:** " + ", ".join(omitted))
+            reply = "\n".join(lines)
             return {"draft_output": reply}
 
     # Memory was loaded HERE, inside synthesis, which meant a turn that

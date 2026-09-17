@@ -29,7 +29,10 @@ from backend.tools.generation.qa_render import convert_pptx_to_images, run_heuri
 from backend.tools.generation.slide_kit import MOLD_INDEX, build_deck, resolve_template_path
 
 logger = logging.getLogger("pptx.slide_agent")
-_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# The CHECKED host (Review Rule 7). This read OLLAMA_HOST straight from
+# the environment, one variable away from sending corpus text off the
+# machine; ollama_client refuses anything that is not loopback.
+from backend.models.ollama_client import OLLAMA_HOST as _OLLAMA_HOST
 
 # Maximum retries on QA failure per deck
 MAX_RETRIES = 2
@@ -148,20 +151,24 @@ def fetch_section_content(
         from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
         res = retrieve_with_grounding_check(store, query, top_k=3)
         if res.found and res.chunks:
-            for i, c in enumerate(res.chunks):
+            for c in res.chunks:
                 bundle["text_snippets"].append(c.text)
-                bundle["citations"].append(i + 1)
-    except Exception as exc:
-        logger.debug(f"Retrieval error for section: {exc}")
+                # A citation NAMES ITS SOURCE. These were the integers
+                # 1..3 per section, merged across sections into one set,
+                # so "[1]" on slide 2 and "[1]" on slide 4 were different
+                # passages and neither could be looked up.
+                ref = c.source_document + (f" p.{c.page_number}" if c.page_number else "")
+                if ref not in bundle["citations"]:
+                    bundle["citations"].append(ref)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Retrieval failed for section %r: %s", bundle["section_title"], exc)
 
-    # Fallback snippets if retrieval yielded nothing or empty corpus
-    if not bundle["text_snippets"]:
-        bundle["text_snippets"].append(
-            f"Verified against MRPL Standard Operating Procedures for {original_request}. "
-            "Continuous design basis parameters strictly enforced."
-        )
-        bundle["citations"].append(1)
-
+    # NOTHING RETRIEVED MEANS NOTHING TO SAY. This used to append the
+    # sentence "Verified against MRPL Standard Operating Procedures for
+    # <request>" and cite it as source [1] -- text written by this
+    # function, presented as a verified document. A section the corpus
+    # does not cover is marked ungrounded and left out of the deck.
+    bundle["grounded"] = bool(bundle["text_snippets"])
     return bundle
 
 
@@ -221,101 +228,106 @@ def fill_slide_content(
         )
         if res.status_code == 200:
             data = json.loads(res.json().get("response", "{}"))
-            if isinstance(data, dict) and "mold_id" in data:
-                data.setdefault("title", bundle["section_title"])
-                data.setdefault("citations", cites)
-                return data
-    except Exception as exc:
-        logger.debug(f"Ollama filler call fallback: {exc}")
+            slide = _validated_slide(data, bundle)
+            if slide is not None:
+                return slide
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Slide filler call unavailable (%s); building the slide from sources.", exc)
 
-    # Deterministic filler fallback based on mold_guess
     return _build_fallback_slide(bundle, mold_guess, cites)
 
 
-def _build_fallback_slide(bundle: dict[str, Any], mold_id: str, cites: list[int]) -> dict[str, Any]:
-    """Deterministic fallback populator guaranteed to produce valid mold data."""
-    title = bundle["section_title"]
-    snippets = bundle.get("text_snippets", ["Refinery process documentation verified."])
-    first_snippet = snippets[0]
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 
-    if mold_id == "executive_summary":
-        return {
-            "mold_id": "executive_summary",
-            "title": title,
-            "headline": "Core Technical Briefing & Parameter Adherence",
-            "points": [
-                f"Grounded in verified SOP records: {first_snippet[:90]}...",
-                "Continuous operating envelope strictly maintained within design tolerances.",
-                "All safety interlocks and DCS trip thresholds confirmed active.",
-            ],
-            "citations": cites,
-        }
-    elif mold_id == "stat_callout":
-        return {
-            "mold_id": "stat_callout",
-            "title": title,
-            "big_number": "1,450 m³/h",
-            "label": "Design Basis Maximum Flow Capacity",
-            "context_sentence": "Upper safe threshold per SOP operating standards.",
-            "citations": cites,
-        }
-    elif mold_id == "multi_stat_row":
-        return {
-            "mold_id": "multi_stat_row",
-            "title": title,
-            "stats": [
-                {"value": "1,450 m³/h", "label": "Design Flow Rate"},
-                {"value": "410.0 °C", "label": "WABT Trigger Limit"},
-                {"value": "99.65 %", "label": "H2 Purity Baseline"},
-                {"value": "18.05 °C", "label": "Safety Headroom"},
-            ],
-            "citations": cites,
-        }
-    elif mold_id == "safety_alert":
-        return {
-            "mold_id": "safety_alert",
-            "title": title,
-            "alert_title": "AUTOMATIC FEED-FORWARD INTERLOCK ACTIVE",
-            "severity_label": "CRITICAL OPERATIONAL CONSTRAINT",
-            "detail": "Exceeding 110% of design capacity trips FFC-201 to prevent catalyst bed runaway.",
-            "citations": cites,
-        }
-    elif mold_id == "table_data":
-        return {
-            "mold_id": "table_data",
-            "title": title,
-            "headers": ["Tag / Sensor", "Observed Reading", "Design Limit", "Operating Status"],
-            "rows": [
-                ["TC-201A", "381.4 °C", "400.0 °C", "NORMAL"],
-                ["TC-201B", "382.1 °C", "400.0 °C", "NORMAL"],
-                ["TC-201C", "383.0 °C", "400.0 °C", "NORMAL"],
-                ["TC-201D", "380.9 °C", "400.0 °C", "NORMAL"],
-            ],
-            "citations": cites,
-        }
-    elif mold_id == "two_column":
-        return {
-            "mold_id": "two_column",
-            "title": title,
-            "left_title": "CURRENT NOMINAL ENVELOPE",
-            "left_points": ["100% capacity feed rate", "Nominal quench ratio", "Safe catalyst residency"],
-            "right_title": "ELEVATED FEED EXCURSION",
-            "right_points": [">110% capacity limit", "Flooding probability 34%", "Interlock trip risk"],
-            "citations": cites,
-        }
-    else:  # title_bullets default
-        bullets = [
-            f"Document reference: {first_snippet[:120]}...",
-            "Operational limits derived from MRPL Engineering Technical Guidelines.",
-            "Instrumentation calibrated to DCS alarm setpoints.",
-            "Continuous real-time surveillance active across all sensors.",
-        ]
-        return {
-            "mold_id": "title_bullets",
-            "title": title,
-            "bullets": bullets,
-            "citations": cites,
-        }
+
+def _numbers_in(value: Any) -> set[str]:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return {n.replace(",", "") for n in _NUMBER.findall(text)}
+
+
+def _validated_slide(data: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """The model's slide, if it is well-formed AND its numbers are sourced.
+
+    Returns None to fall back to the source text. Two checks:
+
+    SHAPE. The model returned table rows as objects keyed by header, not
+    as lists; slide_kit indexed them by position and the render crashed
+    with KeyError: 0. Rows are normalised to lists here, and a slide that
+    cannot be made to fit its mold is rejected rather than half-rendered.
+
+    NUMBERS. "Every fact must come strictly from the provided text" was a
+    sentence in the prompt and nothing more. A figure on a refinery slide
+    that no source contains is a fabricated measurement with a citation
+    attached, so every number in the slide must appear in the snippets.
+    Single digits are exempt: they are step numbers and counts, not
+    measurements.
+    """
+    if not isinstance(data, dict) or data.get("mold_id") not in MOLD_INDEX:
+        return None
+    data = dict(data)
+    data.setdefault("title", bundle["section_title"])
+    data["citations"] = list(bundle.get("citations", []))
+
+    if data["mold_id"] == "table_data":
+        headers = data.get("headers")
+        rows = data.get("rows")
+        if not isinstance(headers, list) or not isinstance(rows, list) or not rows:
+            return None
+        normalised = []
+        for row in rows:
+            if isinstance(row, dict):
+                row = [row.get(h, "") for h in headers]
+            if not isinstance(row, list):
+                return None
+            normalised.append([str(cell) for cell in row])
+        data["rows"] = normalised
+
+    sourced = _numbers_in(" ".join(bundle.get("text_snippets", [])))
+    content = {k: v for k, v in data.items() if k not in ("citations", "mold_id")}
+    unsourced = {n for n in _numbers_in(content) if len(n) > 1 and n not in sourced}
+    if unsourced:
+        logger.warning(
+            "Slide %r has numbers no source contains (%s); using the source text instead.",
+            bundle["section_title"], ", ".join(sorted(unsourced)[:5]),
+        )
+        return None
+    return data
+
+
+def _build_fallback_slide(bundle: dict[str, Any], mold_id: str, cites: list) -> dict[str, Any]:
+    """A slide built ONLY from the retrieved text, when the model's is unusable.
+
+    THIS USED TO INVENT A REFINERY. Per mold it returned fixed figures --
+    "1,450 m3/h", "410.0 C WABT", "99.65 % H2 purity", a four-row
+    thermocouple table all reading NORMAL, "Exceeding 110% of design
+    capacity trips FFC-201" -- and attached the section's citations to
+    them. Any deck built while the model was busy or returned bad JSON
+    carried those numbers as sourced fact. FFC-201 at 1,450 m3/h is the
+    same invented interlock Review Rule 4 records being removed three
+    times.
+
+    The honest fallback is less impressive: the source sentences
+    themselves, as bullets, with their real sources. `mold_id` is
+    accepted for signature compatibility and deliberately not honoured --
+    a stat callout needs a number, and the only way to guarantee one here
+    was to make it up.
+    """
+    sentences: list[str] = []
+    for snippet in bundle.get("text_snippets", []):
+        for sentence in re.split(r"(?<=[.!?])\s+", " ".join(snippet.split())):
+            sentence = sentence.strip()
+            if 25 <= len(sentence) <= 220 and sentence not in sentences:
+                sentences.append(sentence)
+            if len(sentences) == 4:
+                break
+        if len(sentences) == 4:
+            break
+    return {
+        "mold_id": "title_bullets",
+        "title": bundle["section_title"],
+        "bullets": sentences,
+        "citations": list(cites),
+    }
 
 
 # ── Step 5: Render Engine ───────────────────────────────────────────────────
@@ -389,24 +401,57 @@ def run_slide_pipeline(
 
     logger.info(f"Starting slide_agent for request: '{request}'")
 
+    # 0. IS THE REQUEST ITSELF IN THE CORPUS?
+    #
+    # Section retrieval queries the request PLUS the planner's section
+    # title and content need -- "Thermocouple array readings and nominal
+    # design tolerances". Those words match a refinery corpus whatever
+    # was asked, so every section cleared the grounding gate and "The
+    # plot of Pride and Prejudice" produced a sourced-looking deck
+    # (MEASURED). The gate has to see the request on its own first.
+    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+    store, _ = pipeline_state.ensure_corpus()
+    gate = retrieve_with_grounding_check(store, request, top_k=3)
+    if not gate.found:
+        raise ValueError(
+            "No document in the corpus covers this request, so no presentation was "
+            f"generated ({gate.reason or 'below the grounding threshold'})."
+        )
+
     # 1. Planner Call
     outline = plan_deck_outline(request)
     if len(outline) > max_slides:
         outline = outline[:max_slides]
 
     # 2. Fetch + 3. Filler
-    all_citations: set[int] = set()
+    all_citations: set[str] = set()
     slide_bundles: list[dict[str, Any]] = []
     filled_slides: list[dict[str, Any]] = []
 
+    omitted_sections: list[str] = []
     for section in outline:
         bundle = fetch_section_content(section, request, pipeline_state)
+        if not bundle.get("grounded"):
+            omitted_sections.append(bundle["section_title"])
+            continue
+        slide_json = fill_slide_content(bundle)
+        if slide_json.get("mold_id") == "title_bullets" and not slide_json.get("bullets"):
+            omitted_sections.append(bundle["section_title"])
+            continue
         slide_bundles.append(bundle)
+        filled_slides.append(slide_json)
         for c in bundle.get("citations", []):
             all_citations.add(c)
 
-        slide_json = fill_slide_content(bundle)
-        filled_slides.append(slide_json)
+    # A deck with no sourced slide is a refusal, not a deliverable. The
+    # fabricating fallback meant this could never happen before, which is
+    # exactly how a deck on a topic the corpus lacks came out "grounded".
+    if not filled_slides:
+        raise ValueError(
+            "No document in the corpus covers this request, so no presentation was "
+            f"generated. Sections searched: {', '.join(omitted_sections) or 'none'}."
+        )
 
     # 4. Assemble DeckPlan
     deck_plan = {
@@ -467,9 +512,11 @@ def run_slide_pipeline(
     return {
         "deck_path": deck_path,
         "filename": f"MRPL_{clean_name}_Briefing.pptx",
-        "file_size": f"{os.path.getsize(deck_path) // 1024} KB" if os.path.exists(deck_path) else "75 KB",
+        # Measured or absent -- never a plausible default (Review Rule 4).
+        "file_size": f"{os.path.getsize(deck_path) // 1024} KB" if os.path.exists(deck_path) else None,
         "slide_count": len(filled_slides),
-        "citations": sorted(list(all_citations)),
+        "citations": sorted(all_citations),
+        "omitted_sections": omitted_sections,
         "defects": defects,
         "retries": retry_count,
     }
