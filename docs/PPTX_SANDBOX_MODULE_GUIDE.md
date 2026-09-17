@@ -13,14 +13,14 @@ The **PPTX Generation Module** provides an air-gapped, sovereign capability to a
 
 ### The Sovereign Separation Principle:
 * **"What to Say" is AI-driven**: The reasoning LLM decomposes the user query into logical sections, retrieves grounded citations from the MRPL corpus, and fills structured JSON data fields adhering to strict schemas.
-* **"How it Looks" is Fixed Code**: The LLM **never** writes Python drawing code, coordinates, shapes, or visual styles. All layout, brand typography, geometry, and color tokens are defined by fixed Python XML manipulation in [`backend/tools/generation/slide_kit.py`](file:///Users/aditya4/Desktop/SIH26117-Sovereign-Workbench/backend/tools/generation/slide_kit.py) using the pre-designed master template [`PPTX/Gemini_MRPL.pptx`](file:///Users/aditya4/Desktop/SIH26117-Sovereign-Workbench/PPTX/Gemini_MRPL.pptx).
+* **"How it Looks" is Fixed Code**: The LLM **never** writes Python drawing code, coordinates, shapes, or visual styles. All layout, brand typography, geometry, and color tokens are defined by fixed Python XML manipulation in [`backend/tools/generation/slide_kit.py`](../backend/tools/generation/slide_kit.py) using the pre-designed master template [`PPTX/MRPL_Template.pptx`](../PPTX/MRPL_Template.pptx).
 * **Network-Isolated Sandbox Rendering**: The actual file generation script executes inside a warm, egress-blocked Docker container (`--network none`) via `run_in_sandbox()`, ensuring total code and resource containment.
 
 ---
 
 ## 2. The 19 Pre-Granted Slide Molds
 
-Every generated presentation is assembled by duplicating and populating slides from [`PPTX/Gemini_MRPL.pptx`](file:///Users/aditya4/Desktop/SIH26117-Sovereign-Workbench/PPTX/Gemini_MRPL.pptx). The template contains 19 hand-crafted master slides mapping directly to technical industrial use cases:
+Every generated presentation is assembled by duplicating and populating slides from [`PPTX/MRPL_Template.pptx`](../PPTX/MRPL_Template.pptx). The template contains 19 hand-crafted master slides mapping directly to technical industrial use cases:
 
 | Mold ID | Purpose / Layout | Key Data Fields |
 |---|---|---|
@@ -104,7 +104,7 @@ Teammates building the sandbox image have **both** the code and master PowerPoin
 
 RUN mkdir -p /sandbox/lib && chown -R 1000:1000 /sandbox
 COPY backend/tools/generation/slide_kit.py /sandbox/lib/slide_kit.py
-COPY PPTX/Gemini_MRPL.pptx /sandbox/lib/mrpl_template.pptx
+COPY PPTX/MRPL_Template.pptx /sandbox/lib/mrpl_template.pptx
 ENV PYTHONPATH="/sandbox/lib"
 ```
 
@@ -138,7 +138,7 @@ Run this command from the repository root:
 ```bash
 docker build -t mrpl-sandbox:combined -f backend/sandbox/Dockerfile.sandbox .
 ```
-*(This bakes Python 3.11, `python-pptx`, `pydantic`, the scientific stack, `slide_kit.py`, and `Gemini_MRPL.pptx` into the image.)*
+*(This bakes Python 3.11, `python-pptx`, `pydantic`, the scientific stack, `slide_kit.py`, and `MRPL_Template.pptx` into the image.)*
 
 ### Step 2: Verify the Sandbox Environment
 Run this test one-liner to confirm the container can find `python-pptx` and the template:
@@ -197,8 +197,8 @@ The deliverable is available for immediate download in the **Output Cards** pane
 
 ## 6. Frontend Hand-Off (Advay, Sahil, Netal, Kanishka)
 
-1. **Card Presentation**: When `generate_deck` completes, the orchestrator returns the file metadata in `tool_call_log` and synthesizes an executive summary in chat.
-2. **Safe Deliverable Exemption**: PPTX generation is exempt from the hazardous action interlock modal (`ApprovalModal.jsx`). Users do **not** have to sign off on a dangerous action warning just to compile a presentation.
+1. **Prepared, then approved**: `prepare_deck` plans, fills and QA-renders the deck inside the sandbox and writes nothing a user receives. The approval card lists the filename, every slide title, the sources, and any section left out for lack of a source.
+2. **Approval gate (hard constraint #4)**: `generate_deck` is registered with `requires_approval=True`, like `draft_docx`. It renders exactly the approved plan, with no model call, into `outputs/`. (An earlier "safe deliverable exemption" let decks be written unapproved; it was removed.)
 3. **Download Button**: The deliverable appears in the **Output Cards** panel (`RealOutputCards.jsx`) with:
    * Title / Document Name
    * Slide Count badge (e.g. `5 Slides`)

@@ -1,7 +1,7 @@
 """slide_kit.py — 19-Mold Presentation Template Engine for MRPL Sovereign Workbench.
 
 Separates "what to say" (LLM structured JSON) from "how it looks" (fixed hand-crafted
-layouts in Gemini_MRPL.pptx). Read-and-duplicate only: opens the master template,
+layouts in PPTX/MRPL_Template.pptx). Read-and-duplicate only: opens the master template,
 duplicates the requested mold layouts, substitutes {{placeholders}}, injects images/tables,
 and produces on-brand corporate decks with 0 runtime drawing code.
 """
@@ -39,7 +39,7 @@ BRAND_SLATE_MID = "#1E293B"
 BRAND_CORAL = "#F43F5E"
 BRAND_EMERALD = "#10B981"
 
-# Map of Mold IDs to 0-indexed slide numbers in Gemini_MRPL.pptx
+# Map of Mold IDs to 0-indexed slide numbers in PPTX/MRPL_Template.pptx
 MOLD_INDEX: dict[str, int] = {
     "title_bullets": 0,
     "stat_callout": 1,
@@ -209,27 +209,29 @@ class DeckPlan(BaseModel):
 # ── Template Path Resolution ────────────────────────────────────────────────
 
 def resolve_template_path() -> str:
-    """Find the Gemini_MRPL.pptx template in standard locations."""
+    """Find the MRPL master template, PPTX/MRPL_Template.pptx.
+
+    ONE TEMPLATE EVERYWHERE. The sandbox (Dockerfile.sandbox) was given
+    MRPL_Template.pptx while this resolver, on the host, picked the older
+    Gemini_MRPL.pptx -- so every deck users received was built from one
+    template and every test ran against another.
+
+    No /tmp candidate: a shared writable path is somewhere any process
+    can plant a template that every deck would then be built from.
+    """
     env_path = os.environ.get("MRPL_PPTX_TEMPLATE")
     if env_path and os.path.exists(env_path):
         return env_path
 
-    direct_candidates = [
-        Path("/sandbox/lib/mrpl_template.pptx"),
-        Path("PPTX/Gemini_MRPL.pptx"),
-        Path("/tmp/mrpl_template.pptx"),
-    ]
-    resolved_file = Path(__file__).resolve()
-    if len(resolved_file.parents) > 3:
-        direct_candidates.append(resolved_file.parents[3] / "PPTX" / "Gemini_MRPL.pptx")
-    if len(resolved_file.parents) > 0:
-        direct_candidates.append(resolved_file.parent / "mrpl_template.pptx")
+    repo_template = Path(__file__).resolve().parents[3] / "PPTX" / "MRPL_Template.pptx"
+    for candidate in (
+        Path("/sandbox/lib/mrpl_template.pptx"),  # inside the sandbox image
+        repo_template,
+    ):
+        if candidate.exists():
+            return str(candidate)
 
-    for c in direct_candidates:
-        if c.exists():
-            return str(c)
-
-    raise FileNotFoundError("Master PPTX template 'Gemini_MRPL.pptx' not found.")
+    raise FileNotFoundError(f"Master PPTX template not found at {repo_template}.")
 
 
 # ── Text & Placeholder Substitution ─────────────────────────────────────────
