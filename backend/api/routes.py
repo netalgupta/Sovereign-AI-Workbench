@@ -306,8 +306,11 @@ def _stored_vectors(store, n: int):
     """
     # Through the store, which holds its lock: reading the FAISS index
     # directly while an ingest added to it segfaulted the API (exit 139).
+    # EXACT count only. More vectors than chunks means an ingest is
+    # mid-append; re-embedding is slower but cannot pair a passage with
+    # another passage's vector.
     try:
-        return store.vectors(n)
+        return store.vectors(n) if len(store) == n else None
     except Exception:  # noqa: BLE001 - an index type without reconstruct
         return None
 

@@ -59,8 +59,13 @@ _ALLOWED_TOOLS: dict[str, set[str]] = {
     },
     "retrieval_agent": {"select_images_for_request"},
     "reasoning_agent": set(),  # drafts text; reaches retrieval through the retrieval agent
-    "code_agent": {"run_in_sandbox", "sandbox_python", "sandbox_node"},
-    "slide_agent": {"generate_deck", "render_slides", "hybrid_search", "evaluate_expression", "chart_understanding"},
+    # REGISTERED NAMES ONLY. These listed "sandbox_python", "sandbox_node",
+    # "render_slides", "hybrid_search" and "chart_understanding" -- none of
+    # which is a registered tool -- so the contract named capabilities
+    # that could never be called. test_every_allowlisted_tool_is_registered
+    # keeps them honest.
+    "code_agent": {"run_in_sandbox"},
+    "slide_agent": {"generate_deck"},
 }
 
 # PlanStep.assigned_agent uses the short names; the graph nodes use the

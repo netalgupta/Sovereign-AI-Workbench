@@ -61,6 +61,12 @@ METRICS_PATHS = {
 }
 
 
+def _path_key(path) -> str:
+    import os
+
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
 def _empty_index(dim: int):
     """A fresh empty FAISS index of the same type the store uses.
 
@@ -91,6 +97,11 @@ class PipelineState:
         # search result arrived twice. Held for a whole ingest, never by
         # a read, so it cannot stall a page load.
         self._ingest_lock = Lock()
+        # filename -> the paths indexed under it. The store records only
+        # the bare filename, and skipping on that alone skipped a
+        # DIFFERENT file that happened to share a name with an indexed one.
+        # Persisted with the corpus cache.
+        self._indexed_paths: dict[str, set[str]] = {}
         self._store = None
         self._chunks = None
         self._snapshot = None
@@ -183,6 +194,7 @@ class PipelineState:
                 # re-ingested for 68 seconds. Under `uvicorn --reload`
                 # that is every file save.
                 "scanned_files": sorted(self._configured_file_names()),
+                "indexed_paths": {n: sorted(p) for n, p in self._indexed_paths.items()},
                 "chunks": [
                     {
                         "text": c.text,
@@ -435,6 +447,9 @@ class PipelineState:
                     try:
                         data = json.loads(hydrate_from.read_text(encoding="utf-8"))
                         raw_chunks = data.get("chunks", [])
+                        self._indexed_paths = {
+                            n: set(p) for n, p in (data.get("indexed_paths") or {}).items()
+                        }
                         for rc in raw_chunks:
                             meta = ChunkMetadata(
                                 source_document=rc.get("source_document", "unknown"),
@@ -625,6 +640,20 @@ class PipelineState:
 
         return self.ingest_files(files, job_id=job_id, label=Path(target_path).name)
 
+    @staticmethod
+    def _already_indexed(f: Path, indexed_names: set, indexed_paths: dict) -> bool:
+        """Is THIS file already in the index?
+
+        By path where the path is known. A name indexed only from an older
+        cache that did not record paths is treated as this file: skipping
+        a same-named file is recoverable, and a duplicated corpus is the
+        bug this exists to prevent.
+        """
+        if f.name not in indexed_names:
+            return False
+        known = indexed_paths.get(f.name)
+        return not known or _path_key(f) in known
+
     def ingest_files(
         self, files: list[Path], job_id: str | None = None, label: str = "files"
     ) -> tuple[int, list[dict]]:
@@ -671,12 +700,13 @@ class PipelineState:
                 store, existing_chunks = self.ensure_corpus()
                 with self._lock:
                     indexed_names = {c.metadata.source_document for c in (self._chunks or [])}
+                indexed_paths = self._indexed_paths
 
                 total_chunks = 0
                 details = []
 
                 for f in files:
-                    if f.name in indexed_names:
+                    if self._already_indexed(f, indexed_names, indexed_paths):
                         # Already searchable. Indexing it again does not refresh
                         # it, it DUPLICATES it: the store appends, so every
                         # passage would come back twice in every search.
@@ -727,6 +757,7 @@ class PipelineState:
                             self._snapshot = None
                             self._cached_chunks = None
                             indexed_names.add(f.name)
+                            indexed_paths.setdefault(f.name, set()).add(_path_key(f))
                         # register() only takes file_path — the second arg (document_type)
                         # was causing a silent TypeError on every successful ingest, meaning
                         # nothing was ever recorded in the registry.
@@ -802,32 +833,55 @@ class PipelineState:
         # 1. Stop watching if it's a watched directory
         self.watcher.remove_source(target_path)
 
-        # 2. Remove matching chunks from in-memory chunks list
+        # 2 + 3. Remove the chunks AND their vectors, and persist that.
+        #
+        # This filtered the in-memory list and deleted SQLite rows with
+        # LIKE '%name%', which went wrong three ways:
+        #   * on a backend that had not loaded the corpus yet it removed
+        #     nothing, so the "deleted" document came back from the disk
+        #     cache on the next start;
+        #   * FAISS kept every vector, so the index and the chunk list no
+        #     longer lined up by position -- and positions are the only
+        #     link between a vector and its text;
+        #   * LIKE '%notes.txt%' also deleted old_notes.txt's rows.
+        # The store is rebuilt from the kept chunks and their EXISTING
+        # vectors (no re-embedding), under the ingest lock so an ingest
+        # cannot interleave, and the cache is rewritten.
         removed_count = 0
-        with self._lock:
-            if self._chunks:
-                original_len = len(self._chunks)
-                self._chunks = [
-                    c for c in self._chunks
-                    if c.metadata.source_document.lower() != doc_name.lower()
-                    and c.metadata.source_document.lower() != target_path.lower()
-                    and not norm_path in str(Path(c.metadata.source_document).resolve()).lower()
-                ]
-                removed_count = original_len - len(self._chunks)
-            self._snapshot = None
-            self._cached_chunks = None
+        with self._ingest_lock:
+            self.ensure_corpus()
 
-        # 3. Remove from VectorStore SQLite metadata table
-        if self._store and getattr(self._store, "_conn", None):
-            try:
-                with self._store._rw:
-                    self._store._conn.execute(
-                        "DELETE FROM chunks WHERE LOWER(source_document) = LOWER(?) OR LOWER(source_document) LIKE LOWER(?)",
-                        (doc_name, f"%{doc_name}%")
+            def _matches(c) -> bool:
+                name = c.metadata.source_document.lower()
+                return name == doc_name.lower() or name == target_path.lower()
+
+            with self._lock:
+                old_chunks = list(self._chunks or [])
+                keep = [i for i, c in enumerate(old_chunks) if not _matches(c)]
+                removed_count = len(old_chunks) - len(keep)
+
+            if removed_count:
+                from backend.ingestion.embeddings import embed_texts
+                from backend.retrieval.vector_store import VectorStore
+
+                kept_chunks = [old_chunks[i] for i in keep]
+                vectors = self._store.vectors(len(old_chunks)) if len(self._store) == len(old_chunks) else None
+                new_store = VectorStore(dim=1024)
+                if kept_chunks:
+                    kept_vecs = (
+                        vectors[keep] if vectors is not None
+                        else embed_texts([c.text for c in kept_chunks])
                     )
-                    self._store._conn.commit()
-            except Exception:
-                pass
+                    new_store.add_chunks(kept_chunks, kept_vecs)
+                with self._lock:
+                    self._store = new_store
+                    self._chunks = kept_chunks
+                self._indexed_paths.pop(doc_name, None)
+                self._write_corpus_cache(kept_chunks)
+
+            with self._lock:
+                self._snapshot = None
+                self._cached_chunks = None
 
         # 4. Only delete from disk if the file was physically an app-managed upload in 07_User_Uploads.
         # User original documents elsewhere on disk must NEVER be deleted.

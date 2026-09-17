@@ -87,6 +87,23 @@ def test_reingesting_an_indexed_file_is_reported_as_skipped(state, tmp_path):
     assert len(state._chunks) == 2
 
 
+def test_a_different_file_with_an_indexed_name_is_still_indexed(state, tmp_path):
+    """Skipping on bare filename skipped a DIFFERENT file that shared a
+    name with one already indexed (caught by test_sources_ingest_endpoint)."""
+    a = tmp_path / "a" / "notes.txt"
+    b = tmp_path / "b" / "notes.txt"
+    for f, body in ((a, "Exchanger E-101 fouling."), (b, "Pump P-HS-02 seal leak.")):
+        f.parent.mkdir()
+        f.write_text(body, encoding="utf-8")
+
+    state.ingest_files([a])
+    added, _ = state.ingest_files([b])
+    again, _ = state.ingest_files([b])
+
+    assert added >= 1
+    assert again == 0
+
+
 def test_reading_vectors_while_ingesting_does_not_crash(state, tmp_path):
     """Segfaulted the API before the store had a lock. A crash here takes
     the test process down rather than failing an assertion, which is
@@ -114,6 +131,31 @@ def test_reading_vectors_while_ingesting_does_not_crash(state, tmp_path):
 
     assert not errors, errors
     assert len(state._store) == 40
+
+
+def test_deleting_a_source_keeps_vectors_aligned_with_chunks(state, tmp_path, monkeypatch):
+    """Delete used to drop chunks from the list but leave every vector in
+    FAISS, so position i no longer meant chunk i -- and LIKE '%name%'
+    also removed other documents whose names contained this one."""
+    monkeypatch.setattr(type(state), "watcher", property(lambda self: type("W", (), {"remove_source": lambda *_: None})()))
+    notes = tmp_path / "notes.txt"
+    old_notes = tmp_path / "old_notes.txt"
+    keep = tmp_path / "keep.txt"
+    for f, body in ((notes, "Delete me."), (old_notes, "Similar name, keep me."), (keep, "Keep me too.")):
+        f.write_text(body, encoding="utf-8")
+    state.ingest_files([notes, old_notes, keep])
+    before = {c.metadata.source_document: state._store.vectors(len(state._chunks))[i].copy()
+              for i, c in enumerate(state._chunks)}
+
+    result = state.delete_source(str(notes))
+
+    names = [c.metadata.source_document for c in state._chunks]
+    assert result["chunks_removed"] == 1
+    assert names == ["old_notes.txt", "keep.txt"]
+    assert len(state._store) == len(state._chunks)
+    after = state._store.vectors(len(state._chunks))
+    for i, name in enumerate(names):
+        assert np.allclose(after[i], before[name]), f"{name} is paired with another chunk's vector"
 
 
 def test_store_vectors_returns_what_was_added():
