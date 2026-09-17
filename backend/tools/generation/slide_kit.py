@@ -223,15 +223,19 @@ def resolve_template_path() -> str:
     if env_path and os.path.exists(env_path):
         return env_path
 
-    repo_template = Path(__file__).resolve().parents[3] / "PPTX" / "MRPL_Template.pptx"
-    for candidate in (
-        Path("/sandbox/lib/mrpl_template.pptx"),  # inside the sandbox image
-        repo_template,
-    ):
-        if candidate.exists():
-            return str(candidate)
+    sandbox_template = Path("/sandbox/lib/mrpl_template.pptx")
+    if sandbox_template.exists():
+        return str(sandbox_template)
 
-    raise FileNotFoundError(f"Master PPTX template not found at {repo_template}.")
+    # Only on the host: in the sandbox this file is /sandbox/lib/slide_kit.py,
+    # which has no parents[3] -- computing this first raised IndexError and
+    # broke every render.
+    parents = Path(__file__).resolve().parents
+    repo_template = (parents[3] if len(parents) > 3 else Path.cwd()) / "PPTX" / "MRPL_Template.pptx"
+    if repo_template.exists():
+        return str(repo_template)
+
+    raise FileNotFoundError(f"Master PPTX template not found at {sandbox_template} or {repo_template}.")
 
 
 # ── Text & Placeholder Substitution ─────────────────────────────────────────
