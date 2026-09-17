@@ -535,12 +535,16 @@ def _process(prs, ctx, sec_title, sd):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
         gap = 0.28
-        w = (theme.CONTENT_W - gap * (n - 1)) / n
+        # Capped and centred: two steps spread across the full slide read
+        # as a mistake rather than a sequence.
+        w = min((theme.CONTENT_W - gap * (n - 1)) / n, (theme.CONTENT_W - gap * 2) / 3)
+        row_w = w * n + gap * (n - 1)
+        x0 = theme.MARGIN_X + (theme.CONTENT_W - row_w) / 2
         has_detail = any(st.get("detail") for st in page)
         y = _centre_y(3.2 if has_detail else 1.9)
-        P.hline(s, theme.MARGIN_X + w / 2, y + 0.33, theme.MARGIN_X + (n - 1) * (w + gap) + w / 2, C.rule, 2)
+        P.hline(s, x0 + w / 2, y + 0.33, x0 + (n - 1) * (w + gap) + w / 2, C.rule, 2)
         for i, st in enumerate(page):
-            x = theme.MARGIN_X + i * (w + gap)
+            x = x0 + i * (w + gap)
             num = pi * MAX_STEPS + i + 1
             P.oval(s, x + w / 2 - 0.33, y, 0.66, C.navy)
             P.text(s, x + w / 2 - 0.33, y, 0.66, 0.66, str(num), size=18, colour=C.white, weight="semibold",
@@ -561,10 +565,14 @@ def _timeline(prs, ctx, sec_title, sd):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
         axis_y = theme.BODY_Y + 2.05
-        P.hline(s, theme.MARGIN_X, axis_y, theme.PAGE_W - theme.MARGIN_X, C.teal, 2.25)
-        w = theme.CONTENT_W / n
+        # Capped and centred, like the step row: two events spread across
+        # the full slide read as a mistake rather than a sequence.
+        w = min(theme.CONTENT_W / n, theme.CONTENT_W / 3)
+        row_w = w * n
+        x0 = theme.MARGIN_X + (theme.CONTENT_W - row_w) / 2
+        P.hline(s, x0, axis_y, x0 + row_w, C.teal, 2.25)
         for i, e in enumerate(page):
-            cx = theme.MARGIN_X + w * i + w / 2
+            cx = x0 + w * i + w / 2
             up = i % 2 == 0
             P.oval(s, cx - 0.13, axis_y - 0.13, 0.26, C.white, line=C.teal, line_pt=3)
             P.vline(s, cx, axis_y - (0.45 if up else -0.13), axis_y - (0.13 if up else -0.45), C.rule, 1)

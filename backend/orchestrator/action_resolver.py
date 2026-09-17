@@ -148,12 +148,19 @@ def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_path = OUTPUT_DIR / f"{Path(prepared['filename']).stem}-{stamp}.pptx"
+    # One title per line, and only the first few. Joined into a single
+    # line, a 15-slide deck produced an unreadable wall of text on the
+    # one screen where a person is meant to check what they are approving.
     titles = [t for t in prepared["slide_titles"] if t]
+    shown = titles[:8]
     preview = [
         f"Creates the file {output_path.name}",
-        f"{len(prepared['slide_titles'])} slide(s): " + "; ".join(titles),
-        "Sources: " + ("; ".join(prepared["citations"]) or "none"),
+        f"{len(titles)} slide(s):",
+        *[f"   {i}. {t}" for i, t in enumerate(shown, 1)],
     ]
+    if len(titles) > len(shown):
+        preview.append(f"   … and {len(titles) - len(shown)} more")
+    preview.append("Sources: " + ("; ".join(prepared["citations"]) or "none"))
     if prepared["omitted_sections"]:
         preview.append("Left out for lack of a source: " + "; ".join(prepared["omitted_sections"][:3]))
     preview.append(f"Written to {OUTPUT_DIR}")
