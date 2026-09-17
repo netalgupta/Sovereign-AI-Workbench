@@ -1,221 +1,127 @@
-# PPTX Generation & Docker Sandbox Module Guide
+# Presentation Generation Module Guide
 
-> **Author**: Aditya (Backend & Sandbox Lead)  
-> **Audience**: All Team Members (Aryan, Advay, Sahil, Netal, Kanishka)  
-> **Status**: Production-Ready, Tested & Verified (All 8 Test Cases Passing)  
-> **Repository Target**: `backend/orchestrator/slide_agent.py`, `backend/tools/generation/slide_kit.py`, `backend/sandbox/`
+> **This file was rewritten.** It described template cloning through
+> `slide_kit.py` + `PPTX/MRPL_Template.pptx`, rendered inside the Docker
+> sandbox. That engine is deleted. Why, and what replaced it, is below —
+> the original approach and the reasons it failed are recorded because
+> the failures are the argument for the current design.
 
----
+## 1. Two halves, and the line between them
 
-## 1. Executive Summary & Design Philosophy
-
-The **PPTX Generation Module** provides an air-gapped, sovereign capability to automatically generate executive-grade, on-brand PowerPoint presentations (`.pptx`) from technical user queries and the MRPL document corpus.
-
-### The Sovereign Separation Principle:
-* **"What to Say" is AI-driven**: The reasoning LLM decomposes the user query into logical sections, retrieves grounded citations from the MRPL corpus, and fills structured JSON data fields adhering to strict schemas.
-* **"How it Looks" is Fixed Code**: The LLM **never** writes Python drawing code, coordinates, shapes, or visual styles. All layout, brand typography, geometry, and color tokens are defined by fixed Python XML manipulation in [`backend/tools/generation/slide_kit.py`](../backend/tools/generation/slide_kit.py) using the pre-designed master template [`PPTX/MRPL_Template.pptx`](../PPTX/MRPL_Template.pptx).
-* **Network-Isolated Sandbox Rendering**: The actual file generation script executes inside a warm, egress-blocked Docker container (`--network none`) via `run_in_sandbox()`, ensuring total code and resource containment.
-
----
-
-## 2. The 19 Pre-Granted Slide Molds
-
-Every generated presentation is assembled by duplicating and populating slides from [`PPTX/MRPL_Template.pptx`](../PPTX/MRPL_Template.pptx). The template contains 19 hand-crafted master slides mapping directly to technical industrial use cases:
-
-| Mold ID | Purpose / Layout | Key Data Fields |
+| Half | Owns | Lives in |
 |---|---|---|
-| `executive_summary` | Deck opening / strategic takeaways | `headline`, `points: list[str]` (up to 4) |
-| `title_bullets` | Narrative explanation & findings | `title`, `bullets: list[str]` (up to 5), `citations` |
-| `stat_callout` | Single huge metric (e.g. 15.02 MMTPA) | `big_number`, `label`, `supporting_narrative` |
-| `multi_stat_row` | 3 to 4 side-by-side KPI metric cards | `stats: list[dict(val, label)]` |
-| `comparison_cards` | 2 to 3 comparative cards (units/options) | `cards: list[dict(title, text)]` |
-| `chart_commentary` | High-res trend/telemetry chart + notes | `chart_image_path`, `commentary` |
-| `process_flow` | Stage-gate sequence of operational steps | `steps: list[str]` (with arrow progression) |
-| `timeline` | Milestone phases with dates/durations | `phases: list[dict(date, event)]` |
-| `quote_highlight` | Communique or management directive | `quote`, `attribution` |
-| `image_caption` | P&ID schematic / CAD diagram view | `image_path`, `caption` |
-| `safety_alert` | Urgent warning / interlock trip alert | `severity`, `alert_title`, `description` |
-| `table_data` | Structured telemetry/spec table | `headers: list[str]`, `rows: list[list[str]]` |
-| `two_column` | Trade-offs / Before vs. After comparison | `left_title`, `left_body`, `right_title`, `right_body` |
-| `risk_matrix` | HAZOP risk severity assessment | `risks: list[dict(name, likelihood, impact)]` |
-| `org_or_flow_chart` | Approval hierarchy & governance | `nodes: list[str]` |
-| `section_divider` | Visual break between operational units | `section_title`, `subtitle` |
-| `agenda` | Table of contents & meeting structure | `agenda_items: list[str]` |
-| `generic_grid` | Flexible 4-box modular fallback | `boxes: list[dict(title, body)]` |
-| `flexible_highlight` | High-priority highlight cards | `headline`, `highlight_points` |
+| **Content** | what the deck says, and that every figure is grounded | `backend/orchestrator/deck_agent.py` |
+| **Design** | how it looks: grid, type, colour, charts, pagination | `backend/tools/generation/deck/` |
 
----
+A model writes content as structured data and never touches layout. The
+renderer lays out whatever survives validation and never invents content.
 
-## 3. End-to-End Pipeline Workflow
+## 2. Why the template engine was replaced
 
-When a user submits a prompt like *"Generate a presentation on crude distillation unit limits"*:
+Measured on five real prompts, with the decks rendered and inspected:
 
-```
-User Prompt (Chat)
-      │
-      ▼
-[1. Orchestrator Router & Planner]
-      │  - Detects presentation intent (pptx, slides, deck)
-      │  - Automatically EXEMPTS from hazardous action approval modal
-      │  - Dispatches PlanStep with assigned_agent="slide"
-      ▼
-[2. Slide Agent: plan_deck_outline()]
-      │  - Breaks topic into 5-7 logical slides with provisional mold IDs
-      ▼
-[3. Content Fetch & Grounding Loop]
-      │  - Queries RAG hybrid search for real document citations
-      │  - Evaluates plant parameters and telemetry
-      ▼
-[4. Slide Filler: fill_slide_content()]
-      │  - Populates Pydantic mold schemas with factual data & citation IDs
-      │  - Writes `context.json` to session workspace
-      ▼
-[5. Docker Sandbox Render (run_in_sandbox)]
-      │  - Docker worker executes in container with `--network none`
-      │  - Reads context.json, duplicates template molds, replaces tags
-      │  - Writes output `.pptx` to shared session volume
-      ▼
-[6. Automated QA Engine (qa_render.py)]
-      │  - Heuristic QA: checks for text overflow, unreplaced tags, empty tables
-      │  - Bounded self-correction: retries up to 2 times on failing slides
-      ▼
-[7. Presentation Synthesis & Delivery]
-      │  - Returns formatted deliverable payload with download button
-      ▼
-Frontend: RealOutputCards.jsx (Immediate Download Card)
-```
+- **The planner never ran.** Ollama's `format=json` returns an *object*;
+  the prompt asked for an *array*, so every reply was rejected and a
+  hardcoded five-section outline was used. Every deck had the same
+  structure — an SOP deck carried "SENSOR TELEMETRY & SPECIFICATIONS".
+- **Topic drift by design.** Each section searched the corpus with its own
+  generic title, so a deck on a pipeline incident gained a KPI slide about
+  sandbox RAM limits. Asking for "a presentation on X" even retrieved this
+  project's own PPTX guide, and the model then copied its mold names.
+- **Invented figures, cited.** When a model call failed, fallbacks filled
+  slides with fixed numbers (`1,450 m³/h`, a thermocouple table reading
+  NORMAL, an FFC-201 interlock) and attached the section's citations.
+  "The plot of Pride and Prejudice" produced a fully "sourced" deck.
+- **The layouts could not hold real text.** Each of the 19 samples was
+  positioned for its own example text: titles overflowed onto bullets,
+  most molds had no title slot at all, picture placeholders rendered as
+  broken-image icons, and tables kept the template's sample rows when the
+  source had fewer.
 
----
+## 3. The pipeline now
 
-## 4. The Docker Sandbox Setup ("The Docker Thingy")
+1. **Anchor documents.** Retrieve once, on the *topic* — the deliverable
+   words ("make a presentation on") are stripped, because searching them
+   finds documents about presentations. Keep only documents scoring near
+   the best match, and read those in full. Nothing downstream sees
+   anything else, so a slide cannot drift into an unrelated document.
+2. **Storyline.** One call plans sections and, per slide, a type, a
+   working title and the facts it must carry.
+3. **Fill per section**, so a section's slides read as one argument.
+4. **Validate every slide**: required fields present, table rows
+   rectangular, one chart value per category, sources resolvable, and
+   every figure ≥ 10 must appear in the source text (compared
+   numerically, so `84.0` matches a source that says `84%` while an
+   invented `91` is caught). One repair attempt, then the slide is
+   dropped and reported — never shipped broken.
+5. **Render** to `.pptx` with native PowerPoint charts and tables.
 
-### Why Run in the Sandbox?
-In a refinery environment, all file generation and script execution must be **strictly air-gapped and sandboxed**:
-1. Zero network egress (`--network none`).
-2. Hard resource caps (`512MB RAM`, `1 CPU core`, `read-only rootfs`).
-3. Isolated filesystem (`tmpfs /tmp` + per-session host mount).
+**Deck length follows the material.** `max_slides` is accepted and
+ignored; lists paginate onto balanced continuation slides.
 
-### Are the Template and Generation Code Inside Docker?
-**YES! Everything is pre-baked directly into the container image (`mrpl-sandbox:combined`).**
+## 4. The approval gate (hard constraint #4)
 
-Teammates building the sandbox image have **both** the code and master PowerPoint template already baked inside:
-```dockerfile
-# From backend/sandbox/Dockerfile.sandbox:
+A deck is a file leaving the building, so it is gated like `draft_docx`.
+Because the gate's contract is that the operator approves *the concrete
+call that will run*, the work is split:
 
-RUN mkdir -p /sandbox/lib && chown -R 1000:1000 /sandbox
-COPY backend/tools/generation/slide_kit.py /sandbox/lib/slide_kit.py
-COPY PPTX/MRPL_Template.pptx /sandbox/lib/mrpl_template.pptx
-ENV PYTHONPATH="/sandbox/lib"
-```
+- `prepare_deck(request)` plans and validates. **Writes nothing.**
+- The approval card lists the filename, every slide title, the sources,
+  and anything left out for lack of a source.
+- `generate_deck(deck_spec, output_path)` — registered with
+  `requires_approval=True` — renders exactly that spec, with no model
+  call that could change what was approved, into `outputs/`.
 
-* **No download needed**: The template is never downloaded or recreated at runtime.
-* **No template path confusion**: Inside the container, `slide_kit.py` automatically resolves the template at `/sandbox/lib/mrpl_template.pptx`.
-* **Zero host dependency**: Even if the host machine has no PowerPoint software or Office installed, the container compiles valid, self-contained `.pptx` binaries.
+An earlier "safe deliverable exemption" let decks be written unapproved.
+It was removed.
 
-### How Host and Container Communicate:
-The sandbox uses a shared directory:
-* **Host path**: `os.path.join(tempfile.gettempdir(), "mrpl_sandbox_sessions", session_id)`
-* **Container path**: `/sandbox/sessions/<session_id>`
+## 5. Slide types the model may choose
 
-1. The host writes `context.json` containing the slide plan into the session folder.
-2. The orchestrator calls `run_in_sandbox()` to execute a small runner script:
-   ```python
-   import json
-   from slide_kit import build_deck
-   with open('/sandbox/sessions/<session_id>/context.json', 'r') as f:
-       plan = json.load(f)
-   build_deck(plan, out_path='/sandbox/sessions/<session_id>/MRPL_Executive_Briefing.pptx')
-   ```
-3. The container compiles the presentation and saves it directly to the mounted folder.
-4. The host reads the resulting `.pptx` file directly from the session folder.
+`points`, `big_stat`, `kpis`, `chart`, `table`, `process`, `timeline`,
+`alert` (incidents and limit breaches only), `comparison`, `actions`.
 
----
+The cover, agenda, section dividers, the sources appendix and `exhibit`
+(a real corpus image — a P&ID or a scan — with caption and source) are
+placed by code, not chosen by a model. Nothing generates a picture of
+plant equipment: an invented diagram on an approval-bound deck is a
+fabricated record.
 
-## 5. Team Setup & Run Instructions
+Type and field synonyms are accepted (`multi_stat_row` → `kpis`, `val` →
+`value`), and consecutive single-item slides of one type are merged —
+the model once returned eight `process` slides of one step each.
 
-### Step 1: Build the Sandbox Container (Run Once)
-Run this command from the repository root:
-```bash
-docker build -t mrpl-sandbox:combined -f backend/sandbox/Dockerfile.sandbox .
-```
-*(This bakes Python 3.11, `python-pptx`, `pydantic`, the scientific stack, `slide_kit.py`, and `MRPL_Template.pptx` into the image.)*
+## 6. No sandbox for rendering
 
-### Step 2: Verify the Sandbox Environment
-Run this test one-liner to confirm the container can find `python-pptx` and the template:
-```bash
-docker run --rm mrpl-sandbox:combined python -c "
-import pptx, pydantic
-from slide_kit import resolve_template_path
-print('pptx version:', pptx.__version__)
-print('pydantic version:', pydantic.__version__)
-print('Template resolved at:', resolve_template_path())
-"
-```
-**Expected output**:
-```text
-pptx version: 1.0.2
-pydantic version: 2.7.1
-Template resolved at: /sandbox/lib/mrpl_template.pptx
-```
+The sandbox exists for **model-written code**, which cannot be trusted
+with the filesystem. The renderer is our own deterministic code driven by
+validated data, so it runs in the backend. Rendering in a container made
+deck generation fail whenever Docker was not running, for no safety
+gained. `python-pptx` remains in the sandbox image for model-written code.
 
-### Step 3: Run the Automated Unit Tests
-Run the dedicated PPTX test suite in your local virtual environment:
-```bash
-~/venv/bin/pytest backend/tests/test_slide_agent.py -v
-```
-**All 8 tests should pass**:
-* `test_template_exists`
-* `test_slide_schemas`
-* `test_build_deck_creates_valid_presentation`
-* `test_heuristic_qa_defect_detection`
-* `test_plan_deck_outline`
-* `test_fetch_and_fill_slide`
-* `test_slide_pipeline_end_to_end` *(executes genuine Docker sandbox rendering)*
-* `test_presentation_safe_deliverable_exemption`
-
-### Step 4: Run an End-to-End Orchestrator Turn
-To verify full chat integration from Python:
-```bash
-~/venv/bin/python -c "
-from backend.orchestrator.graph import run_agent_turn
-res = run_agent_turn('Generate a presentation on crude distillation unit limits', session_id='team_demo')
-print('Turn output:\n', res.draft_output)
-"
-```
-**Output**:
-```text
-**Presentation generated successfully.**
-
-- **Deliverable:** `MRPL_Generate_a_presentation_on_cru_Briefing.pptx` (37 KB)
-- **Slides:** 5 on-brand slides formatted via MRPL master template
-- **Grounded Citations:** 5 verified citations [1] [2] [3] [4] [5]
-
-The deliverable is available for immediate download in the **Output Cards** pane.
-```
-
----
-
-## 6. Frontend Hand-Off (Advay, Sahil, Netal, Kanishka)
-
-1. **Prepared, then approved**: `prepare_deck` plans, fills and QA-renders the deck inside the sandbox and writes nothing a user receives. The approval card lists the filename, every slide title, the sources, and any section left out for lack of a source.
-2. **Approval gate (hard constraint #4)**: `generate_deck` is registered with `requires_approval=True`, like `draft_docx`. It renders exactly the approved plan, with no model call, into `outputs/`. (An earlier "safe deliverable exemption" let decks be written unapproved; it was removed.)
-3. **Download Button**: The deliverable appears in the **Output Cards** panel (`RealOutputCards.jsx`) with:
-   * Title / Document Name
-   * Slide Count badge (e.g. `5 Slides`)
-   * Grounded Citation badges (`[1]`, `[2]`, `[3]`)
-   * Direct **Download** button pointing to the generated `.pptx` file.
-
----
-
-## 7. Air-Gapped Deployment Packaging
-
-When shipping the Sovereign Workbench to an air-gapped facility on a portable drive (per `DEPENDENCIES.md`):
+## 7. Running it
 
 ```bash
-# 1. Save the pre-baked Docker image to a portable tarball
-docker save mrpl-sandbox:combined -o mrpl-sandbox.tar
+# Unit tests: design system + content validation, no model calls
+py -3 -m pytest backend/tests/test_deck.py backend/tests/test_slide_agent.py -q -m "not live_model"
 
-# 2. On the air-gapped target machine (zero internet required):
-docker load -i mrpl-sandbox.tar
+# The real thing, end to end (calls the model, minutes)
+py -3 -m pytest backend/tests/test_slide_agent.py -q -m live_model
 ```
-Because the master template and generation libraries are inside `mrpl-sandbox:combined`, the entire PPTX subsystem is 100% operational immediately upon `docker load`.
+
+To look at a deck the way a user sees it, export slides through
+PowerPoint itself rather than trusting the XML:
+
+```powershell
+$app = New-Object -ComObject PowerPoint.Application
+$pres = $app.Presentations.Open("<abs path>.pptx", -1, 0, 0)
+foreach ($s in $pres.Slides) { $s.Export("C:\temp\slide_$($s.SlideIndex).png", "PNG", 1600, 900) }
+$pres.Close(); $app.Quit()
+```
+
+## 8. Frontend hand-off
+
+`generate_deck` returns `deck_path`, `filename`, `file_size`,
+`slide_count` and `citations` (document names). Every field is measured;
+a field the system cannot know is absent rather than filled with a
+plausible default. The approval card carries `action_type: FILE_WRITE`,
+the resolved `target` path, and `resolved_parameters: true`.

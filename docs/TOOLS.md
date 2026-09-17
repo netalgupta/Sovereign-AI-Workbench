@@ -108,7 +108,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 |---|---|---|---|---|---|
 | 38 | DOCX generation (python-docx) | Aryan | built | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
 | 39 | XLSX generation with live formulas | Kanishka | not started | 🔴 | FR-9 |
-| 40 | PPTX generation | Aditya / Aryan | built | 🔴 | FR-9 — Sovereign, air-gapped PowerPoint deck generation using MRPL master template (19 slide molds), deterministic RAG retrieval, bounded retry, and heuristic + visual QA. |
+| 40 | PPTX generation | Aditya / Aryan | built | 🔴 | FR-9 — `prepare_deck` (grounded storyline, every figure verified against the source) + approval-gated `generate_deck`, rendered by the code-driven deck design system (native charts/tables, text measured to fit, no slide cap). |
 | 41 | Calculation trace documents | Aryan | built | 🔴 | NFR-5 |
 | 42 | Audio briefing (Piper TTS) | Kanishka | not started | ⚪ | Polish item |
 | 43 | Redaction tool | Kanishka | not started | 🟡 | Confidentiality-relevant differentiator |
