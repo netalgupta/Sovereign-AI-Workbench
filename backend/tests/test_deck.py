@@ -395,3 +395,15 @@ def test_one_slide_sections_get_no_dividers(tmp_path):
     spec = _spec([ALL_LAYOUTS[0]], sections=4)
     result = render.render_deck(spec, tmp_path / "d.pptx")
     assert result["slide_count"] == 1 + 1 + 4 + 1  # cover, agenda, 4 slides, appendix
+
+
+def test_bar_charts_start_at_zero(tmp_path):
+    """A 31-vs-34 column chart auto-scaled from 29.5 drew a 10% rise as a
+    tripling."""
+    slide = {"type": "chart", "title": "Duration rose in the second cycle", "chart_type": "column",
+             "categories": ["Cycle 17", "Cycle 18"], "series": [{"name": "Hours", "values": [31, 34]}],
+             "sources": ["S1"]}
+    out = tmp_path / "c.pptx"
+    render.render_deck(_spec([slide]), out)
+    charts = [sh.chart for s in Presentation(str(out)).slides for sh in s.shapes if sh.has_chart]
+    assert charts and charts[0].value_axis.minimum_scale == 0

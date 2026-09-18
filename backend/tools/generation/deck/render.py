@@ -458,6 +458,12 @@ def _chart(prs, ctx, sec_title, sd):
                 pt.format.fill.solid()
                 pt.format.fill.fore_color.rgb = rgb(C.amber)
     va = chart.value_axis
+    # BARS START AT ZERO. PowerPoint auto-scaled a two-bar chart of 31 and 34
+    # hours to begin at 29.5, so a 10% rise was drawn as a tripling. A bar's
+    # length IS its value; truncating the axis misreports it. Line charts
+    # may zoom, because a line encodes change, not magnitude.
+    if kind != XL_CHART_TYPE.LINE_MARKERS:
+        va.minimum_scale = 0
     va.has_major_gridlines = True
     va.major_gridlines.format.line.color.rgb = rgb(C.rule)
     va.major_gridlines.format.line.width = Pt(0.5)
