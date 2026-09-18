@@ -364,7 +364,9 @@ def test_the_relevance_verdict_can_refuse_what_the_word_check_let_through(monkey
 def test_a_sequence_filed_under_another_key_is_still_a_sequence():
     """Seven process slides were dropped for an empty "steps" while the
     model had filed the sequence under another name."""
-    slide, why = D.validate_slide({"type": "process", "title": "Shutdown and purge sequence for R-201",
-                                   "sequence": ["Depressurise R-201", "Purge with nitrogen"]}, DOCS)
+    # No figures here on purpose: an equipment tag absent from the source
+    # (R-201) is rejected like any other unsourced number.
+    slide, why = D.validate_slide({"type": "process", "title": "Shutdown and purge sequence for the reactor",
+                                   "sequence": ["Depressurise the reactor", "Purge with nitrogen"]}, DOCS)
     assert slide is not None, why
-    assert slide["steps"] == [{"title": "Depressurise R-201"}, {"title": "Purge with nitrogen"}]
+    assert slide["steps"] == [{"title": "Depressurise the reactor"}, {"title": "Purge with nitrogen"}]
