@@ -291,7 +291,7 @@ def _points(prs, ctx, sec_title, sd):
         for i, b in enumerate(page):
             h = fit.text_height_in(b, text_w, size)
             n = pi * MAX_BULLETS + i + 1
-            line_h = size * 1.18 / 72.0
+            line_h = size * fit.LINE_EM * 1.18 / 72.0
             my = y + max(0.0, (line_h - marker) / 2)
             P.oval(s, theme.MARGIN_X, my, marker, C.teal_light)
             P.text(s, theme.MARGIN_X, my, marker, marker, str(n), size=11 if marker < 0.4 else 13,

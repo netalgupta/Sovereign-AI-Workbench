@@ -62,6 +62,15 @@ def text_width_pt(text: str, size_pt: float, weight: str = "regular") -> float:
 # makes overflow impossible rather than marginal.
 WRAP_SAFETY = 0.96
 
+# PowerPoint's "single" line is 1.2 em, and a "multiple" spacing multiplies
+# THAT, not the bare point size. Heights here were lines x size x spacing,
+# which under-predicted every paragraph: MEASURED through PowerPoint's own
+# laid-out text bounds, 12 of 384 text shapes in four generated decks ran
+# 5-14 pt past the bottom of their boxes. Nothing collided, because gaps
+# absorbed it, but a box that does not hold its text is a bug waiting for
+# a longer sentence.
+LINE_EM = 1.2
+
 
 def wrap_lines(text: str, width_in: float, size_pt: float, weight: str = "regular") -> list[str]:
     """Greedy word wrap, the way PowerPoint wraps, in the box's inner width."""
@@ -86,7 +95,7 @@ def wrap_lines(text: str, width_in: float, size_pt: float, weight: str = "regula
 
 def text_height_in(text: str, width_in: float, size_pt: float, weight: str = "regular",
                    line_spacing: float = 1.18) -> float:
-    return len(wrap_lines(text, width_in, size_pt, weight)) * size_pt * line_spacing / 72.0
+    return len(wrap_lines(text, width_in, size_pt, weight)) * size_pt * LINE_EM * line_spacing / 72.0
 
 
 def fit_size(text: str, width_in: float, height_in: float, max_pt: float, min_pt: float,
@@ -95,7 +104,7 @@ def fit_size(text: str, width_in: float, height_in: float, max_pt: float, min_pt
     size = max_pt
     while size >= min_pt - 1e-6:
         lines = wrap_lines(text, width_in, size, weight)
-        fits_h = len(lines) * size * line_spacing / 72.0 <= height_in
+        fits_h = len(lines) * size * LINE_EM * line_spacing / 72.0 <= height_in
         fits_n = max_lines is None or len(lines) <= max_lines
         if fits_h and fits_n:
             return size
