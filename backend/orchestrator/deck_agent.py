@@ -131,6 +131,9 @@ MAX_CHARS_PER_DOC = 7000
 MAX_CHARS_TOTAL = 16000
 NUM_CTX = 12288
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+# A value that can stand as a headline figure: optional comparator, a
+# number, optional unit or percent. "34", "84%", "> 410 °C", "1,450 m3/h".
+_MEASUREMENT = re.compile(r"^[<>≤≥~≈±]?\s*-?\d[\d.,]*\s*(%|[a-zA-Z°µ/²³\-\s]{0,14})$")
 
 
 # Names a model reaches for that mean one of ours. Some come from the
@@ -584,6 +587,20 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
         if len(cats) < 2 or not series:
             return None, "chart needs at least two categories and one series"
         out["categories"], out["series"] = cats, series
+
+    # A MEASUREMENT IS A NUMBER. The model put "Replace P-HS-02 discharge
+    # flange gasket" in a KPI card's value, and "Hassan Pumping Station" in
+    # a callout; both rendered as headline figures.
+    if stype == "kpis":
+        for it in out.get("items") or []:
+            if not isinstance(it, dict) or not _MEASUREMENT.match(str(it.get("value", "")).strip()):
+                return None, ("kpis values must be measurements (a number with an optional unit); "
+                              "use an actions or points slide for statements")
+    if stype == "big_stat" and not _MEASUREMENT.match(str(out.get("value", "")).strip()):
+        return None, "big_stat value must be a number"
+    if stype == "points" and isinstance(out.get("callout"), dict):
+        if not _MEASUREMENT.match(str(out["callout"].get("value", "")).strip()):
+            out.pop("callout")
 
     known = {d["id"] for d in docs}
     out["sources"] = [s for s in (out.get("sources") or []) if s in known] or [docs[0]["id"]]

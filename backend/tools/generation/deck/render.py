@@ -797,8 +797,13 @@ def render_deck(spec: dict[str, Any], out_path: str | Path) -> dict[str, Any]:
     _cover(prs, ctx)
     if len(sections) > 1:
         _agenda(prs, ctx, sections)
+    # Dividers only when sections have enough in them to need separating.
+    # Four one-slide sections produced four dividers around five content
+    # slides -- MEASURED, nearly half the deck was chapter breaks.
+    content_slides = sum(len(sec["slides"]) for sec in sections)
+    use_dividers = len(sections) > 2 and content_slides >= 2 * len(sections)
     for si, sec in enumerate(sections, 1):
-        if len(sections) > 2:
+        if use_dividers:
             _divider(prs, ctx, si, sec)
         for sd in sec["slides"]:
             layout = LAYOUTS.get(sd.get("type"))

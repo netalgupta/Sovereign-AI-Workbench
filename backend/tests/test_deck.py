@@ -370,3 +370,28 @@ def test_a_sequence_filed_under_another_key_is_still_a_sequence():
                                    "sequence": ["Depressurise the reactor", "Purge with nitrogen"]}, DOCS)
     assert slide is not None, why
     assert slide["steps"] == [{"title": "Depressurise the reactor"}, {"title": "Purge with nitrogen"}]
+
+
+def test_a_statement_is_not_accepted_as_a_measurement():
+    """The model put an action in a KPI card's value and a place name in a
+    callout; both rendered as headline figures."""
+    slide, why = D.validate_slide(
+        {"type": "kpis", "title": "Corrective actions after the incident",
+         "items": [{"value": "Replace P-HS-02 discharge flange gasket", "label": "Action taken"}]}, DOCS)
+    assert slide is None and "measurements" in why
+
+    slide, _ = D.validate_slide(
+        {"type": "points", "title": "Pressure drop and shutdown at the station",
+         "bullets": ["Cycle 18 took 34 hours."], "callout": {"value": "Hassan Pumping Station", "label": "Location"}},
+        DOCS)
+    assert slide is not None and "callout" not in slide
+
+    for good in ("34", "84%", "128 kg/hr", "> 28 hours"):
+        assert D._MEASUREMENT.match(good), good
+
+
+def test_one_slide_sections_get_no_dividers(tmp_path):
+    """Four one-slide sections produced four dividers around five slides."""
+    spec = _spec([ALL_LAYOUTS[0]], sections=4)
+    result = render.render_deck(spec, tmp_path / "d.pptx")
+    assert result["slide_count"] == 1 + 1 + 4 + 1  # cover, agenda, 4 slides, appendix
