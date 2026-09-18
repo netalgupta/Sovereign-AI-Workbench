@@ -147,10 +147,15 @@ def _check_registry_against(pulled: set[str]) -> None:
         _line(FAIL, "model registry", f"unreadable: {exc}")
         return
 
+    from backend.models.registry import is_locally_available
+
+    # Per backend: an Ollama tag must be pulled, a diffusers model's
+    # weights must be on disk. Checking every entry against Ollama would
+    # report the image model missing forever.
     missing = [
-        f"{model_id} -> {cfg.model}"
+        f"{model_id} -> {cfg.model} ({cfg.backend})"
         for model_id, cfg in registry.items()
-        if cfg.model not in pulled and f"{cfg.model}:latest" not in pulled
+        if not is_locally_available(cfg, set(pulled))
     ]
     if missing:
         _line(

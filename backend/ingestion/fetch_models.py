@@ -54,9 +54,36 @@ def _fetch_whisper_base(model_id: str = "Systran/faster-whisper-base") -> None:
     print(f"Saved to {cache_dir} — future loads are fully offline.")
 
 
+def _fetch_sd_turbo(model_id: str = "stabilityai/sd-turbo") -> None:
+    """The image model for abstract deck artwork (models.yaml `image-model`).
+
+    fp16 weights only, and only the files diffusers loads: the full repo
+    also carries fp32 copies that would double the download and the disk
+    footprint for nothing.
+    """
+    from huggingface_hub import snapshot_download
+
+    cache_dir = local_cache_dir("image", model_id)
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {model_id} (one-time, requires internet)...")
+    snapshot_download(
+        repo_id=model_id,
+        local_dir=str(cache_dir),
+        allow_patterns=[
+            "model_index.json",
+            "*/config.json",
+            "scheduler/*",
+            "tokenizer/*",
+            "*/*.fp16.safetensors",
+        ],
+    )
+    print(f"Saved to {cache_dir} — future loads are fully offline.")
+
+
 _FETCHERS = {
     "bge-large-en-v1.5": _fetch_bge_large,
     "faster-whisper-base": _fetch_whisper_base,
+    "sd-turbo": _fetch_sd_turbo,
 }
 
 

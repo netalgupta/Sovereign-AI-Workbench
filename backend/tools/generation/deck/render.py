@@ -69,6 +69,9 @@ class _Ctx:
     def __init__(self, spec: dict):
         self.spec = spec
         self.page = 0
+        # Generated artwork is OPT-IN per spec: the deck pipeline sets it,
+        # tests and quick renders do not, so they never load an image model.
+        self.artwork = bool(spec.get("artwork"))
         self.source_names = {s["id"]: s for s in spec.get("sources", [])}
 
     def source_line(self, ids: list[str] | None) -> str:
@@ -81,6 +84,18 @@ class _Ctx:
             label = Path(src["document"]).stem.replace("_", " ")
             parts.append(label + (f", p.{', '.join(str(p) for p in pages)}" if pages else ""))
         return "Source: " + "; ".join(parts) if parts else ""
+
+
+def _artwork(ctx: _Ctx, key: str, width_in: float, height_in: float, **kw):
+    """Styled local-model artwork for a slide region, or None (vector fallback)."""
+    if not ctx.artwork:
+        return None
+    try:
+        from . import art
+
+        return art.styled(key, width_in, height_in, **kw)
+    except Exception:  # noqa: BLE001 - artwork never blocks a deck
+        return None
 
 
 def _new_slide(prs, ctx: _Ctx, dark: bool = False):
@@ -167,12 +182,19 @@ def _cover(prs, ctx):
     s = _new_slide(prs, ctx, dark=True)
     # Right-hand structure: a slab of navy_2 and fine teal rules, echoing a
     # process flow diagram without pretending to be one.
-    P.rect(s, 8.9, 0, theme.PAGE_W - 8.9, theme.PAGE_H, C.navy_2)
-    for i in range(7):
-        y = 1.05 + i * 0.8
-        P.hline(s, 9.35, y, theme.PAGE_W - 0.6, C.teal, 0.75 if i % 3 else 2.25)
-    P.oval(s, 11.35, 2.55, 1.45, C.navy_2, line=C.amber, line_pt=2.5)
-    P.oval(s, 11.83, 3.03, 0.49, C.amber)
+    art_w = theme.PAGE_W - 8.9
+    art_path = _artwork(ctx, f"cover|{spec.get('title', '')}", art_w, theme.PAGE_H)
+    if art_path:
+        # Local-model artwork, abstract only, pulled into the palette.
+        s.shapes.add_picture(str(art_path), Inches(8.9), 0, Inches(art_w), Inches(theme.PAGE_H))
+        P.rect(s, 8.9, 0, 0.06, theme.PAGE_H, C.amber)
+    else:
+        P.rect(s, 8.9, 0, art_w, theme.PAGE_H, C.navy_2)
+        for i in range(7):
+            y = 1.05 + i * 0.8
+            P.hline(s, 9.35, y, theme.PAGE_W - 0.6, C.teal, 0.75 if i % 3 else 2.25)
+        P.oval(s, 11.35, 2.55, 1.45, C.navy_2, line=C.amber, line_pt=2.5)
+        P.oval(s, 11.83, 3.03, 0.49, C.amber)
 
     x = theme.MARGIN_X
     P.rect(s, x, 1.25, 0.08, 3.9, C.amber)
@@ -218,7 +240,11 @@ def _agenda(prs, ctx, sections: list[dict]):
 
 def _divider(prs, ctx, number: int, section: dict):
     s = _new_slide(prs, ctx, dark=True)
-    P.rect(s, 0, 0, 4.6, theme.PAGE_H, C.navy_2)
+    art_path = _artwork(ctx, f"divider|{number}|{section.get('title', '')}", 4.6, theme.PAGE_H, tint=0.5)
+    if art_path:
+        s.shapes.add_picture(str(art_path), 0, 0, Inches(4.6), Inches(theme.PAGE_H))
+    else:
+        P.rect(s, 0, 0, 4.6, theme.PAGE_H, C.navy_2)
     title = section.get("title", "")
     size = fit.fit_size(title, 7.2, 1.8, 40, 26, "semibold", 1.05, max_lines=2) or 26
     title_h = fit.text_height_in(title, 7.2, size, "semibold", 1.05)
