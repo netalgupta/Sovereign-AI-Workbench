@@ -72,6 +72,12 @@ class _Ctx:
         # Generated artwork is OPT-IN per spec: the deck pipeline sets it,
         # tests and quick renders do not, so they never load an image model.
         self.artwork = bool(spec.get("artwork"))
+        # page_map[i] = (section index, slide index) of the spec slide that
+        # produced rendered page i+1, or None for cover/agenda/dividers/
+        # appendix. Quality review uses it to fix the slide a bad page came
+        # from, including every continuation page of it.
+        self.page_map: list = []
+        self.current = None
         self.source_names = {s["id"]: s for s in spec.get("sources", [])}
 
     def source_line(self, ids: list[str] | None) -> str:
@@ -101,6 +107,7 @@ def _artwork(ctx: _Ctx, key: str, width_in: float, height_in: float, **kw):
 def _new_slide(prs, ctx: _Ctx, dark: bool = False):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     ctx.page += 1
+    ctx.page_map.append(None)
     P.background(slide, C.navy if dark else C.white)
     return slide
 
@@ -137,6 +144,7 @@ def _notes(slide, text: str | None, source_line: str):
 
 def _content_slide(prs, ctx, section_title: str, slide_spec: dict, title_suffix: str = ""):
     s = _new_slide(prs, ctx)
+    ctx.page_map[-1] = ctx.current
     title = (slide_spec.get("title") or "").strip() + title_suffix
     _header(s, section_title, title)
     _footer(s, ctx, slide_spec.get("sources"))
@@ -153,6 +161,15 @@ def _centre_y(block_h: float) -> float:
     look equally deliberate.
     """
     return theme.BODY_Y + max(0.0, (theme.BODY_H - block_h) / 2)
+
+
+def _limit(sd: dict, default: int) -> int:
+    """Items per page for this slide: the layout default, or fewer when
+    quality review asked for it (sd["max_items"])."""
+    try:
+        return max(1, min(default, int(sd.get("max_items") or default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def _chunks(items: list, size: int) -> list[list]:
@@ -295,7 +312,7 @@ def _points(prs, ctx, sec_title, sd):
     bullets = [b if isinstance(b, str) else b.get("text", "") for b in sd.get("bullets", [])]
     bullets = [b for b in bullets if b.strip()]
     callout = sd.get("callout") if isinstance(sd.get("callout"), dict) and sd["callout"].get("value") else None
-    pages = _chunks(bullets, MAX_BULLETS)
+    pages = _chunks(bullets, _limit(sd, MAX_BULLETS))
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         with_callout = bool(callout and pi == 0)
@@ -304,7 +321,7 @@ def _points(prs, ctx, sec_title, sd):
         # incident deck. Up to three short statements read better as a row
         # of numbered cards that use the page.
         if not with_callout and 1 <= len(page) <= 3 and all(len(b) <= 130 for b in page):
-            _statement_cards(s, page, pi * MAX_BULLETS)
+            _statement_cards(s, page, pi * _limit(sd, MAX_BULLETS))
             continue
         text_w = theme.CONTENT_W - (3.9 if with_callout else 0) - 0.75
         # Larger type when there is room: fit from 26pt down, so a short
@@ -392,7 +409,7 @@ def _big_stat(prs, ctx, sec_title, sd):
 
 def _kpis(prs, ctx, sec_title, sd):
     items = [i for i in sd.get("items", []) if isinstance(i, dict) and str(i.get("value", "")).strip()]
-    pages = _chunks(items, MAX_KPIS)
+    pages = _chunks(items, _limit(sd, MAX_KPIS))
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
@@ -527,7 +544,7 @@ def _table(prs, ctx, sec_title, sd):
     rows = [[str(c) for c in r] for r in sd.get("rows", []) if isinstance(r, (list, tuple))]
     if not columns or not rows:
         return
-    pages = _chunks(rows, MAX_TABLE_ROWS)
+    pages = _chunks(rows, _limit(sd, MAX_TABLE_ROWS))
     ncol = len(columns)
     # Column widths proportional to content, but never narrower than the
     # column's longest WORD: "Exceeded" in a status column was wrapping
@@ -594,7 +611,7 @@ def _table(prs, ctx, sec_title, sd):
 def _process(prs, ctx, sec_title, sd):
     steps = [st if isinstance(st, dict) else {"title": str(st)} for st in sd.get("steps", [])]
     steps = [st for st in steps if st.get("title")]
-    pages = _chunks(steps, MAX_STEPS)
+    pages = _chunks(steps, _limit(sd, MAX_STEPS))
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
@@ -624,7 +641,7 @@ def _process(prs, ctx, sec_title, sd):
 
 def _timeline(prs, ctx, sec_title, sd):
     events = [e for e in sd.get("events", []) if isinstance(e, dict) and e.get("title")]
-    pages = _chunks(events, MAX_EVENTS)
+    pages = _chunks(events, _limit(sd, MAX_EVENTS))
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
@@ -691,7 +708,7 @@ def _alert(prs, ctx, sec_title, sd):
 
 def _comparison(prs, ctx, sec_title, sd):
     cols = [c for c in sd.get("columns", []) if isinstance(c, dict) and c.get("title")]
-    pages = _chunks(cols, MAX_COMPARE)
+    pages = _chunks(cols, _limit(sd, MAX_COMPARE))
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
         n = max(len(page), 1)
@@ -720,7 +737,7 @@ def _actions(prs, ctx, sec_title, sd):
     items = [i for i in sd.get("items", []) if isinstance(i, dict) and i.get("action")]
     if not items:
         return
-    pages = _chunks(items, MAX_ACTIONS)
+    pages = _chunks(items, _limit(sd, MAX_ACTIONS))
     has_owner = any(i.get("owner") for i in items)
     has_due = any(i.get("due") for i in items)
     for pi, page in enumerate(pages):
@@ -826,6 +843,9 @@ def render_deck(spec: dict[str, Any], out_path: str | Path) -> dict[str, Any]:
     ctx = _Ctx(spec)
 
     sections = [sec for sec in spec.get("sections", []) if sec.get("slides")]
+    # Indices into spec["sections"], so the page map points at the spec the
+    # caller holds, not at this filtered list.
+    sections_index = {id(sec): i for i, sec in enumerate(spec.get("sections", []))}
     _cover(prs, ctx)
     if len(sections) > 1:
         _agenda(prs, ctx, sections)
@@ -840,10 +860,12 @@ def render_deck(spec: dict[str, Any], out_path: str | Path) -> dict[str, Any]:
         for sd in sec["slides"]:
             layout = LAYOUTS.get(sd.get("type"))
             if layout is not None:
+                ctx.current = (sections_index[id(sec)], sec["slides"].index(sd))
                 layout(prs, ctx, sec.get("title", ""), sd)
+                ctx.current = None
     _sources_appendix(prs, ctx)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out))
-    return {"path": str(out), "slide_count": len(prs.slides)}
+    return {"path": str(out), "slide_count": len(prs.slides), "page_map": ctx.page_map}
