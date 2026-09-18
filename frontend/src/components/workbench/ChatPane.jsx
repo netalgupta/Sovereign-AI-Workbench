@@ -109,7 +109,11 @@ export function ChatPane() {
 
   // ── Voice Dictation & Multi-line Composer State ───────────────────────────
   const [isListening, setIsListening] = useState(false)
-  const recognitionRef = useRef(null)
+  // Dictation records locally and transcribes on OUR backend. It used the
+  // Web Speech API, which in Chromium streams microphone audio to Google's
+  // servers -- hard constraint #1 -- and worked on any networked machine.
+  const recorderRef = useRef(null)
+  const audioChunksRef = useRef([])
   const audioStreamRef = useRef(null)
   const textareaRef = useRef(null)
   const [interimTranscript, setInterimTranscript] = useState('')
@@ -266,12 +270,12 @@ export function ChatPane() {
     }
   }, [draft])
 
-  // Clean up speech recognition on unmount
+  // Stop any recording on unmount
   useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
         try {
-          recognitionRef.current.stop()
+          recorderRef.current.stop()
         } catch (e) {}
       }
     }
@@ -309,8 +313,8 @@ export function ChatPane() {
 
   useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop() } catch (e) {}
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+        try { recorderRef.current.stop() } catch (e) {}
       }
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach((t) => t.stop())
@@ -318,56 +322,78 @@ export function ChatPane() {
     }
   }, [])
 
-  // Confirm voice dictation: commit transcribed text and restore normal composer
-  const confirmListening = () => {
-    if (recognitionRef.current) {
+  // Stop the recorder and resolve with the recorded audio (or null).
+  const stopRecorder = () =>
+    new Promise((resolve) => {
+      const rec = recorderRef.current
+      recorderRef.current = null
+      if (!rec || rec.state === 'inactive') {
+        resolve(null)
+        return
+      }
+      rec.onstop = () => {
+        const chunks = audioChunksRef.current
+        audioChunksRef.current = []
+        resolve(chunks.length ? new Blob(chunks, { type: rec.mimeType || 'audio/webm' }) : null)
+      }
       try {
-        recognitionRef.current.onend = null
-        recognitionRef.current.stop()
-      } catch (e) {}
-      recognitionRef.current = null
-    }
+        rec.stop()
+      } catch (e) {
+        resolve(null)
+      }
+    })
 
+  const releaseMicrophone = () => {
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => track.stop())
       audioStreamRef.current = null
     }
+  }
 
-    // Append session transcription to base draft
-    const fullSessionText = (sessionTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim()
-    if (fullSessionText) {
-      setDraft((prev) => {
-        const base = baseDraftRef.current || ''
-        const spacing = base && !base.endsWith(' ') && !base.endsWith('\n') ? ' ' : ''
-        return base + spacing + fullSessionText
-      })
-    }
-
+  // Confirm voice dictation: transcribe LOCALLY, then append to the draft.
+  const confirmListening = async () => {
+    const blob = await stopRecorder()
+    releaseMicrophone()
+    setIsListening(false)
     setInterimTranscript('')
     setSessionTranscript('')
-    setIsListening(false)
+
+    if (blob && blob.size > 0) {
+      showToast('Transcribing on this machine…', 'info')
+      try {
+        const audioBase64 = await readFileAsBase64(blob)
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audioBase64, mimeType: blob.type || 'audio/webm' }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+        const spoken = (data.text || '').trim()
+        if (spoken) {
+          setDraft(() => {
+            const base = baseDraftRef.current || ''
+            const spacing = base && !base.endsWith(' ') && !base.endsWith('\n') ? ' ' : ''
+            return base + spacing + spoken
+          })
+        } else {
+          showToast('No speech was recognised in the recording', 'warning')
+        }
+      } catch (err) {
+        showToast(`Local transcription failed: ${String(err?.message || err).slice(0, 120)}`, 'error')
+      }
+    }
 
     setTimeout(() => {
       textareaRef.current?.focus()
     }, 50)
   }
 
-  // Cancel voice dictation: discard recorded speech and restore previous composer text
-  const cancelListening = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.onend = null
-        recognitionRef.current.stop()
-      } catch (e) {}
-      recognitionRef.current = null
-    }
-
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach((track) => track.stop())
-      audioStreamRef.current = null
-    }
-
-    // Discard any transcribed speech from this session and restore snapshot
+  // Cancel voice dictation: discard the recording and restore previous composer text
+  const cancelListening = async () => {
+    await stopRecorder()
+    audioChunksRef.current = []
+    releaseMicrophone()
     setDraft(baseDraftRef.current || '')
     setInterimTranscript('')
     setSessionTranscript('')
@@ -409,64 +435,25 @@ export function ChatPane() {
       return
     }
 
-    // 3. Initialize SpeechRecognition if available
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition()
-        recognition.continuous = true
-        recognition.interimResults = true
-        recognition.lang = 'en-US'
-
-        recognition.onstart = () => {
-          // Recognition started
-        }
-
-        recognition.onresult = (event) => {
-          let currentFinal = ''
-          let currentInterim = ''
-
-          for (let i = 0; i < event.results.length; i++) {
-            const chunk = event.results[i][0]?.transcript || ''
-            if (event.results[i].isFinal) {
-              currentFinal += chunk + ' '
-            } else {
-              currentInterim += chunk
-            }
-          }
-
-          setInterimTranscript(currentInterim)
-          if (currentFinal) {
-            setSessionTranscript(currentFinal.trim())
-          }
-        }
-
-        recognition.onerror = (event) => {
-          console.warn('Speech recognition event:', event.error)
-          if (event.error === 'no-speech') {
-            // Silence detected; do not abort, let user speak when ready
-            return
-          }
-          if (event.error === 'network') {
-            // Chromium Web Speech API requires Google cloud endpoint.
-            // In air-gapped / local networks, notify user that live audiogram continues
-            showToast('Air-gapped mode: cloud STT endpoint unreachable, live audiogram active', 'info')
-          } else if (event.error !== 'aborted') {
-            showToast(`Voice recognition: ${event.error}`, 'warning')
-          }
-        }
-
-        recognition.onend = () => {
-          // If still recording, keep state
-        }
-
-        recognitionRef.current = recognition
-        recognition.start()
-      } catch (err) {
-        console.warn('SpeechRecognition start failed:', err)
+    // 3. Record locally. Transcription happens on confirm, on our backend.
+    if (typeof MediaRecorder === 'undefined') {
+      showToast('Recording is not supported in this browser', 'error')
+      releaseMicrophone()
+      return
+    }
+    try {
+      audioChunksRef.current = []
+      const recorder = new MediaRecorder(stream)
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) audioChunksRef.current.push(event.data)
       }
-    } else {
-      showToast('Web Speech API not supported; live audiogram active', 'info')
+      recorder.start(250)
+      recorderRef.current = recorder
+    } catch (err) {
+      console.warn('MediaRecorder start failed:', err)
+      showToast('Could not start recording', 'error')
+      releaseMicrophone()
+      return
     }
 
     setIsListening(true)

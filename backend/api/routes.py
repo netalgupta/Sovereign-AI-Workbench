@@ -1664,6 +1664,67 @@ def list_tools(category: str | None = Query(None)) -> dict:
     }
 
 
+class TranscribeRequest(BaseModel):
+    audioBase64: str
+    mimeType: str = "audio/webm"
+
+
+# Recorded dictation is short. A cap keeps a stuck recorder from posting
+# minutes of audio into a synchronous request.
+_MAX_DICTATION_BYTES = 25 * 1024 * 1024
+_AUDIO_SUFFIX = {
+    "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav",
+    "audio/mp4": ".m4a", "audio/mpeg": ".mp3",
+}
+
+
+@router.post("/transcribe")
+def transcribe_dictation(body: TranscribeRequest) -> dict:
+    """Speech-to-text for composer dictation, ON THIS MACHINE.
+
+    HARD CONSTRAINT #1. Dictation used the browser's Web Speech API, and
+    Chromium implements that by streaming microphone audio to Google's
+    speech servers -- the code said as much ("requires Google cloud
+    endpoint"). On any networked machine it worked, which means the
+    operator's voice left the building on every dictation. Audio now comes
+    here and is transcribed by the local faster-whisper model
+    (transcribe_voice_note), in a temporary file deleted afterwards. The
+    recording is not added to the corpus.
+    """
+    import base64
+    import binascii
+    import os
+    import tempfile
+
+    try:
+        data = base64.b64decode(body.audioBase64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(400, detail=f"audio is not valid base64: {exc}") from exc
+    if not data:
+        raise HTTPException(400, detail="no audio received")
+    if len(data) > _MAX_DICTATION_BYTES:
+        raise HTTPException(413, detail="recording too long to transcribe in one request")
+
+    suffix = _AUDIO_SUFFIX.get(body.mimeType.split(";")[0].strip().lower(), ".webm")
+    handle, path = tempfile.mkstemp(suffix=suffix, prefix="dictation-")
+    try:
+        with os.fdopen(handle, "wb") as f:
+            f.write(data)
+        from backend.tools.audio.voice_transcription import transcribe_voice_note
+
+        result = transcribe_voice_note(path)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reported, never guessed around
+        raise HTTPException(500, detail=f"local transcription failed: {type(exc).__name__}: {exc}") from exc
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return {"text": result.full_text.strip(), "language": result.language, "engine": "faster-whisper (local)"}
+
+
 class ToolCallRequest(BaseModel):
     name: str
     arguments: dict = {}
