@@ -131,6 +131,30 @@ def register_all() -> None:
     except ImportError:
         pass
 
+    try:
+        from backend.tools.vision.defect_detection import detect_defects
+
+        tool(
+            name="detect_defects",
+            # THE DESCRIPTION IS WHAT THE MODEL BELIEVES. It said "Detect
+            # defect/anomaly regions", so asked to find defects in a photo the
+            # agent would report pump nameplates as defects. It does not
+            # detect defects: it returns where the printed text is.
+            description=(
+                "Return the regions of PRINTED TEXT on an inspection image, as "
+                "overlay-ready boxes with the text and its OCR confidence. THIS IS "
+                "NOT A DEFECT DETECTOR: no model here recognises corrosion, cracks or "
+                "leaks yet. Never describe these regions as defects or anomalies; if "
+                "asked to find defects, say that defect detection is not available. "
+                "Fully offline."
+            ),
+            category="vision",
+            priority="🟡",
+            tools_md_row=7,
+        )(detect_defects)
+    except ImportError:
+        pass
+
     # ---- audio -----------------------------------------------------------
 
     try:

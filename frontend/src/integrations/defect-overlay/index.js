@@ -1,7 +1,5 @@
 import React from 'react'
-// Teammate swap: change the import below to:
-// import Component from './DefectOverlay'
-import Component from './Placeholder'
+import Component from './DefectOverlay'
 
 import { validateProps } from './contract'
 export * from './contract'

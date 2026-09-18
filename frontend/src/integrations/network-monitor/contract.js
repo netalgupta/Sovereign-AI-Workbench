@@ -5,17 +5,31 @@
  *
  * Real NetworkMonitor component MUST accept exactly this shape:
  * {
- *   status?: 'secure' | 'warning' | 'external_detected' | 'checking',
- *   externalCount?: number,     // 0 = green dot, >0 = RED immediately
+ *   status?: 'secure' | 'external_detected' | 'checking' | 'unreachable',
+ *   externalCount?: number,     // THIS APP ONLY. 0 = green dot, >0 = RED immediately
  *   connections?: NetworkConnection[],
  *   metrics?: SystemMetrics,
  *   mode?: 'bar' | 'full' | 'widget', // 'bar' for chat footer, 'full' for /monitor route
  *   onViewFullMonitor?: () => void,
  * }
  *
- * Anti-hallucination note from CARD 07:
- * This must NEVER be a static/hardcoded display — wire it directly to CARD 07's
- * live websocket feed.
+ * The component self-polls GET /api/network/status at ~1s (the documented
+ * live-feed contract — backend/main.py), so `status`, `externalCount`,
+ * `connections` and `metrics` are optional initial overrides and are never
+ * hardcoded in the UI.
+ *
+ * Anti-hallucination note from CARD 07 + backend/audit/network_monitor.py:
+ * This must NEVER be a static/hardcoded display, and never a green
+ * "air-gap secure" claim when the backend is unreachable. It is wired to
+ * the live /api/network/status feed.
+ *
+ * ALARM SEMANTICS: the response carries BOTH `externalCount` (this
+ * application's process tree — the alarm input) and `hostExternalCount`
+ * (whole machine, incl. browser/IDE/OS — context only). The UI drives the
+ * red alarm SOLELY from `externalCount`; `hostExternalCount` is rendered
+ * as clearly-labelled context and must never change the status color.
+ * Historical bug this replaces: the UI alarmed on 44 host-wide connections
+ * owned by Chrome/Spotify/Teams while the product itself had zero egress.
  *
  * @typedef {Object} NetworkConnection
  * @property {string} id - Unique connection identifier
@@ -32,12 +46,14 @@
  * @property {string} networkRate - Current transfer rate string (e.g. "0.0 MB/s")
  *
  * @typedef {Object} NetworkMonitorProps
- * @property {'secure' | 'warning' | 'external_detected' | 'checking'} [status='secure'] - Air-gap security status
- * @property {number} [externalCount=0] - Number of external connections (0 = green, >0 = red)
+ * @property {'secure' | 'external_detected' | 'checking' | 'unreachable'} [status='checking'] - Air-gap security status
+ * @property {number} [externalCount] - External connections, THIS APP ONLY (0 = green, >0 = red)
  * @property {NetworkConnection[]} [connections=[]] - Active socket list
  * @property {SystemMetrics} [metrics] - Real-time system resource metrics
  * @property {'bar' | 'full' | 'widget'} [mode='bar'] - Display mode
  * @property {() => void} [onViewFullMonitor] - Handler to navigate to full /monitor route
+ * @property {number} [hostExternalCount] - Machine-wide external count (context only, never an alarm input)
+ * @property {string} [hostNote] - Clarifying label for the host figure
  */
 
 /**
@@ -56,52 +72,4 @@ export function validateProps(props) {
     return false
   }
   return true
-}
-
-export const CANONICAL_NETWORK_STATE = {
-  status: 'secure',
-  externalCount: 0,
-  metrics: {
-    cpuPercent: 14,
-    memoryGb: 3.8,
-    networkRate: '0.0 MB/s',
-  },
-  connections: [
-    {
-      id: 'conn-1',
-      local_addr: '127.0.0.1:5173',
-      remote_addr: '127.0.0.1:54320',
-      status: 'ESTABLISHED',
-      is_external: false,
-      process: 'vite',
-      timestamp: '2026-09-10 14:30:00',
-    },
-    {
-      id: 'conn-2',
-      local_addr: '127.0.0.1:8000',
-      remote_addr: '127.0.0.1:54321',
-      status: 'LISTEN',
-      is_external: false,
-      process: 'uvicorn (fastapi)',
-      timestamp: '2026-09-10 14:30:00',
-    },
-    {
-      id: 'conn-3',
-      local_addr: '127.0.0.1:11434',
-      remote_addr: '127.0.0.1:54322',
-      status: 'LISTEN',
-      is_external: false,
-      process: 'ollama-runner',
-      timestamp: '2026-09-10 14:30:00',
-    },
-    {
-      id: 'conn-4',
-      local_addr: '127.0.0.1:19530',
-      remote_addr: '127.0.0.1:54323',
-      status: 'ESTABLISHED',
-      is_external: false,
-      process: 'faiss-worker-process',
-      timestamp: '2026-09-10 14:30:00',
-    },
-  ],
 }

@@ -65,35 +65,3 @@ export function validateProps(props) {
   }
   return true
 }
-
-export const CANONICAL_DEFECT_SAMPLE = {
-  imageUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=800&q=80',
-  detections: [
-    {
-      id: 'det-01',
-      label: 'Pipe Flange Corrosion',
-      confidence: 0.94,
-      severity: 'high',
-      box: { xmin: 0.25, ymin: 0.3, xmax: 0.55, ymax: 0.65 },
-    },
-    {
-      id: 'det-02',
-      label: 'Insulation Degradation',
-      confidence: 0.88,
-      severity: 'medium',
-      box: { xmin: 0.62, ymin: 0.45, xmax: 0.85, ymax: 0.75 },
-    },
-  ],
-  findings: [
-    {
-      id: 'find-01',
-      detectionId: 'det-01',
-      description: 'Severe pitting corrosion noted along the weld neck flange of line HCU-FL-102.',
-    },
-    {
-      id: 'find-02',
-      detectionId: 'det-02',
-      description: 'Moisture ingress behind mineral wool jacketing, potential CUI risk.',
-    },
-  ],
-}

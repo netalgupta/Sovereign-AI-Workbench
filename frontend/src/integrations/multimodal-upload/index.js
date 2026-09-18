@@ -1,7 +1,5 @@
 import React from 'react'
-// Teammate swap: change the import below to:
-// import Component from './MultimodalUpload'
-import Component from './Placeholder'
+import Component from './MultimodalUpload'
 
 import { validateProps } from './contract'
 export * from './contract'

@@ -35,9 +35,10 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
 import { useIngestionStore } from '../../store/ingestionStore'
-import { sendMessageStream } from '../../lib/api'
+import { sendMessageStream, uploadFilesToCorpus, analyseAttachment } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
+import { NetworkMonitorBar } from '../../integrations/network-monitor'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
 
@@ -89,6 +90,10 @@ export function ChatPane() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
+
+  // Files queued via the MultimodalUpload integration (§3.13). Each item's
+  // status/progress is driven ONLY by the real upload/OCR steps below.
+  const [attachments, setAttachments] = useState([])
 
   // Top tabs: Chat / Notebooks / Artifacts
   const [activeTab, setActiveTab] = useState('chat')
@@ -181,6 +186,7 @@ export function ChatPane() {
     e.target.value = ''
 
     const newAttachments = []
+    const mediaAttachments = []
     for (const file of fileList) {
       let previewUrl = null
       let textContent = null
@@ -200,6 +206,21 @@ export function ChatPane() {
           textContent = await file.text()
         } catch {}
       }
+      // Images and audio go through the REAL pipeline on send: uploaded into
+      // the corpus, then OCR / transcription through the registered tools.
+      // Only small text files are pasted inline, as before.
+      if (file.type.startsWith('image/') || file.type.startsWith('audio/')) {
+        mediaAttachments.push({
+          id: `media_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          file,
+          name: file.name,
+          size: file.size,
+          previewUrl,
+          status: 'queued',
+          progress: 0,
+        })
+        continue
+      }
       newAttachments.push({
         id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
         name: file.name,
@@ -209,8 +230,9 @@ export function ChatPane() {
         textContent,
       })
     }
+    if (mediaAttachments.length) setAttachments((prev) => [...prev, ...mediaAttachments])
     setTemporaryAttachments((prev) => [...prev, ...newAttachments])
-    showToast(`Attached ${newAttachments.length} temporary ${label || 'file'}(s) to this message`, 'info')
+    showToast(`Attached ${newAttachments.length + mediaAttachments.length} file(s) to this message`, 'info')
   }
 
   // Detect code or markdown structure in draft
@@ -588,7 +610,8 @@ export function ChatPane() {
     suggest_mitigation(cool_quench=True)`
 
   const handleSend = async () => {
-    if ((!draft.trim() && temporaryAttachments.length === 0) || isPending || awaitingHumanApproval) return
+    const hasAttachments = attachments.length > 0
+    if ((!draft.trim() && temporaryAttachments.length === 0 && !hasAttachments) || isPending || awaitingHumanApproval) return
     let text = draft.trim()
 
     if (temporaryAttachments.length > 0) {
@@ -606,7 +629,98 @@ export function ChatPane() {
     }
 
     setDraft('')
-    addMessage('user', text)
+
+    // ── Attachment pipeline before sending (real upload + OCR/vision) ──
+    // Uploads write the file into the corpus (so grounded answers can cite
+    // it), then images/audio run through the registered vision tools. Every
+    // tool event below carries genuine backend output; a failure becomes a
+    // visible 'failed' event instead of a silent pretend success.
+    let pipelineEvents = []
+    if (hasAttachments) {
+      setAttachments((prev) => prev.map((a) => ({ ...a, status: 'uploading', progress: 10 })))
+
+      const saved = new Map()
+      try {
+        const up = await uploadFilesToCorpus(attachments)
+        ;(up.saved || []).forEach((s) => {
+          const p = s.path || s.fullPath || ''
+          if (p) saved.set(s.name, p)
+        })
+        pipelineEvents.push({
+          tool_name: 'source_ingest',
+          status: 'done',
+          output: {
+            count: up.count,
+            total_chunks: up.total_chunks,
+            message: up.message || '',
+          },
+        })
+      } catch (err) {
+        pipelineEvents.push({
+          tool_name: 'source_ingest',
+          status: 'failed',
+          error: String(err?.message || err).slice(0, 240),
+        })
+      }
+
+      const toolFor = (name) => {
+        const ext = (name || '').toLowerCase().split('.').pop()
+        if (['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)) return 'detect_defects'
+        if (['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)) return 'transcribe_voice_note'
+        return 'source_ingest'
+      }
+
+      for (const a of attachments) {
+        const path = saved.get(a.name)
+        if (!path) {
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'error' } : i)))
+          continue
+        }
+        setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'processing' } : i)))
+        try {
+          const tool = toolFor(a.name)
+          if (tool === 'source_ingest') {
+            setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))
+            continue
+          }
+          const result = await analyseAttachment(a, path)
+          if (result) {
+            pipelineEvents.push({
+              tool_name: tool,
+              status: 'done',
+              // Keep every overlay-relevant field. The DefectOverlay mounts
+              // only when the event carries `detections` AND an
+              // `image_url`/`imageUrl`; a pipeline event that stripped
+              // down to full_text alone would render no boxes.
+              output: {
+                ...(result.full_text !== undefined
+                  ? { full_text: String(result.full_text).slice(0, 6000) }
+                  : {}),
+                ...(result.detections !== undefined ? { detections: result.detections } : {}),
+                ...(result.image_url !== undefined ? { image_url: result.image_url } : {}),
+                ...(result.imageUrl !== undefined ? { imageUrl: result.imageUrl } : {}),
+                ...(result.findings !== undefined ? { findings: result.findings } : {}),
+              },
+            })
+          }
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))
+        } catch (err) {
+          setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'error' } : i)))
+          pipelineEvents.push({
+            tool_name: toolFor(a.name),
+            status: 'failed',
+            error: String(err?.message || err).slice(0, 240),
+          })
+        }
+      }
+    }
+
+    const names = attachments.map((a) => a.name)
+    const userText = hasAttachments && !text ? `Analyse the attached file${names.length > 1 ? 's' : ''}: ${names.join(', ')}` : text
+    const attachNote =
+      hasAttachments && text ? `\n\n_Attached: ${names.join(', ')}_` : ''
+    addMessage('user', userText + attachNote)
+
     setIsPending(true)
 
     // Add the assistant message immediately with streaming=true so MessageBubble
@@ -615,9 +729,13 @@ export function ChatPane() {
     const startTime = Date.now()
     const msgId = addMessage('assistant', '', {
       streaming: true,
+      // The attachment pipeline above ran BEFORE the stream: upload into the
+      // corpus, then OCR/vision per file. Seed its events into the trace so
+      // the thinking-block renders what actually happened to the attachments
+      // rather than nothing.
       citations: [],
-      toolCallEvents: [],
-      userRequest: text,
+      toolCallEvents: [...pipelineEvents],
+      userRequest: userText,
       plan: [],
       verification: null,
       route: null,
@@ -625,7 +743,7 @@ export function ChatPane() {
     })
 
     try {
-      await sendMessageStream(text, sessionId, {
+      await sendMessageStream(userText, sessionId, {
         onPlan: (planEv) => {
           // Receive the plan DAG emitted before any tool work starts.
           // Normalise the step_id field (backend uses step_id, not id).
@@ -748,6 +866,8 @@ export function ChatPane() {
       finishStreaming(msgId)
     } finally {
       setIsPending(false)
+      attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
+      setAttachments([])
     }
   }
 
@@ -1283,8 +1403,31 @@ export function ChatPane() {
           {/* Input field (Multi-line auto-resizing textarea with code/markdown detection) */}
           <div className="flex-1 flex flex-col min-w-0 py-0.5">
             {/* Temporary Attachment Chips */}
-            {temporaryAttachments.length > 0 && (
+            {(temporaryAttachments.length > 0 || attachments.length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5 mb-2 px-1">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: att.status === 'error' ? 'var(--color-danger, #C8413B)' : 'var(--color-border)',
+                      color: 'var(--color-text)',
+                    }}
+                    title={att.status === 'error' ? 'Upload or analysis failed' : `Status: ${att.status}`}
+                  >
+                    <FileText size={11} className="text-[var(--color-accent)]" />
+                    <span className="font-medium truncate max-w-[120px]">{att.name}</span>
+                    <span className="text-[9px] text-[var(--color-text-muted)]">{att.status}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== att.id))}
+                      className="w-3.5 h-3.5 rounded flex items-center justify-center hover:bg-[var(--color-overlay)] text-[var(--color-text-muted)] hover:text-red-500 cursor-pointer"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
                 {temporaryAttachments.map((att) => (
                   <div
                     key={att.id}
@@ -1451,9 +1594,13 @@ export function ChatPane() {
             type="button"
             id="chat-composer-send-btn"
             onClick={handleSend}
-            disabled={!draft.trim() || isPending || awaitingHumanApproval}
+            disabled={
+              (!draft.trim() && attachments.length === 0 && temporaryAttachments.length === 0) || isPending || awaitingHumanApproval
+            }
             className={`w-8 h-8 rounded-md flex items-center justify-center text-white transition-fast shadow-xs flex-shrink-0 ${
-              awaitingHumanApproval || !draft.trim() ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+              awaitingHumanApproval || (!draft.trim() && attachments.length === 0 && temporaryAttachments.length === 0)
+                ? 'cursor-not-allowed opacity-40'
+                : 'cursor-pointer'
             }`}
             style={{
               background: 'var(--color-accent)',
@@ -1466,6 +1613,9 @@ export function ChatPane() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Live network monitor bar (Sahil, §3.9): polls /api/network/status. */}
+      <NetworkMonitorBar />
     </div>
   )
 }

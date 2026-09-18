@@ -96,6 +96,100 @@ export async function getNetworkStatus() {
   return null
 }
 
+/**
+ * Read a native File as base64 for the upload endpoint.
+ * @param {File} file
+ * @returns {Promise<string>} base64 payload (no data: prefix)
+ */
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * Upload files to the corpus (POST /api/sources/upload). The backend writes
+ * them into MRPL_RAG_Test_Corpus/07_User_Uploads, then chunks + embeds them
+ * into FAISS so later grounded answers can cite them.
+ *
+ * @param {Array<{ name: string, file?: File, size?: number }>} files
+ * @returns {Promise<object>} { success, count, total_chunks, details, saved, message }
+ */
+export async function uploadFilesToCorpus(files) {
+  const items = []
+  for (const f of files) {
+    const contentBase64 = await fileToBase64(f.file || f)
+    items.push({ name: f.name, contentBase64, sizeBytes: f.size })
+  }
+  const res = await fetch('/api/sources/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: items }),
+  })
+  if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Call a registered tool (POST /api/tools/call). Returns the tool's result,
+ * already unwrapped from the `{ result }` envelope.
+ * @param {string} name
+ * @param {object} args
+ */
+export async function callTool(name, args) {
+  const res = await fetch('/api/tools/call', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, arguments: args }),
+  })
+  if (!res.ok) throw new Error(`Tool ${name} failed: HTTP ${res.status}`)
+  const data = await res.json()
+  return data.result
+}
+
+// name -> { is_estimate, category } fetched once from /api/tools and cached.
+// Used to visibly label any tool output that is a model estimate (the vision
+// chart reader, measured doses of fabricated values — CHART_STRESS_REPORT.md).
+let cachedToolsMeta = null
+export async function getToolsMetadata() {
+  if (cachedToolsMeta) return cachedToolsMeta
+  try {
+    const res = await fetch('/api/tools')
+    if (res.ok) {
+      const data = await res.json()
+      cachedToolsMeta = Object.fromEntries(
+        (data.tools || []).map((t) => [
+          t.name,
+          { is_estimate: Boolean(t.is_estimate), category: t.category },
+        ])
+      )
+    }
+  } catch {}
+  return cachedToolsMeta || {}
+}
+
+/**
+ * Route an uploaded attachment through the OCR/defect pipeline.
+ * Images -> detect_defects (row 7: overlay-ready boxes labeled from OCR,
+ * fully offline). Audio -> transcribe_voice_note. Other types (PDF/DOCX/
+ * XLSX) are handled solely by corpus ingestion, so no tool call is needed.
+ *
+ * @param {{ name: string }} item
+ * @param {string} savedPath - server-side path returned by the upload
+ * @returns {Promise<object|null>} tool result, or null when no vision read applies
+ */
+export async function analyseAttachment(item, savedPath) {
+  const ext = (item.name || '').toLowerCase().split('.').pop()
+  const isImage = ['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)
+  const isAudio = ['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)
+  if (isImage) return callTool('detect_defects', { image_path: savedPath })
+  if (isAudio) return callTool('transcribe_voice_note', { audio_path: savedPath })
+  return null
+}
+
 // A full agent turn on this hardware is retrieval + a 14B reasoning
 // generation + a verification pass, all CPU-bound. Measured end to end
 // on the dev box: 69 seconds for a short question, and longer once

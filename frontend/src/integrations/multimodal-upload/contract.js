@@ -55,14 +55,3 @@ export function validateProps(props) {
   }
   return true
 }
-
-export const CANONICAL_UPLOAD_SAMPLE = [
-  {
-    id: 'sample-scan-1',
-    name: 'refinery_flange_leak_scan.png',
-    size: 2450000,
-    previewUrl: '',
-    status: 'ready',
-    progress: 100,
-  },
-]

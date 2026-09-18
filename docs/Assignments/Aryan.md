@@ -3,7 +3,7 @@
 ## Scope of Ownership
 - Model registry design + router/classifier logic (TOOLS.md §C, items 20-22)
 - Hybrid RAG + GraphRAG pipeline, entity/relationship extraction (TOOLS.md §B, items 12-14, 17)
-- Vision model integration (Qwen2.5-VL wiring, not the UI around it — that's Sahil's)
+- Vision model integration (Qwen2.5-VL wiring, not the UI around it — that's Sahil's; note **TOOLS.md row 7 defect/anomaly detection moved to Sahil in full — model AND overlay**, you support the `detect_defects` tool's printed-OCR source, you do not own the detector)
 - Math tool wiring into the agent's tool-call layer (TOOLS.md §D)
 - Overall technical direction and architecture sign-off (SYSTEM.md is your document to keep accurate)
 - Final say on model selection/quantization tradeoffs given the RTX 4060 constraint (DEPENDENCIES.md §1)
