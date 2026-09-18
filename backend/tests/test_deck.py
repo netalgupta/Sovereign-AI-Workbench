@@ -313,3 +313,58 @@ def test_nothing_retrieved_is_a_refusal(monkeypatch):
     monkeypatch.setattr(gr, "retrieve_with_grounding_check", lambda *a, **k: _Nothing())
     with pytest.raises(D.NotInCorpus):
         D.anchor_documents(object(), [], "the plot of Pride and Prejudice")
+
+
+# ── refusing a request the corpus cannot answer ─────────────────────────────
+
+
+def test_topic_coverage_catches_a_semantically_close_but_wrong_document():
+    """MEASURED: "our retail fuel station marketing strategy for Diwali"
+    cleared the cosine gate against a PDF about the Jan Dhan Yojana, and
+    the deck was titled for Diwali and written about financial inclusion."""
+    pmjdy = [{"text": "PMJDY financial inclusion scheme targets 7.5 crore households with bank accounts."}]
+    coverage, missing = D.topic_coverage(
+        "Create a presentation on our retail fuel station marketing strategy for Diwali", pmjdy)
+    assert coverage < D.MIN_TOPIC_COVERAGE
+    assert "diwali" in missing
+
+    ccr = [{"text": "Inspection Report CCR-1 Regeneration Cycle 18 findings: duration 34 hours."}]
+    coverage, _ = D.topic_coverage("Make a deck on CCR-1 regeneration cycle findings", ccr)
+    assert coverage >= D.MIN_TOPIC_COVERAGE
+
+
+def _no_model_calls(monkeypatch):
+    def fail(*_a, **_k):
+        raise AssertionError("no deck may be planned for a request the corpus cannot answer")
+    monkeypatch.setattr(D, "plan_storyline", fail)
+    monkeypatch.setattr(D, "fill_section", fail)
+
+
+def test_a_request_the_sources_do_not_mention_is_refused_before_planning(monkeypatch):
+    monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: [
+        {"id": "S1", "document": "Dhruvil.pdf", "pages": [1], "truncated": False,
+         "text": "PMJDY financial inclusion scheme targets 7.5 crore households."}])
+    _no_model_calls(monkeypatch)
+    with pytest.raises(D.NotInCorpus, match="do not cover"):
+        D.build_deck_spec("Create a presentation on our retail fuel station marketing strategy for Diwali",
+                          object(), [])
+
+
+def test_the_relevance_verdict_can_refuse_what_the_word_check_let_through(monkeypatch):
+    monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: [
+        {"id": "S1", "document": "x.pdf", "pages": [1], "truncated": False,
+         "text": "The regeneration cycle of a laptop battery, over many charge cycles."}])
+    monkeypatch.setattr(D, "_ask_json", lambda *a, **k: {"can_answer": False,
+                                                          "reason": "about laptop batteries"})
+    _no_model_calls(monkeypatch)
+    with pytest.raises(D.NotInCorpus, match="laptop batteries"):
+        D.build_deck_spec("Make a deck on CCR-1 regeneration cycle", object(), [])
+
+
+def test_a_sequence_filed_under_another_key_is_still_a_sequence():
+    """Seven process slides were dropped for an empty "steps" while the
+    model had filed the sequence under another name."""
+    slide, why = D.validate_slide({"type": "process", "title": "Shutdown and purge sequence for R-201",
+                                   "sequence": ["Depressurise R-201", "Purge with nitrogen"]}, DOCS)
+    assert slide is not None, why
+    assert slide["steps"] == [{"title": "Depressurise R-201"}, {"title": "Purge with nitrogen"}]

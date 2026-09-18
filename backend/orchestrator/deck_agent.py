@@ -220,10 +220,14 @@ def anchor_documents(store, chunks: list, request: str) -> list[dict]:
         if not text:
             text = "\n".join(c.text for c in result.chunks if c.source_document == name)
         allowance = min(MAX_CHARS_PER_DOC, budget)
+        # AT MOST FOUR PAGES. A 15-page document matched on every page
+        # printed "p.1, 2, 3, ... 15" under every slide, which is noise
+        # rather than a citation.
+        doc_pages = sorted(pages.get(name, []))[:4]
         docs.append({
             "id": f"S{i}",
             "document": name,
-            "pages": sorted(pages.get(name, [])),
+            "pages": doc_pages,
             "text": text[:allowance],
             "truncated": len(text) > allowance,
         })
@@ -231,6 +235,71 @@ def anchor_documents(store, chunks: list, request: str) -> list[dict]:
         if budget <= 0:
             break
     return docs
+
+
+# Stop words for the coverage check below. Deliberately small: the point
+# is to find the REQUEST'S OWN nouns in the documents, not to parse
+# English.
+_STOP = {
+    "a", "an", "the", "and", "or", "of", "for", "on", "in", "to", "our", "we", "us", "my",
+    "this", "that", "these", "those", "with", "from", "at", "by", "as", "is", "are", "was",
+    "were", "be", "about", "into", "over", "per", "its", "it", "their", "there", "here",
+    "what", "which", "who", "how", "why", "when", "where", "all", "any", "some", "more",
+    "make", "create", "prepare", "build", "generate", "draft", "give", "show", "tell",
+    "presentation", "deck", "slides", "slide", "powerpoint", "pptx", "ppt", "briefing",
+    "report", "summary", "overview", "please", "can", "you",
+}
+
+
+def topic_coverage(request: str, docs: list[dict]) -> tuple[float, list[str]]:
+    """What fraction of the request's own words appear in the sources.
+
+    A CHEAP CHECK THE COSINE GATE DOES NOT MAKE. The gate scores semantic
+    similarity, and on a small corpus an unrelated document can clear it:
+    MEASURED, "our retail fuel station marketing strategy for Diwali"
+    retrieved a PDF about the Pradhan Mantri Jan Dhan Yojana above
+    threshold, and the deck that followed was titled for Diwali and
+    written about financial inclusion.
+
+    Embeddings encode topic, not identity. Whether the words the person
+    actually used appear anywhere in the documents is a different
+    question, and it is the one that catches this.
+    """
+    words = {w for w in re.findall(r"[a-z0-9][a-z0-9/-]{2,}", topic_of(request).lower())
+             if w not in _STOP}
+    if not words:
+        return 1.0, []
+    haystack = " ".join(d["text"] for d in docs).lower()
+    missing = sorted(w for w in words if w not in haystack)
+    return (len(words) - len(missing)) / len(words), missing
+
+
+MIN_TOPIC_COVERAGE = 0.4
+
+
+def sources_can_answer(request: str, docs: list[dict]) -> tuple[bool, str]:
+    """Ask the model whether these documents can answer the request.
+
+    One call, before any planning. The alternative is what happened
+    without it: a full deck, correctly formatted and properly cited, on a
+    subject the sources do not discuss.
+    """
+    prompt = f"""Below are the only documents available. Decide whether they contain the
+information needed to make a presentation answering this request.
+
+REQUEST: "{request}"
+
+DOCUMENTS:
+{_sources_block(docs)}
+
+Answer honestly. If the documents are about a different subject, say no, even if they are
+interesting. Partial coverage of the REQUESTED subject counts as yes.
+
+Reply with ONLY: {{"can_answer": true or false, "reason": "one short sentence"}}"""
+    data = _ask_json(prompt, timeout=180)
+    if not isinstance(data, dict) or "can_answer" not in data:
+        return True, ""  # an unusable verdict must not block a good request
+    return bool(data.get("can_answer")), str(data.get("reason") or "")
 
 
 def _sources_block(docs: list[dict]) -> str:
@@ -444,6 +513,25 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
         ]
     if stype == "big_stat":
         out = {**out, **_dedupe_unit({"value": out.get("value"), "unit": out.get("unit")})}
+    # The list a type needs, under the other names a model files it: seven
+    # "process" slides were dropped for an empty "steps" while the model
+    # had put the sequence under another key.
+    list_aliases = {
+        "process": ("steps", ("sequence", "stages", "phases", "items", "procedure")),
+        "timeline": ("events", ("milestones", "phases", "items", "dates")),
+        "actions": ("items", ("actions", "recommendations", "next_steps", "tasks")),
+    }
+    if stype in list_aliases:
+        target, aliases = list_aliases[stype]
+        if not out.get(target):
+            for alias in aliases:
+                if isinstance(slide.get(alias), list) and slide[alias]:
+                    out[target] = slide[alias]
+                    break
+        if stype == "process" and isinstance(out.get("steps"), list):
+            out["steps"] = [{"title": st} if isinstance(st, str) else st for st in out["steps"]]
+        if stype == "actions" and isinstance(out.get("items"), list):
+            out["items"] = [{"action": it} if isinstance(it, str) else it for it in out["items"]]
     if stype == "points" and not out.get("bullets"):
         for alias in ("points", "text", "lines"):
             if isinstance(slide.get(alias), list):
@@ -544,6 +632,20 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
     import datetime as dt
 
     docs = anchor_documents(store, chunks, request)
+
+    coverage, missing = topic_coverage(request, docs)
+    if coverage < MIN_TOPIC_COVERAGE:
+        raise NotInCorpus(
+            "The documents in the corpus do not cover this request: none of them mention "
+            f"{', '.join(missing[:6])}. Nothing was generated."
+        )
+    answerable, why = sources_can_answer(request, docs)
+    if not answerable:
+        raise NotInCorpus(
+            f"The corpus does not contain what this request needs{': ' + why if why else ''}. "
+            "Nothing was generated."
+        )
+
     plan = plan_storyline(request, docs)
     if not plan:
         raise NotInCorpus(
