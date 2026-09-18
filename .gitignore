@@ -26,6 +26,7 @@ build/
 /models/ocr/
 /models/vision/
 /models/audio/
+/models/image/
 *.zip
 
 # Automated UI test & screenshot capture profiles
