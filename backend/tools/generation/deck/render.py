@@ -272,20 +272,52 @@ def _points(prs, ctx, sec_title, sd):
     pages = _chunks(bullets, MAX_BULLETS)
     for pi, page in enumerate(pages):
         s = _content_slide(prs, ctx, sec_title, sd, _cont(pi, len(pages)))
-        text_w = theme.CONTENT_W - (3.9 if callout and pi == 0 else 0) - 0.62
-        size = fit.fit_many(page, text_w, theme.BODY_H, theme.SIZE_BODY, theme.SIZE_BODY_MIN, 0.22) \
-            or theme.SIZE_BODY_MIN
-        y = theme.BODY_Y + 0.05
+        with_callout = bool(callout and pi == 0)
+        # FEW, SHORT POINTS BECOME CARDS. Two one-line bullets at the top of
+        # an otherwise empty slide looked unfinished -- MEASURED on a real
+        # incident deck. Up to three short statements read better as a row
+        # of numbered cards that use the page.
+        if not with_callout and 1 <= len(page) <= 3 and all(len(b) <= 130 for b in page):
+            _statement_cards(s, page, pi * MAX_BULLETS)
+            continue
+        text_w = theme.CONTENT_W - (3.9 if with_callout else 0) - 0.75
+        # Larger type when there is room: fit from 26pt down, so a short
+        # list fills the slide instead of hugging its top edge.
+        size = fit.fit_many(page, text_w, theme.BODY_H - 0.3, 26, theme.SIZE_BODY_MIN, 0.28)             or theme.SIZE_BODY_MIN
+        gap = 0.28 if size >= 20 else 0.22
+        block_h = sum(fit.text_height_in(b, text_w, size) for b in page) + gap * (len(page) - 1)
+        y = _centre_y(block_h)
+        marker = 0.36 if size < 20 else 0.44
         for i, b in enumerate(page):
             h = fit.text_height_in(b, text_w, size)
             n = pi * MAX_BULLETS + i + 1
-            P.oval(s, theme.MARGIN_X, y + 0.02, 0.36, C.teal_light)
-            P.text(s, theme.MARGIN_X, y + 0.02, 0.36, 0.36, str(n), size=11, colour=C.teal, weight="semibold",
-                   align="center", anchor="middle")
-            P.text(s, theme.MARGIN_X + 0.62, y, text_w, h + 0.05, b, size=size, colour=C.ink)
-            y += h + 0.22
-        if callout and pi == 0:
+            line_h = size * 1.18 / 72.0
+            my = y + max(0.0, (line_h - marker) / 2)
+            P.oval(s, theme.MARGIN_X, my, marker, C.teal_light)
+            P.text(s, theme.MARGIN_X, my, marker, marker, str(n), size=11 if marker < 0.4 else 13,
+                   colour=C.teal, weight="semibold", align="center", anchor="middle")
+            P.text(s, theme.MARGIN_X + 0.75, y, text_w, h + 0.05, b, size=size, colour=C.ink)
+            y += h + gap
+        if with_callout:
             _callout_panel(s, theme.PAGE_W - theme.MARGIN_X - 3.5, theme.BODY_Y, 3.5, theme.BODY_H - 0.3, callout)
+
+
+def _statement_cards(s, page: list[str], offset: int):
+    n = len(page)
+    gap = 0.35
+    w = (theme.CONTENT_W - gap * (n - 1)) / n
+    h = 3.4
+    y = _centre_y(h)
+    size = min(
+        (fit.fit_size(b, w - 0.8, h - 1.55, 22, 13, "regular", 1.22) or 13) for b in page
+    )
+    for i, b in enumerate(page):
+        x = theme.MARGIN_X + i * (w + gap)
+        P.rect(s, x, y, w, h, C.panel, radius=0.04)
+        P.rect(s, x, y, 0.08, h, C.teal)
+        P.text(s, x + 0.4, y + 0.35, 1.5, 0.7, f"{offset + i + 1:02d}", size=34, colour=C.teal, weight="light")
+        P.hline(s, x + 0.4, y + 1.15, x + 1.1, C.amber, 2.25)
+        P.text(s, x + 0.4, y + 1.4, w - 0.8, h - 1.6, b, size=size, colour=C.ink, line_spacing=1.22)
 
 
 def _callout_panel(s, x, y, w, h, callout: dict):

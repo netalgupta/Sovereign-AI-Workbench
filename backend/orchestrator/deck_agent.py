@@ -366,6 +366,10 @@ Plan the deck as a narrative an operations manager can follow. Rules:
 4. Use "chart" only where a source gives a value for each of several labelled periods.
 4a. A "process" slide holds the WHOLE sequence (3-5 steps), a "timeline" the whole run of
    events, an "actions" slide every action. NEVER one step, event or action per slide.
+4b. Choose the most VISUAL type the facts support: one decisive number -> "big_stat";
+   several readings -> "kpis"; readings against limits -> "table"; an ordered procedure ->
+   "process"; dated events -> "timeline"; an incident or breach -> "alert". Use "points" only
+   when nothing more specific fits, and never three "points" slides in a row.
 5. Use "alert" only for an incident, hazard, limit breach or interlock.
 6. If the sources recommend or require anything, the last section is an "actions" slide.
 7. Never plan a slide the sources cannot fill.
