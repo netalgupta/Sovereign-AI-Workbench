@@ -211,10 +211,11 @@ def _tools_for_chat() -> list[dict]:
 # tool it can possibly mean cuts the per-request schema payload ~70%
 # (measured: 7421 -> 2179 chars) and removes an entire class of
 # "model picked the wrong drafting tool" misroutes.
-_XLSX_SIGNAL = re.compile(
-    r"(?:\.xlsx|spreadsheet|excel|comparison table|comparison matrix|(?:build|draft|create|make)\b.*(?:table|matrix))",
-    re.IGNORECASE,
-)
+#
+# The spreadsheet signal lives in action_resolver.is_spreadsheet_request:
+# the interceptor resolves an Excel request to draft_xlsx with the SAME
+# decision, and the two must not drift (review rule #6 -- one
+# implementation on every path that reaches it).
 _DOCX_SIGNAL = re.compile(
     r"(?:\.docx|word document|text report|\bmemo\b|(?:build|draft|create|write)\b.*(?:document|report|memo))",
     re.IGNORECASE,
@@ -227,6 +228,7 @@ def _tools_for_request(request: str) -> list[dict]:
     Drafting requests (spreadsheet / Word) get exactly the two tools they
     can use; everything else gets the full curated chat set.
     """
+    from backend.orchestrator.action_resolver import is_spreadsheet_request
     from backend.tools import catalog  # noqa: F401  (registers everything)
     from backend.tools.registry import get_tool_schemas
 
@@ -235,7 +237,7 @@ def _tools_for_request(request: str) -> list[dict]:
     def offer(*names: str) -> list[dict]:
         return [by_name[n] for n in names if n in by_name]
 
-    if _XLSX_SIGNAL.search(request):
+    if is_spreadsheet_request(request):
         return offer("search_documents", "draft_xlsx")
     if _DOCX_SIGNAL.search(request):
         return offer("search_documents", "draft_docx")
