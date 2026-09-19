@@ -94,6 +94,41 @@ def _weight_bytes_by_device(model) -> dict[str, int]:
     return out
 
 
+def quantized_dir(cfg) -> Path | None:
+    """Where the pre-quantized copy of a quantized entry lives, or None."""
+    from backend.models.registry import weights_dir
+
+    if cfg.placement is None or cfg.placement.quantization == "none":
+        return None
+    full = weights_dir(cfg)
+    return full.with_name(f"{full.name}.{cfg.placement.quantization}")
+
+
+def _complete(d: Path) -> bool:
+    return (d / "config.json").exists() and any(d.glob("*.safetensors")) and (d / "DONE").exists()
+
+
+def prepare(model_id: str) -> Path:
+    """Quantize once and save, so later loads read ~5 GB instead of ~16 GB.
+
+    MEASURED: quantizing Qwen2.5-VL-7B at load reads every bf16 shard
+    through system RAM; free RAM fell to 154 MB on the 16 GB dev laptop.
+    Local compute only; nothing is downloaded. A `DONE` marker is written
+    last, so an interrupted save is never mistaken for a usable copy.
+    """
+    cfg = _config(model_id)
+    target = quantized_dir(cfg)
+    if target is None:
+        raise LocalVisionUnavailable(f"{model_id!r} is not quantized; nothing to prepare")
+    load(model_id)
+    with _lock:
+        target.mkdir(parents=True, exist_ok=True)
+        _loaded["model"].save_pretrained(str(target), safe_serialization=True)
+        _loaded["processor"].save_pretrained(str(target))
+        (target / "DONE").write_text("complete\n", encoding="utf-8")
+    return target
+
+
 def load(model_id: str) -> PlacementReport:
     """Load `model_id` (a models.yaml id) if not already loaded. Idempotent."""
     with _lock:
@@ -158,6 +193,12 @@ def load(model_id: str) -> PlacementReport:
                 llm_int8_enable_fp32_cpu_offload=True,
             )
         path = str(weights_dir(cfg))
+        prepared = quantized_dir(cfg)
+        if prepared is not None and _complete(prepared):
+            # Already quantized on disk: the quantization config travels in
+            # its config.json, and only the 4/8-bit weights are read.
+            path = str(prepared)
+            kwargs.pop("quantization_config", None)
         t0 = time.perf_counter()
         try:
             model = Qwen2_5_VLForConditionalGeneration.from_pretrained(path, **kwargs).eval()
@@ -224,3 +265,14 @@ def release() -> None:
     """Free the card. Call after a batch of reviews."""
     with _lock:
         _release_locked()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Prepare an in-process model (local compute, no download).")
+    parser.add_argument("--prepare", metavar="MODEL_ID", required=True,
+                        help="models.yaml id whose quantized copy to write, e.g. page-reviewer")
+    args = parser.parse_args()
+    print(f"Saved to {prepare(args.prepare)}")
+    release()

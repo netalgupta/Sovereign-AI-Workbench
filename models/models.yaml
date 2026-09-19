@@ -85,15 +85,27 @@
 
 - id: page-reviewer
   backend: transformers
-  # Reviews rendered deck pages (layout QA). Run IN-PROCESS, not through
-  # Ollama, because Ollama puts every Qwen2.5-VL layer on the CPU on the
-  # 8 GB card (it estimates 3b at 10.8 GB) and ignores num_gpu -- that is
-  # what froze the machine. Here the split is ours: `placement` below.
-  # Fetched once: python -m backend.ingestion.fetch_models --model Qwen/Qwen2.5-VL-3B-Instruct
-  model: Qwen/Qwen2.5-VL-3B-Instruct
+  # Reviews rendered deck pages (design QA). Run IN-PROCESS, not through
+  # Ollama: on the 8 GB card Ollama put every Qwen2.5-VL layer on the CPU
+  # (it estimated 7b at 13.4 GB, 3b at 10.8 GB) and ignored num_gpu --
+  # 145-183 s/page, RAM paged to disk, the machine froze. Here the split
+  # is ours (`placement`). Measured on 4 deliberately broken + 4 real pages:
+  #
+  #                      on GPU   s/page   broken   real   (mean /10)
+  #   ollama 7b            0%    145-183     -        -
+  #   3B fp16, 5.5 GiB    77%     14-30     2.4      4.2*
+  #   7B 4-bit, 6 GiB    100%      3-8      3.2      6.5
+  #   (* 3 of 4: 3B returned a range, "2-5", instead of one rating)
+  #
+  # 7B 4-bit: better judgement AND faster, because nothing streams from RAM.
+  # Fetched once: python -m backend.ingestion.fetch_models --model Qwen/Qwen2.5-VL-7B-Instruct
+  # Then quantize once (local, ~6 GB copy; loads in 14 s instead of 42 s and
+  # does not stream 16 GB of bf16 through RAM):
+  #   python -m backend.models.local_vision --prepare page-reviewer
+  model: Qwen/Qwen2.5-VL-7B-Instruct
   task_tags: [slide_review, image_understanding]
   placement:
-    gpu_memory_gib: 5.5
+    gpu_memory_gib: 6
     cpu_memory_gib: 4
-    quantization: none
+    quantization: 4bit
     max_image_pixels: 518400

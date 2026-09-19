@@ -202,3 +202,23 @@ def test_the_deck_score_covers_only_the_pages_the_reviewer_scored(monkeypatch):
     result = qa.assess("d.pptx")
     assert result.score == 7.0, "the unreviewed page must not count as 10"
     assert result.pages_reviewed == 2 and "2 of 3" in result.note
+
+
+def test_a_quantized_entry_has_a_prepared_copy_beside_its_weights(tmp_path, monkeypatch):
+    import backend.ingestion.model_cache as mc
+
+    monkeypatch.setattr(mc, "MODELS_ROOT", tmp_path)
+    q = R.ModelConfig(id="v", backend="transformers", model="org/vl", task_tags=["t"],
+                      placement={"gpu_memory_gib": 4, "cpu_memory_gib": 2, "quantization": "4bit"})
+    assert LV.quantized_dir(q) == tmp_path / "vision" / "org__vl.4bit"
+    full = q.model_copy(update={"placement": q.placement.model_copy(update={"quantization": "none"})})
+    assert LV.quantized_dir(full) is None
+
+
+def test_an_interrupted_prepare_is_not_used(tmp_path):
+    """The DONE marker is written last; weights without it are a partial save."""
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "model-00001-of-00002.safetensors").write_bytes(b"x")
+    assert LV._complete(tmp_path) is False
+    (tmp_path / "DONE").write_text("complete\n")
+    assert LV._complete(tmp_path) is True
