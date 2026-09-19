@@ -37,8 +37,21 @@ def _set_alpha(fill, alpha: float) -> None:
     el.set("val", str(int(alpha * 100000)))
 
 
+def _require_size(kind: str, w: float, h: float) -> None:
+    """Refuse a box PowerPoint cannot open.
+
+    python-pptx writes a negative extent without complaint and PowerPoint
+    then refuses the WHOLE FILE ("PowerPoint could not open the file").
+    Measured: a short alert computed its text height as h - 2.8 in and
+    shipped cy="-150266". Failing here names the layout at fault.
+    """
+    if not (w > 0 and h > 0):
+        raise ValueError(f"{kind} with non-positive size {w:.3f} x {h:.3f} in")
+
+
 def rect(slide, x, y, w, h, fill: str | None, *, line: str | None = None, line_pt: float = 0.75,
          radius: float | None = None, alpha: float | None = None, shape=None):
+    _require_size("rect", w, h)
     kind = shape or (MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE)
     s = slide.shapes.add_shape(kind, Inches(x), Inches(y), Inches(w), Inches(h))
     s.shadow.inherit = False
@@ -88,6 +101,8 @@ def text(slide, x, y, w, h, value, *, size: float, colour: str = theme.PALETTE.i
     `value` may be a string or a list of runs [(text, {size, colour, weight})]
     for mixed styling on one line (a number and its unit).
     """
+    if shape is None:
+        _require_size("text", w, h)
     box = shape or slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = box.text_frame
     tf.word_wrap = True
@@ -115,6 +130,7 @@ def text(slide, x, y, w, h, value, *, size: float, colour: str = theme.PALETTE.i
 
 def paragraphs(slide, x, y, w, h, items: list[str], *, size: float, colour: str = theme.PALETTE.ink,
                gap_pt: float = 8, line_spacing: float = 1.18, weight: str = "regular"):
+    _require_size("paragraphs", w, h)
     box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = box.text_frame
     tf.word_wrap = True

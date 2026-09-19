@@ -668,6 +668,10 @@ def _timeline(prs, ctx, sec_title, sd):
                        align="center", line_spacing=1.18)
 
 
+ALERT_BODY_TOP = 2.35  # panel top to the first line of column text
+ALERT_PAD = 0.35
+
+
 def _alert(prs, ctx, sec_title, sd):
     s = _content_slide(prs, ctx, sec_title, sd)
     status = theme.status_colours(sd.get("severity")) or (C.red, C.red_light)
@@ -675,7 +679,10 @@ def _alert(prs, ctx, sec_title, sd):
     col_w = (theme.CONTENT_W - 0.9 - 0.4 * (max(len(cols_preview), 1) - 1)) / max(len(cols_preview), 1)
     body_h = max((fit.text_height_in(t, col_w, 15, "regular", 1.25) for t in cols_preview), default=0.6)
     head_h = fit.text_height_in(sd.get("headline", ""), theme.CONTENT_W - 0.9, 22, "semibold", 1.12)
-    h = min(theme.BODY_H - 0.2, 1.6 + min(head_h, 0.95) + body_h)
+    # The panel is built from what goes in it, top to bottom: pill 0.35,
+    # headline from 0.8, column labels at 1.95, column text from 2.35 for
+    # its measured height, then 0.35 of padding.
+    h = min(theme.BODY_H - 0.2, ALERT_BODY_TOP + body_h + ALERT_PAD)
     y = _centre_y(h)
     P.rect(s, theme.MARGIN_X, y, theme.CONTENT_W, h, C.panel, radius=0.02)
     P.rect(s, theme.MARGIN_X, y, 0.12, h, status[0])
@@ -694,9 +701,11 @@ def _alert(prs, ctx, sec_title, sd):
     # ONE size for all three columns, fitted to the space left inside the
     # panel. Sized per column against a fixed height, long text ran out of
     # the panel and over the footer.
-    # 0.85 rather than a tight fit: measured line height runs a little
-    # under PowerPoint's, and the last line was landing on the panel edge.
-    avail = y + h - body_y - 0.85
+    # WAS `y + h - body_y - 0.85`, a margin added before line height was
+    # calibrated (LINE_EM): for a SHORT alert that is negative, and a
+    # negative text box makes PowerPoint refuse the whole file. Measured
+    # on a live deck. The space is now exactly what the panel was sized for.
+    avail = h - ALERT_BODY_TOP - ALERT_PAD
     body_size = min(
         (fit.fit_size(body, cw, avail, 15, 9, "regular", 1.25) or 9) for _label, body in cols
     ) if cols else 11

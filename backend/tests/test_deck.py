@@ -535,3 +535,63 @@ def test_powerpoint_measures_an_empty_page_as_empty(tmp_path):
     points_page = result["page_map"].index((0, 1)) + 1
     assert "empty" in measured["defects"][timeline_page]
     assert measured["defects"][points_page] == []
+
+
+# ── no layout may emit a box PowerPoint cannot open ─────────────────────────
+
+_SHORT_ALERT = {  # the live-deck slide that shipped cy="-150266"
+    "type": "alert", "title": "Chlorination Efficiency Trend Down", "sources": [], "severity": "high",
+    "headline": "Cycle 18 chlorination efficiency at 84%",
+    "what": "Trend shows decreasing efficiency for two consecutive cycles",
+    "impact": "May affect catalyst performance and regeneration effectiveness",
+    "action": "Dryer inspection before Cycle 19, moisture analyzer calibration"}
+
+
+def _every_layout(long: bool) -> list[dict]:
+    t = (lambda s: (s + " ") * 12) if long else (lambda s: s)
+    return [
+        {"type": "points", "title": "A finding worth a slide", "bullets": [t("One."), t("Two.")]},
+        {"type": "big_stat", "title": "One number carries it", "value": "84", "unit": "%",
+         "label": t("Efficiency"), "context": t("Below range."), "status": "below"},
+        {"type": "kpis", "title": "Parameters side by side",
+         "items": [{"value": "34", "unit": "h", "label": t("Cycle"), "note": t("Long")},
+                   {"value": "84", "unit": "%", "label": t("Cl"), "note": t("Low"), "status": "below"}]},
+        {"type": "chart", "title": "Batches by grade", "categories": ["A", "B", "C"],
+         "series": [{"name": "n", "values": [22, 16, 12]}], "takeaways": [t("A leads.")]},
+        {"type": "table", "title": "Against the limits", "columns": ["P", "V"], "rows": [[t("a"), "1"]]},
+        {"type": "process", "title": "The changeout sequence", "steps": [{"title": "Purge", "detail": t("N2")},
+                                                                        {"title": "Unload", "detail": t("x")}]},
+        {"type": "timeline", "title": "What happened when", "events": [
+            {"date": "Jul", "title": "Gasket", "detail": t("d")}, {"date": "Aug", "title": "Seals", "detail": t("d")}]},
+        _SHORT_ALERT if not long else {**_SHORT_ALERT, "what": t(_SHORT_ALERT["what"])},
+        {"type": "comparison", "title": "Two options set side by side",
+         "columns": [{"title": "A", "points": [t("p")]}, {"title": "B", "points": [t("q")]}]},
+        {"type": "actions", "title": "What must happen next",
+         "items": [{"action": t("Inspect"), "owner": "Ops", "due": "Aug", "priority": "high"}]},
+    ]
+
+
+@pytest.mark.parametrize("long", [False, True], ids=["short", "long"])
+def test_every_layout_renders_only_positive_boxes(tmp_path, long):
+    import re
+    import zipfile
+
+    spec = {"title": "Layout sweep", "sources": [],
+            "sections": [{"title": "All", "slides": [{**sl, "sources": []} for sl in _every_layout(long)]}]}
+    out = render.render_deck(spec, tmp_path / "d.pptx")
+    with zipfile.ZipFile(out["path"]) as z:
+        for name in z.namelist():
+            if name.startswith("ppt/slides/slide") and name.endswith(".xml"):
+                xml = z.read(name).decode("utf-8")
+                bad = re.findall(r'c[xy]="-\d+"', xml)
+                assert not bad, f"{name}: {bad[:3]}"
+
+
+def test_a_primitive_refuses_a_negative_box():
+    from pptx import Presentation as P_
+
+    from backend.tools.generation.deck import primitives
+
+    slide = P_().slides.add_slide(P_().slide_layouts[6])
+    with pytest.raises(ValueError, match="non-positive"):
+        primitives.text(slide, 1, 1, 3, -0.35, "x", size=12)
