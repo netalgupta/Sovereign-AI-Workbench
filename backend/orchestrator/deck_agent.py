@@ -648,6 +648,47 @@ def _merge_fragments(slides: list[dict]) -> list[dict]:
     return merged
 
 
+# "Homopolymer H030SG: 22 batches produced." -- a label, one figure, a unit.
+_LABELLED_FIGURE = re.compile(
+    r"^\s*(?P<label>[^:]{2,60}?)\s*[:–—-]\s*(?P<value>\d[\d,]*(?:\.\d+)?)\s*"
+    r"(?P<unit>%|[A-Za-z/°][\w/°.]*)?(?:\s+[a-z][\w ]*)?\.?\s*$"
+)
+
+
+def _chart_from_list(slide: dict) -> dict:
+    """A points slide listing one figure per label, in one unit, becomes a column chart.
+
+    The model wrote August's production mix as four bullets ("H030SG: 22
+    batches produced", ...); the page reviewer rated it plain, and it is a
+    comparison a reader should see, not read. Nothing new is introduced:
+    labels and values are the bullets' own, already checked against the
+    sources, and only the largest is accented.
+    """
+    bullets = slide.get("bullets") or []
+    if slide.get("type") != "points" or not 3 <= len(bullets) <= 8:
+        return slide
+    parsed = [_LABELLED_FIGURE.match(str(b)) for b in bullets]
+    if not all(parsed):
+        return slide
+    units = {(m.group("unit") or "").lower() for m in parsed}
+    if len(units) != 1:
+        return slide
+    cats = [m.group("label").strip() for m in parsed]
+    values = [float(m.group("value").replace(",", "")) for m in parsed]
+    if len(set(cats)) != len(cats):
+        return slide
+    chart = {
+        "type": "chart", "title": slide.get("title", ""), "chart_type": "column",
+        "categories": cats, "series": [{"name": slide.get("title", ""), "values": values}],
+        "unit": parsed[0].group("unit") or "", "sources": slide.get("sources", []),
+    }
+    if values.count(max(values)) == 1:
+        chart["highlight"] = cats[values.index(max(values))]
+    if slide.get("notes"):
+        chart["notes"] = slide["notes"]
+    return chart
+
+
 def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
     """The whole content pipeline: corpus in, validated DeckSpec out."""
     import datetime as dt
@@ -697,7 +738,7 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
             if slide is None:
                 dropped.append(f"{section.get('title', '?')}: {why}")
                 continue
-            good.append(slide)
+            good.append(_chart_from_list(slide))
         if good:
             sections_out.append({
                 "title": str(section.get("title") or "").strip() or "Findings",

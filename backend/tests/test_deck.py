@@ -407,3 +407,36 @@ def test_bar_charts_start_at_zero(tmp_path):
     render.render_deck(_spec([slide]), out)
     charts = [sh.chart for s in Presentation(str(out)).slides for sh in s.shapes if sh.has_chart]
     assert charts and charts[0].value_axis.minimum_scale == 0
+
+
+# ── a list of labelled figures is a chart ───────────────────────────────────
+
+
+def test_a_list_of_figures_in_one_unit_becomes_a_column_chart():
+    """Measured: August's production mix shipped as four bullets; the page
+    reviewer rated it plain. The values are the bullets' own."""
+    from backend.orchestrator.deck_agent import _chart_from_list
+
+    slide = {"type": "points", "title": "Production Mix for August 2026", "sources": ["S1"],
+             "bullets": ["Homopolymer H030SG: 22 batches produced.", "Homopolymer H110F: 16 batches produced.",
+                         "Random Copolymer RP340: 12 batches produced.", "Impact Copolymer HP500: 9 batches produced."]}
+    chart = _chart_from_list(slide)
+    assert chart["type"] == "chart"
+    assert chart["categories"] == ["Homopolymer H030SG", "Homopolymer H110F",
+                                   "Random Copolymer RP340", "Impact Copolymer HP500"]
+    assert chart["series"][0]["values"] == [22.0, 16.0, 12.0, 9.0]
+    assert chart["unit"] == "batches" and chart["highlight"] == "Homopolymer H030SG"
+    assert chart["sources"] == ["S1"]
+
+
+@pytest.mark.parametrize("bullets", [
+    ["Flow: 12 m3/h", "Temp: 365 °C", "Pressure: 14 bar"],                     # mixed units
+    ["Unloading must proceed under nitrogen.", "H2S: 10 ppm", "Other: 5 ppm"],  # a sentence
+    ["A: 10 %", "B: 20 %"],                                                     # too few to chart
+    ["A: 10 %", "A: 20 %", "B: 5 %"],                                           # duplicate labels
+])
+def test_anything_less_regular_stays_a_list(bullets):
+    from backend.orchestrator.deck_agent import _chart_from_list
+
+    slide = {"type": "points", "title": "t", "bullets": bullets, "sources": ["S1"]}
+    assert _chart_from_list(slide) is slide
