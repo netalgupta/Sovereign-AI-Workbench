@@ -68,6 +68,37 @@ def reset_model_cache() -> None:
     _load_failed = False
 
 
+def release_gpu() -> None:
+    """Drop the loaded model so its VRAM is free; the next embed reloads it.
+
+    MEASURED: bge-large on CUDA holds 1.26 GiB. With it resident the page
+    reviewer's budget fell below its 5.39 GiB of 4-bit weights, part of it
+    was placed off the GPU, and every page review failed ("Cannot copy out
+    of meta tensor"). The deck job frees it for the review (models/gpu.py);
+    reloading costs a few seconds on the next query. The backend in use
+    is unchanged, so calibrated thresholds stay valid.
+    """
+    global _model
+    with _model_lock:
+        if _model is None:
+            return
+        on_gpu = str(next(_model.parameters()).device).startswith("cuda")
+        _model = None
+    if on_gpu:
+        import gc
+
+        import torch
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+def _register_gpu_release() -> None:
+    from backend.models.gpu import register_releaser
+
+    register_releaser("embedding-model", release_gpu)
+
+
 def active_backend() -> str:
     """Which embedder is in use: SEMANTIC_BACKEND or FALLBACK_BACKEND.
 
@@ -388,3 +419,5 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 
     return _deterministic_embed(texts, dim=1024)
 
+
+_register_gpu_release()

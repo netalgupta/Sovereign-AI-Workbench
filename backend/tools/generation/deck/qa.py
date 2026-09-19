@@ -258,6 +258,10 @@ def review_page(png: str, *, model_id: str = REVIEWER_ID, timeout: int = 240) ->
         res.raise_for_status()
         return _parse_review(res.json().get("response") or "")
     except Exception as exc:  # noqa: BLE001 - an unreviewed page is reported as such
+        from backend.models.local_vision import LocalVisionUnavailable
+
+        if isinstance(exc, LocalVisionUnavailable):
+            raise  # the reviewer cannot run at all: assess() stops asking
         logger.warning("Page review failed for %s: %s: %s", png, type(exc).__name__, exc)
         return None
 
@@ -283,6 +287,7 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
                                 "rendered or reviewed. No score is given rather than a guessed one.")
 
     carried = {p.page: p for p in (previous.pages if previous else [])}
+    unavailable = ""
     out: list[PageQuality] = []
     reviewed_any = False
     total = len(measured["pngs"])
@@ -292,7 +297,11 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
         if vision and (pages is None or idx in pages):
             if progress:
                 progress(f"Reviewing page {idx} of {total}")
-            review = review_page(png)
+            try:
+                review = review_page(png)
+            except Exception as exc:  # noqa: BLE001 - LocalVisionUnavailable: said once, not per page
+                vision, unavailable = False, str(exc)
+                logger.warning("Page reviewer unavailable: %s", exc)
         elif idx in carried and carried[idx].vision_score is not None:
             review = {"score": carried[idx].vision_score, "issues": carried[idx].issues,
                       "ratings": carried[idx].ratings}
@@ -323,7 +332,8 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
     method = "layout+vision" if reviewed_any else "layout"
     if not reviewed_any:
         note = (f"Layout was measured on all {len(out)} pages ({defect_pages} with defects). The design "
-                "reviewer did not look at any page, so no design score or grade is given.")
+                "reviewer did not look at any page, so no design score or grade is given."
+                + (f" Reviewer unavailable: {unavailable}" if unavailable else ""))
     elif len(reviewed) < len(out):
         note = (f"The design reviewer scored {len(reviewed)} of {len(out)} pages; the deck score "
                 "covers those pages only.")

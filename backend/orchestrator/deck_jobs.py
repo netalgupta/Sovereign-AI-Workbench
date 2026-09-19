@@ -145,6 +145,8 @@ def run(job: DeckJob) -> DeckJob:
             art.release()
         except Exception:  # noqa: BLE001
             pass
+        # The reviewer loads inside improve(); it frees the card first
+        # (image model, embedding model, Ollama) via models/gpu.py.
 
         _stage(job, "reviewing", "Rendering and measuring every page")
         result = improve.improve(spec, Path(tmp) / "preview.pptx", vision=True,

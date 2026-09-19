@@ -211,6 +211,17 @@ def load(model_id: str) -> PlacementReport:
 
         by_dev = _weight_bytes_by_device(model)
         gpu_b, cpu_b = by_dev.get("gpu", 0), by_dev.get("cpu", 0) + by_dev.get("disk", 0)
+        if pl.quantization != "none" and cpu_b:
+            # bitsandbytes 4/8-bit layers cannot execute from system RAM:
+            # placed there, every call fails with "Cannot copy out of meta
+            # tensor". Refused here with the numbers, never handed back as
+            # a model that breaks on first use.
+            del model
+            _release_locked()
+            raise LocalVisionUnavailable(
+                f"{cfg.model} ({pl.quantization}) needs {round((gpu_b + cpu_b) / 2**30, 2)} GiB on the GPU "
+                f"but only {gpu_budget} GiB was available ({note or 'budget from models.yaml'}); "
+                "quantized layers cannot run from system RAM. Free the card and retry.")
         report = PlacementReport(
             model_id=model_id, model=cfg.model, quantization=pl.quantization,
             gpu_budget_gib=gpu_budget, cpu_budget_gib=pl.cpu_memory_gib,

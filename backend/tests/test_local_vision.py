@@ -154,10 +154,28 @@ def test_page_review_goes_in_process_when_the_registry_says_transformers(tmp_pat
 
 def test_a_failed_review_is_none_so_the_page_is_reported_unreviewed(tmp_path, monkeypatch):
     def boom(*_a, **_k):
-        raise LV.LocalVisionUnavailable("no CUDA device")
+        raise RuntimeError("CUDA error: device-side assert")
 
     monkeypatch.setattr(LV, "ask", boom)
     assert qa.review_page(str(tmp_path / "p.png")) is None
+
+
+def test_an_unavailable_reviewer_is_asked_once_and_named_in_the_report(monkeypatch):
+    """Measured: a reviewer that could not load was retried on every page, ~20 s each."""
+    calls = []
+
+    def unavailable(*_a, **_k):
+        calls.append(1)
+        raise LV.LocalVisionUnavailable("needs 5.39 GiB on the GPU but only 4.63 GiB was available")
+
+    monkeypatch.setattr(LV, "ask", unavailable)
+    monkeypatch.setattr(LV, "release", lambda: None)
+    monkeypatch.setattr(qa, "render_and_measure", lambda *a, **k: {
+        "pngs": ["p1.png", "p2.png", "p3.png"], "defects": {}, "titles": {}, "words": {}})
+    result = qa.assess("d.pptx")
+    assert calls == [1]
+    assert result.method == "layout" and result.score is None
+    assert "4.63 GiB" in result.note
 
 
 def test_assess_without_powerpoint_gives_no_score_rather_than_a_guess(monkeypatch):

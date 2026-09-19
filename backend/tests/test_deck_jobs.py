@@ -203,3 +203,55 @@ def test_both_in_process_models_register_for_release():
     from backend.tools.generation.deck import art  # noqa: F401
 
     assert {"image-model", "page-reviewer"} <= set(gpu._RELEASERS)
+
+
+def test_the_embedding_model_is_released_with_the_others():
+    """Measured: bge-large on CUDA (1.26 GiB) pushed part of the 4-bit reviewer off the GPU."""
+    from backend.ingestion import embeddings  # noqa: F401 - registers on import
+    from backend.models import gpu
+
+    assert "embedding-model" in gpu._RELEASERS
+
+
+def test_a_quantized_reviewer_that_does_not_fit_is_refused_not_returned_broken(tmp_path, monkeypatch):
+    """Placed partly on the CPU, every 4-bit call failed "Cannot copy out of meta tensor"."""
+
+    import torch
+    import transformers
+
+    import backend.ingestion.model_cache as mc
+    from backend.models import gpu
+    from backend.models import local_vision as LV
+
+    monkeypatch.setattr(mc, "MODELS_ROOT", tmp_path)
+    weights = tmp_path / "vision" / "org__vl"
+    weights.mkdir(parents=True)
+    (weights / "config.json").write_text("{}")
+    (weights / "model.safetensors").write_bytes(b"x")
+    registry = tmp_path / "models.yaml"
+    registry.write_text("- id: v\n  backend: transformers\n  model: org/vl\n  task_tags: [t]\n"
+                        "  placement: {gpu_memory_gib: 4, cpu_memory_gib: 2, quantization: 4bit}\n")
+    monkeypatch.setenv("MODELS_REGISTRY_PATH", str(registry))
+
+    class Half(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = torch.nn.Linear(10, 10, bias=False)
+            self.b = torch.nn.Linear(10, 10, bias=False)
+            self.hf_device_map = {"a": 0, "b": "cpu"}
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(gpu, "make_room_for", lambda name: [])
+    monkeypatch.setattr(gpu, "cuda_free_gib", lambda: 7.0)
+    monkeypatch.setattr(transformers.Qwen2_5_VLForConditionalGeneration, "from_pretrained",
+                        classmethod(lambda cls, *a, **k: Half()))
+    monkeypatch.setattr(transformers, "BitsAndBytesConfig", lambda **k: None)
+    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained",
+                        classmethod(lambda cls, *a, **k: object()))
+    LV.release()
+    with pytest.raises(LV.LocalVisionUnavailable, match="cannot run from system RAM"):
+        LV.load("v")
+    assert LV.placement_report() is None, "nothing broken is left loaded"
