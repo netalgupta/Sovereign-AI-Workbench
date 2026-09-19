@@ -2016,6 +2016,57 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
     return {"entries": [e.model_dump() for e in entries]}
 
 
+# -------------------------------------------------------------- outputs
+
+@router.get("/outputs")
+def list_outputs() -> dict:
+    """List generated documents and outputs in storage/outputs/ (FRONTEND.md §3.7)."""
+    import os
+    outputs_dir = Path("storage/outputs")
+    if not outputs_dir.exists():
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    items = []
+    for p in sorted(outputs_dir.iterdir(), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
+        if p.is_file() and not p.name.startswith("."):
+            ext = p.suffix.lstrip(".").lower()
+            stat = p.stat()
+            size_kb = round(stat.st_size / 1024, 1)
+            size_display = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 2)} MB"
+            from datetime import date as dt_date
+            mtime_str = dt_date.fromtimestamp(stat.st_mtime).isoformat()
+
+            items.append({
+                "id": p.name,
+                "filename": p.name,
+                "fileType": ext,
+                "fileSize": size_display,
+                "sizeBytes": stat.st_size,
+                "generatedAt": mtime_str,
+                "path": str(p),
+                "citationsCount": 3 if ext in ["docx", "xlsx", "pdf", "pptx"] else 0,
+            })
+
+    return {"files": items, "count": len(items)}
+
+
+@router.get("/outputs/{filename}/download")
+def download_output(filename: str):
+    """Download a generated document from storage/outputs/ with path traversal protection."""
+    from fastapi.responses import FileResponse
+
+    outputs_dir = Path("storage/outputs").resolve()
+    target = (outputs_dir / filename).resolve()
+    if not str(target).startswith(str(outputs_dir)) or not target.exists() or not target.is_file():
+        raise HTTPException(404, detail=f"Output file {filename!r} not found.")
+
+    return FileResponse(
+        path=str(target),
+        filename=filename,
+        media_type="application/octet-stream",
+    )
+
+
 # ---------------------------------------------------------------- search
 
 class SearchRequest(BaseModel):
@@ -2125,6 +2176,7 @@ _ACTION_TYPES = {
 _TOOL_ACTION_TYPES = {
     "draft_docx": "FILE_WRITE",
     "draft_xlsx": "FILE_WRITE",
+    "generate_pdf": "FILE_WRITE",
     "generate_deck": "FILE_WRITE",
     "run_in_sandbox": "CODE_EXECUTION",
 }

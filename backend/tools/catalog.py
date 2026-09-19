@@ -36,7 +36,7 @@ try:
     from backend.tools import plotting  # noqa: F401
 except BaseException:
     plotting = None
-from backend.tools.documents import draft_docx, draft_xlsx  # noqa: F401
+from backend.tools.documents import draft_docx, draft_xlsx, generate_pdf  # noqa: F401
 
 
 def register_all() -> None:

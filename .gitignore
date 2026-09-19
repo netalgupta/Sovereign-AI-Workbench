@@ -97,3 +97,7 @@ MRPL_Archive_Corpus/
 MRPL_RAG_Test_Corpus/07_User_Uploads/*
 !MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
 /*.png
+
+# Runtime temporary attachment/rendered caches
+storage/attachments/
+storage/rendered/

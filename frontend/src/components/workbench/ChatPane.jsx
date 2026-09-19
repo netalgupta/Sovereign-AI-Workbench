@@ -29,6 +29,8 @@ import {
   Image as ImageIcon,
   Shield,
   ShieldCheck,
+  FileText,
+  X,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
