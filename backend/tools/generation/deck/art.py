@@ -54,14 +54,14 @@ _load_failed = False
 
 
 def _free_gpu_for_art() -> None:
-    """Unload Ollama's resident models so the image model fits.
+    """Free the card for the image model: the page reviewer and Ollama's models.
 
     A deck job generates art after all its text is written, so the LLM is
     idle; Ollama reloads it on its next call.
     """
-    from backend.models.gpu import free_ollama_vram
+    from backend.models.gpu import make_room_for
 
-    free_ollama_vram()
+    make_room_for("image-model")
 
 
 def _load():
@@ -181,3 +181,12 @@ def release() -> None:
             torch.cuda.empty_cache()
         except Exception:  # noqa: BLE001
             _pipe = None
+
+
+def _register() -> None:
+    from backend.models.gpu import register_releaser
+
+    register_releaser("image-model", release)
+
+
+_register()

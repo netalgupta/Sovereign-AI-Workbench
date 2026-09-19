@@ -38,7 +38,7 @@ logger = logging.getLogger("models.local_vision")
 # minus this is lowered, and the report says so.
 ACTIVATION_HEADROOM_GIB = 1.0
 
-_lock = threading.Lock()
+_lock = threading.RLock()  # re-entrant: make_room_for may call release() during load()
 _loaded: dict = {}  # {"id", "model", "processor", "report"}
 
 
@@ -159,10 +159,9 @@ def load(model_id: str) -> PlacementReport:
         if not torch.cuda.is_available():
             raise LocalVisionUnavailable("no CUDA device; a CPU-only vision model is the lag we are avoiding")
 
-        from backend.models.gpu import cuda_free_gib, free_ollama_vram
+        from backend.models.gpu import cuda_free_gib, make_room_for
 
-        free_ollama_vram()
-        torch.cuda.empty_cache()
+        make_room_for(model_id)
         pl = cfg.placement
         gpu_budget = pl.gpu_memory_gib
         note = ""
@@ -265,6 +264,22 @@ def release() -> None:
     """Free the card. Call after a batch of reviews."""
     with _lock:
         _release_locked()
+
+
+def _register() -> None:
+    """Every in-process registry entry this module can hold frees on request."""
+    from backend.models.gpu import register_releaser
+    from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+    try:
+        ids = [m for m, c in load_registry(_DEFAULT_REGISTRY_PATH).items() if c.backend == "transformers"]
+    except Exception:  # noqa: BLE001 - no registry, nothing to register
+        ids = []
+    for model_id in ids:
+        register_releaser(model_id, release)
+
+
+_register()
 
 
 if __name__ == "__main__":

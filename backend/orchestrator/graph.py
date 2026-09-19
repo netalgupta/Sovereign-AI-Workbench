@@ -433,6 +433,11 @@ def router_node(state: AgentState) -> dict[str, Any]:
         from backend.orchestrator.action_resolver import resolve as resolve_action
 
         resolved = resolve_action(req, action_kind, session_id=state.session_id)
+        if resolved.job_id:
+            from backend.orchestrator.action_resolver import deck_job_reply
+
+            return {"draft_output": deck_job_reply(resolved), "deck_job_id": resolved.job_id,
+                    "route": "deck_job"}
 
         gate = ApprovalGate()
         app_req = gate.request(

@@ -69,6 +69,7 @@ def prepare_deck(request: str, session_id: str = "default", max_slides: int | No
         "slide_titles": built["slide_titles"],
         "citations": built["documents"],
         "omitted_sections": built["dropped_slides"],
+        "writer": built.get("writer"),
         "defects": [],
         "retries": 0,
     }

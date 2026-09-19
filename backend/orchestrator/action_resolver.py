@@ -79,6 +79,9 @@ class ResolvedAction:
     # draft_docx({...}) is not informed consent.
     preview: list[str] = field(default_factory=list)
     reason: str = ""
+    # Set when the action continues as a background job (presentations):
+    # the job files the approval itself when its work is done.
+    job_id: str | None = None
 
 
 def resolve(request: str, category: str, *, session_id: str = "default") -> ResolvedAction:
@@ -120,38 +123,44 @@ def is_deck_request(request: str) -> bool:
 
 
 def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
-    """Plan the deck BEFORE asking, so the operator approves real slides.
+    """Start the deck as a background job; the approval comes when it is reviewed.
 
-    Planning (model calls, retrieval, a QA render inside the sandbox)
-    writes nothing outside the sandbox. The approved call is generate_deck
-    with the finished plan, which renders exactly that plan.
+    Writing, artwork, and a page-by-page review with fixes take minutes, so
+    the approval is filed by the job (deck_jobs.request_approval) once the
+    deck is finished and reviewed -- the operator approves the real slides
+    AND sees their quality report. Nothing is written until then.
     """
-    from backend.orchestrator.slide_agent import prepare_deck
+    from backend.orchestrator import deck_jobs
 
-    effect_request = f'Create a presentation for: "{request.strip()}"'
-    try:
-        prepared = prepare_deck(request, session_id=session_id)
-    except ValueError as exc:
-        return ResolvedAction(
-            category="file write", executable=False, effect=effect_request, reason=str(exc),
-        )
-    except Exception as exc:  # noqa: BLE001
-        return ResolvedAction(
-            category="file write",
-            executable=False,
-            effect=effect_request,
-            reason=(
-                f"The presentation could not be prepared ({type(exc).__name__}: {exc}). "
-                f"Nothing will be written."
-            ),
-        )
+    job = deck_jobs.start(request, session_id=session_id)
+    return ResolvedAction(
+        category="file write",
+        executable=False,
+        effect=f'Create a presentation for: "{request.strip()}"',
+        reason="Building in the background; approval is requested when the deck has been reviewed.",
+        job_id=job.job_id,
+    )
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_path = OUTPUT_DIR / f"{Path(prepared['filename']).stem}-{stamp}.pptx"
+
+def deck_job_reply(resolved: ResolvedAction) -> str:
+    """What chat says when a deck job starts. Shared by both chat paths."""
+    return "\n".join([
+        "**Building your presentation in the background.**",
+        "",
+        "Stages: writing the slides from the source documents → local artwork → "
+        "rendering every page, measuring its layout and reviewing its design, fixing weak "
+        "pages → your approval.",
+        "",
+        f"Job `{resolved.job_id}`. Nothing is written until you approve the finished deck.",
+    ])
+
+
+def deck_preview(output_path: Path, titles: list[str], citations: list[str], omitted: list[str],
+                 *, quality: dict | None = None) -> list[str]:
+    """The approval card's lines for a deck: file, slides, sources, quality."""
     # One title per line, and only the first few. Joined into a single
     # line, a 15-slide deck produced an unreadable wall of text on the
     # one screen where a person is meant to check what they are approving.
-    titles = [t for t in prepared["slide_titles"] if t]
     shown = titles[:8]
     preview = [
         f"Creates the file {output_path.name}",
@@ -160,24 +169,15 @@ def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
     ]
     if len(titles) > len(shown):
         preview.append(f"   … and {len(titles) - len(shown)} more")
-    preview.append("Sources: " + ("; ".join(prepared["citations"]) or "none"))
-    if prepared["omitted_sections"]:
-        preview.append("Left out for lack of a source: " + "; ".join(prepared["omitted_sections"][:3]))
-    preview.append(f"Written to {OUTPUT_DIR}")
+    preview.append("Sources: " + ("; ".join(citations) or "none"))
+    if omitted:
+        preview.append("Left out for lack of a source: " + "; ".join(omitted[:3]))
+    if quality is not None:
+        from backend.orchestrator.deck_jobs import quality_line
 
-    return ResolvedAction(
-        category="file write",
-        executable=True,
-        tool_name="generate_deck",
-        arguments={"deck_spec": prepared["deck_spec"], "output_path": str(output_path)},
-        effect=(
-            f'Requested: "{request.strip()}"\n'
-            f"Effect: write a {len(prepared['slide_titles'])}-slide PowerPoint "
-            f"presentation to {output_path.name}, grounded in "
-            f"{len(prepared['citations'])} source reference(s)."
-        ),
-        preview=preview,
-    )
+        preview.append(quality_line(quality))
+    preview.append(f"Written to {output_path.parent}")
+    return preview
 
 
 def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:

@@ -873,6 +873,18 @@ def _answer(
 
         action_kind = classify_action_request(request) or "operator action"
         resolved = resolve_action(request, action_kind, session_id=session_id)
+        if resolved.job_id:
+            from backend.orchestrator import deck_jobs
+            from backend.orchestrator.action_resolver import deck_job_reply
+
+            reply = deck_job_reply(resolved)
+            job = deck_jobs.get(resolved.job_id)
+            yield {"type": "deck_job", "job": job.public() if job else {"job_id": resolved.job_id}}
+            yield {"type": "text_delta", "text": reply}
+            yield {"type": "done", "reply": reply, "tool_calls": 0, "iterations": 1,
+                   "seconds": 0.05, "awaiting_approval": False, "deck_job_id": resolved.job_id,
+                   "citations": []}
+            return
 
         gate = ApprovalGate()
         app_req = gate.request(

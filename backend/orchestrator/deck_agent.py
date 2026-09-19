@@ -346,7 +346,7 @@ def _ask_json(prompt: str, *, model_id: str = "reasoning-model", timeout: int = 
 _TYPE_MENU = "\n".join(f"- {name}: {meta['use']}" for name, meta in SLIDE_TYPES.items())
 
 
-def plan_storyline(request: str, docs: list[dict]) -> dict | None:
+def plan_storyline(request: str, docs: list[dict], *, writer: str = "reasoning-model") -> dict | None:
     """Sections and, per slide, a type and the facts it should carry."""
     prompt = f"""You are preparing an operations briefing for Mangalore Refinery and Petrochemicals Limited (MRPL).
 
@@ -395,7 +395,7 @@ Reply with ONLY this JSON object:
     }}
   ]
 }}"""
-    data = _ask_json(prompt)
+    data = _ask_json(prompt, model_id=writer)
     if not isinstance(data, dict) or not isinstance(data.get("sections"), list):
         return None
     # A model that names a type in its own words (or copies one out of a
@@ -409,7 +409,8 @@ Reply with ONLY this JSON object:
     return data
 
 
-def fill_section(request: str, section: dict, docs: list[dict], feedback: str = "") -> list[dict] | None:
+def fill_section(request: str, section: dict, docs: list[dict], feedback: str = "", *,
+                 writer: str = "reasoning-model") -> list[dict] | None:
     """Write every slide in one section together, so they read as one argument."""
     planned = [s for s in section.get("slides", []) if isinstance(s, dict)
                and canonical_type(s.get("type")) in SLIDE_TYPES]
@@ -448,7 +449,7 @@ Rules, and they are strict:
 
 Reply with ONLY this JSON object:
 {{"slides": [{{"type": ..., "title": ..., "sources": ["S1"], ...type fields...}}]}}"""
-    data = _ask_json(prompt)
+    data = _ask_json(prompt, model_id=writer)
     if not isinstance(data, dict):
         return None
     slides = data.get("slides")
@@ -740,6 +741,26 @@ def _chart_from_list(slide: dict) -> dict:
     return chart
 
 
+# ROUTE BY SIZE (operator's decision). Short sources: the chat model
+# (models.yaml `reasoning-model`), fast. Long or several sources: the
+# larger `deck-writer-large`, whose structure holds up over more material;
+# a deck is a background job, so its extra minutes are affordable. The
+# threshold is in characters of anchored source text actually shown to
+# the model, the thing that grows the planning problem.
+DECK_LARGE_SOURCE_CHARS = 9000
+WRITER_SMALL = "reasoning-model"
+WRITER_LARGE = "deck-writer-large"
+
+
+def source_chars(docs: list[dict]) -> int:
+    return sum(len(d.get("text") or "") for d in docs)
+
+
+def choose_writer(docs: list[dict]) -> str:
+    """The registry id of the model that writes this deck."""
+    return WRITER_LARGE if source_chars(docs) >= DECK_LARGE_SOURCE_CHARS else WRITER_SMALL
+
+
 def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
     """The whole content pipeline: corpus in, validated DeckSpec out."""
     import datetime as dt
@@ -759,7 +780,9 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
             "Nothing was generated."
         )
 
-    plan = plan_storyline(request, docs)
+    writer = choose_writer(docs)
+    logger.info("Deck writer: %s (%d chars of source)", writer, source_chars(docs))
+    plan = plan_storyline(request, docs, writer=writer)
     if not plan:
         raise NotInCorpus(
             "The planner could not produce a usable outline for this request from the "
@@ -771,7 +794,7 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
     for section in plan.get("sections", []):
         if not isinstance(section, dict):
             continue
-        slides = fill_section(request, section, docs)
+        slides = fill_section(request, section, docs, writer=writer)
         if not slides:
             dropped.append(f"{section.get('title', '?')}: the model returned no usable slide")
             slides = []
@@ -784,7 +807,7 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
                 logger.info("Slide rejected (%s); asking for a repair.", why)
                 planned_one = {"title": section.get("title"), "summary": section.get("summary"),
                                "slides": [section.get("slides", [])[i]] if i < len(section.get("slides", [])) else []}
-                repaired = fill_section(request, planned_one, docs, feedback=why) or []
+                repaired = fill_section(request, planned_one, docs, feedback=why, writer=writer) or []
                 slide, why = validate_slide(repaired[0], docs) if repaired else (None, why)
             if slide is None:
                 dropped.append(f"{section.get('title', '?')}: {why}")
@@ -824,4 +847,5 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
         "slide_titles": [sl["title"] for sec in sections_out for sl in sec["slides"]],
         "documents": [d["document"] for d in docs if d["id"] in used],
         "dropped_slides": dropped,
+        "writer": writer,
     }

@@ -61,6 +61,9 @@ class AgentState(BaseModel):
     verification_result: VerificationResult | None = None
     awaiting_human_approval: bool = False
     final_output_path: str | None = None
+    # A presentation continues as a background job (deck_jobs); its id,
+    # so the reply can carry the job for the interface to follow.
+    deck_job_id: str | None = None
     # Not in the spec's listing, but required by its own §3 note that
     # re-planning is capped at 2 retries: a cap needs somewhere to count.
     # Without it the failure path is "re-plan forever", which is how an

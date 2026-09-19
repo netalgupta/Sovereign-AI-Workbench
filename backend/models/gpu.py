@@ -9,8 +9,43 @@ unloaded with keep_alive=0; Ollama reloads them on their next call.
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 logger = logging.getLogger("models.gpu")
+
+# In-process models that hold the card, by name, with how to release each.
+# The image model (~2.5 GB) and the page reviewer (~5.4 GB) do not fit
+# together on 8 GB; whichever loads first frees the others.
+_RELEASERS: dict[str, Callable[[], None]] = {}
+
+
+def register_releaser(name: str, release: Callable[[], None]) -> None:
+    _RELEASERS[name] = release
+
+
+def make_room_for(name: str) -> list[str]:
+    """Free the card for `name`: other in-process models, then Ollama's.
+
+    Returns what was released, for the log.
+    """
+    released = []
+    for other, release in list(_RELEASERS.items()):
+        if other == name:
+            continue
+        try:
+            release()
+            released.append(other)
+        except Exception as exc:  # noqa: BLE001 - reported, and loading proceeds
+            logger.warning("Could not release %s: %s", other, exc)
+    released += free_ollama_vram()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    return released
 
 
 def free_ollama_vram() -> list[str]:

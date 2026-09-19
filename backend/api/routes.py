@@ -1847,6 +1847,69 @@ def build_plan(body: PlanRequestBody) -> dict:
     }
 
 
+# ------------------------------------------------------------------ decks
+#
+# Presentations are background jobs (orchestrator/deck_jobs.py): write,
+# artwork, render + measure + review + fix, then an approval request
+# carrying the quality report. Chat starts them; these routes follow them.
+
+
+class DeckJobRequest(BaseModel):
+    request: str
+    session_id: str = "default"
+
+
+def _deck_job_payload(job_id: str | None) -> dict | None:
+    if not job_id:
+        return None
+    from backend.orchestrator import deck_jobs
+
+    job = deck_jobs.get(job_id)
+    return job.public() if job else {"job_id": job_id, "status": "unknown"}
+
+
+@router.post("/decks")
+def start_deck(body: DeckJobRequest) -> dict:
+    """Queue a presentation. Returns at once; poll GET /api/decks/{job_id}."""
+    from backend.orchestrator import deck_jobs
+
+    if not body.request.strip():
+        raise HTTPException(status_code=400, detail="request is empty")
+    return deck_jobs.start(body.request, session_id=body.session_id).public()
+
+
+@router.get("/decks")
+def list_decks() -> dict:
+    from backend.orchestrator import deck_jobs
+
+    return {"jobs": [j.public() for j in deck_jobs.all_jobs()]}
+
+
+@router.get("/decks/{job_id}")
+def get_deck(job_id: str) -> dict:
+    from backend.orchestrator import deck_jobs
+
+    job = deck_jobs.get(job_id)
+    if job is None:
+        # Jobs live in memory; a restart forgets them. Said, not hidden.
+        raise HTTPException(status_code=404, detail=f"No deck job {job_id} (jobs do not survive a restart).")
+    return job.public()
+
+
+@router.post("/decks/{job_id}/approval")
+def rerequest_deck_approval(job_id: str) -> dict:
+    """Ask again for a finished deck whose approval expired, without redoing it."""
+    from backend.orchestrator import deck_jobs
+
+    job = deck_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No deck job {job_id}.")
+    try:
+        return deck_jobs.request_approval(job)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 # -------------------------------------------------------------- approvals
 
 def _gate():
@@ -2239,6 +2302,7 @@ def chat(body: ChatRequestBody) -> dict:
         "memory": state.memory_summary or None,
         "awaiting_human_approval": state.awaiting_human_approval,
         "approval_action": approval_action,
+        "deck_job": _deck_job_payload(state.deck_job_id),
         # The self-verification verdict (AGENTS_SPEC §5) was computed and
         # then not returned, so the UI had no way to distinguish a
         # confirmed answer from one the verifier objected to. Shipping
