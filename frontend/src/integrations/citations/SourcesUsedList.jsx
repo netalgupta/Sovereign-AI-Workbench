@@ -17,22 +17,40 @@ import { ChevronRight, FileText, ExternalLink, FileCode, FileSpreadsheet, Eye } 
 import { usePreviewStore } from '../../store/previewStore'
 
 // ---------------------------------------------------------------------------
-// Derive a file-type icon from the doc extension — mirrors Sources rail icons
+// Standardized file-type icon tile for citations — matching Sources Rail
 // ---------------------------------------------------------------------------
 function DocIcon({ filename }) {
   const ext = filename?.split('.').pop()?.toLowerCase()
-  const style = { flexShrink: 0 }
+  let color = '#94a3b8'
+  let bg = 'rgba(148, 163, 184, 0.12)'
+  let border = 'rgba(148, 163, 184, 0.25)'
+  let Icon = FileCode
 
   if (ext === 'pdf') {
-    return <FileText size={12} strokeWidth={1.8} style={{ ...style, color: 'var(--color-accent)' }} />
+    color = '#f87171'
+    bg = 'rgba(248, 113, 113, 0.12)'
+    border = 'rgba(248, 113, 113, 0.28)'
+    Icon = FileText
+  } else if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
+    color = '#34d399'
+    bg = 'rgba(52, 211, 153, 0.12)'
+    border = 'rgba(52, 211, 153, 0.28)'
+    Icon = FileSpreadsheet
+  } else if (ext === 'docx' || ext === 'doc') {
+    color = '#60a5fa'
+    bg = 'rgba(96, 165, 250, 0.12)'
+    border = 'rgba(96, 165, 250, 0.28)'
+    Icon = FileText
   }
-  if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') {
-    return <FileSpreadsheet size={12} strokeWidth={1.8} style={{ ...style, color: '#2d7a3a' }} />
-  }
-  if (ext === 'docx' || ext === 'doc') {
-    return <FileText size={12} strokeWidth={1.8} style={{ ...style, color: '#1a5db5' }} />
-  }
-  return <FileCode size={12} strokeWidth={1.8} style={{ ...style, color: 'var(--color-text-muted)' }} />
+
+  return (
+    <div
+      className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 shadow-xs"
+      style={{ background: bg, border: `1px solid ${border}`, color }}
+    >
+      <Icon size={11} strokeWidth={1.9} />
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -40,6 +58,9 @@ function DocIcon({ filename }) {
 // ---------------------------------------------------------------------------
 function SourceRow({ citation }) {
   const [isOpen, setIsOpen] = useState(false)
+  const docName = citation.doc || citation.source_document || citation.document_name || 'Document'
+  const sectionName = citation.section || (citation.page_number ? `p. ${citation.page_number}` : '')
+  const passageText = citation.passage || citation.text || citation.excerpt || ''
 
   return (
     <div className="flex flex-col">
@@ -47,27 +68,43 @@ function SourceRow({ citation }) {
       <button
         type="button"
         onClick={() => setIsOpen((o) => !o)}
-        className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit"
+        className="inline-flex items-center gap-2 text-left cursor-pointer group py-0.5 text-xs select-none w-fit row-hover-lift rounded"
         style={{ background: 'transparent', border: 'none' }}
         aria-expanded={isOpen}
       >
-        <DocIcon filename={citation.doc} />
+        <DocIcon filename={docName} />
+
+        {/* WHICH MARKERS POINT HERE. Rows are grouped by location, so a
+            reader tracing [3] in the answer needs to see which row it
+            belongs to — otherwise grouping trades one confusion for
+            another. */}
+        {citation.markers?.length > 0 && (
+          <span
+            className="text-[9px] font-mono leading-none px-1 py-0.5 rounded"
+            style={{
+              color: 'var(--color-text-faint)',
+              background: 'var(--color-overlay)',
+            }}
+          >
+            {citation.markers.map((m) => `[${m}]`).join('')}
+          </span>
+        )}
 
         <span
           className="font-medium text-xs leading-tight"
           style={{ color: 'var(--color-text-muted)' }}
         >
-          {citation.doc}
+          {docName}
         </span>
 
-        {citation.section && (
+        {sectionName && (
           <>
             <span style={{ color: 'var(--color-text-faint)' }}>·</span>
             <span
               className="text-[10px] leading-tight"
               style={{ color: 'var(--color-text-faint)' }}
             >
-              {citation.section}
+              {sectionName}
             </span>
           </>
         )}
@@ -105,7 +142,7 @@ function SourceRow({ citation }) {
                 wordBreak: 'break-word',
               }}
             >
-              {citation.passage}
+              {passageText}
             </div>
 
             {/* Footer links: Preview & Sources Hub */}
@@ -153,6 +190,42 @@ function SourceRow({ citation }) {
 export function SourcesUsedList({ citations }) {
   if (!citations || citations.length === 0) return null
 
+  // ONE ROW PER PLACE, NOT PER PASSAGE.
+  //
+  // Neighbour expansion deliberately returns the chunks either side of a
+  // hit, so a single procedure commonly arrives as two or three
+  // passages from the same document and page. Rendered one row each,
+  // that reads as three sources agreeing -- measured on the real
+  // corpus: "CCR1 regeneration cycle inspection findings" returns 6
+  // passages from 5 distinct locations, and the panel said 6.
+  //
+  // Overstating how many independent sources support an answer is a
+  // grounding defect, not a cosmetic one: the count is the thing a
+  // reader uses to judge how well-evidenced a claim is.
+  //
+  // The MARKERS are untouched. The answer cites [1]..[6] and those must
+  // keep resolving; each row lists which markers point at it.
+  const grouped = []
+  const byPlace = new Map()
+  for (const citation of citations) {
+    const doc = citation.doc || citation.source_document || 'Document'
+    const place = citation.section || (citation.page_number ? `p. ${citation.page_number}` : '')
+    const key = `${doc}::${place}`
+    const existing = byPlace.get(key)
+    if (existing) {
+      existing.markers.push(citation.id)
+      // Keep the longest passage: it is the most informative preview of
+      // what was actually read at this location.
+      if ((citation.passage || '').length > (existing.passage || '').length) {
+        existing.passage = citation.passage
+      }
+    } else {
+      const row = { ...citation, doc, section: place, markers: [citation.id] }
+      byPlace.set(key, row)
+      grouped.push(row)
+    }
+  }
+
   return (
     <div className="flex flex-col" style={{ marginTop: '10px' }}>
       {/* Section header — same muted uppercase label pattern as "REASONING TRACE" */}
@@ -168,8 +241,8 @@ export function SourcesUsedList({ citations }) {
         className="pl-3.5 flex flex-col gap-1.5"
         style={{ borderLeft: '2px solid var(--color-border)' }}
       >
-        {citations.map((citation) => (
-          <SourceRow key={citation.id} citation={citation} />
+        {grouped.map((citation) => (
+          <SourceRow key={citation.markers.join('-')} citation={citation} />
         ))}
       </div>
     </div>

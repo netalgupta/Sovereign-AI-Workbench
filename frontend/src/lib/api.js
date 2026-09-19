@@ -15,7 +15,6 @@
  *   }
  */
 
-const MOCK_LATENCY_MS = 400
 
 // ---------------------------------------------------------------------------
 // Mock citation data — matches the Citation contract shape exactly.
@@ -26,83 +25,11 @@ const MOCK_LATENCY_MS = 400
 // Mock citation data — grounded directly in the actual MRPL_RAG_Test_Corpus.
 // Matches the Citation contract shape exactly.
 // ---------------------------------------------------------------------------
-const MOCK_CITATIONS = [
-  {
-    id: 1,
-    doc: 'SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx',
-    section: 'Section 4.2 — Feed Rate Operating Limits & WABT End-of-Run',
-    passage:
-      'The design-basis feed rate for Hydrocracking Unit 2 (HCU-2) shall not exceed 110 % of nameplate capacity (Q_d = 1,450 m³/h) under any continuous operating mode. Sustained feed elevation accelerates bed fouling; WABT trigger limit is 410 °C. Exceedance for more than 15 minutes triggers an automatic interlock via the DCS feed-forward controller (FFC-201).',
-  },
-  {
-    id: 2,
-    doc: 'Aromatic_Complex_Benzene_Safety_Circular.docx',
-    section: 'Section 2.1 — High-Temperature Catalyst Runaway Prevention',
-    passage:
-      'Operating at elevated feed rates increases LHSV (Liquid Hourly Space Velocity) which reduces residence time. At LHSV > 1.8 h⁻¹, exothermic quench reactions become thermally unstable across Beds 1-3; H₂/HC ratio must be maintained above 1,000 Nm³/m³ to suppress runaway. Continuous VOC monitoring active.',
-  },
-  {
-    id: 3,
-    doc: 'Novolen_Batch_QA_Report_Aug2026.pdf',
-    section: 'Section 3.1 — Downstream Excursion & Fractionation Flooding Criteria',
-    passage:
-      'Column flooding is defined as the condition where liquid entrainment rate exceeds 10 % of vapour flow. At feed rates above 110 % of design capacity, flooding probability increases to 34 % based on the correlation: F_factor = u_v × √ρ_v. Immediate operator intervention is required per MOC procedure.',
-  },
-  {
-    id: 4,
-    doc: 'PSA_Hydrogen_Purity_Trend_Log.xlsx',
-    section: 'Sheet 1 (Weeks 1–12) — Thermocouple Array TC-201 Telemetry & H2 Quality',
-    passage:
-      'TC-201A: 381.4 °C · TC-201B: 382.1 °C · TC-201C: 383.0 °C · TC-201D: 380.9 °C · TC-201E: 382.6 °C · TC-201F: 381.7 °C. Rolling average across 6 sensors: 381.95 °C. Upper operating limit: 400 °C. Rate-of-change: +0.4 °C/hr. PSA-3 purity drift to 99.65% cross-referenced.',
-  },
-]
-
 // ---------------------------------------------------------------------------
 // Rich markdown reply used when the user sends a new message.
 // Exercises every §3.1-3.3 feature: headings, bold, code block (Python),
 // inline citations [1][2], and a markdown table.
 // ---------------------------------------------------------------------------
-function buildMockReply(userMessage) {
-  return `**Analysis complete.** Here is a summary for your query: _"${userMessage}"_
-
----
-
-### Operational Risk Assessment (Grounded in MRPL Corpus)
-
-Increasing the HCU feed rate beyond 110 % design capacity introduces three compounding risks: thermal runaway across Reactor R-201 Beds 1-3, H₂ compressor capacity saturation (K-201), and downstream fractionation column flooding. [1][2]
-
-The primary safety constraint is the feed-forward interlock (FFC-201) and the WABT end-of-run trigger (> 410 °C per SOP-114-Rev3). Operating above this threshold reduces catalyst residency time and risks rapid exothermic excursion. [1][2]
-
-### Current Reactor Inlet Temperatures (Thermocouple Telemetry)
-
-Based on the latest thermocouple array readings (4-shift rolling average from process logs): [4]
-
-| Sensor | Reading (°C) | Limit (°C) | Status |
-|--------|-------------|-----------|--------|
-| TC-201A | 381.4 | 400 | ✓ Normal |
-| TC-201B | 382.1 | 400 | ✓ Normal |
-| TC-201C | 383.0 | 400 | ✓ Normal |
-| TC-201D | 380.9 | 400 | ✓ Normal |
-| TC-201E | 382.6 | 400 | ✓ Normal |
-| TC-201F | 381.7 | 400 | ✓ Normal |
-
-**Rolling average:** 381.95 °C — safety margin: **18.05 °C** (within envelope)
-
-### Recommended Guard Logic
-
-\`\`\`python
-# Feed-rate guard — per SOP-114-Rev3 §4.2 & FFC-201 interlock
-if feed_rate > 1.10 * design_capacity:
-    alert("High risk: exceeds 110% design threshold (1,450 m³/h)")
-    suggest_mitigation(cool_quench=True, bed_quench_valve="QFC-18")
-
-# Catalyst bed temperature check against WABT headroom
-if inlet_temp > 395:  # 5°C early-warning headroom before 400°C threshold
-    trigger_alarm(level="WARNING", channel="TC-201", target_unit="HCU-2")
-\`\`\`
-
-> ⚠️ **Operator note:** If feed rate must exceed 110 % for operational reasons, engage quench flow controller (QFC-18) first and maintain H₂/HC ratio above 1,000 Nm³/m³ before any ramp. [3]`
-}
 
 // ---------------------------------------------------------------------------
 // Mock plan steps — matches AGENTS_SPEC.md PlanStep schema exactly:
@@ -110,73 +37,6 @@ if inlet_temp > 395:  # 5°C early-warning headroom before 400°C threshold
 // Includes a fork: step-2 and step-3 both depend on step-1 in parallel.
 // tool_call_event_id strings match the DOM IDs in ChatPane.jsx string-for-string.
 // ---------------------------------------------------------------------------
-export const MOCK_PLAN_STEPS = [
-  {
-    id: 'step-1',
-    step_id: 'step-1',
-    description: 'Deconstruct refinery parameters and construct multi-phase verification plan',
-    assigned_agent: 'reasoning',
-    status: 'done',
-    depends_on: [],
-    tool_call_event_id: 'step-4-planning',
-  },
-  {
-    id: 'step-2',
-    step_id: 'step-2',
-    description: 'Query historical thermocouple sensor trends across 4 shifts (TC-201 array)',
-    assigned_agent: 'code',
-    status: 'done',
-    depends_on: ['step-1'],
-    tool_call_event_id: 'step-2-1-telemetry',
-  },
-  {
-    id: 'step-3',
-    step_id: 'step-3',
-    description: 'Retrieve plant safety limits and evaluate thermal runaway operating envelope',
-    assigned_agent: 'vision',
-    status: 'done',
-    depends_on: ['step-1'],
-    tool_call_event_id: 'step-2-2-limits',
-  },
-  {
-    id: 'step-4',
-    step_id: 'step-4',
-    description: 'Compile volumetric flow differential pressure equation in SymPy AST',
-    assigned_agent: 'math',
-    status: 'running',
-    depends_on: ['step-2', 'step-3'],
-    tool_call_event_id: 'step-2-computation',
-  },
-  {
-    id: 'step-5',
-    step_id: 'step-5',
-    description: 'Verify API-521 boundary threshold and confirm +18.2% operational headroom',
-    assigned_agent: 'reasoning',
-    status: 'pending',
-    depends_on: ['step-4'],
-    tool_call_event_id: 'step-1-verification',
-  },
-]
-
-export const MOCK_FEED_RATE_APPROVAL_ACTION = {
-  id: 'act-feed-rate-115',
-  title: 'Confirm Critical Parameter Modification',
-  action_type: 'DCS_SETPOINT_WRITE',
-  target: 'HCU-2 / FFC-201',
-  description: 'This will change HCU feed rate from 100% to 115%.',
-  detail:
-    'This action will adjust the HCU-2 reactor feed rate setpoint from 100% (1,450 m³/h) to 115% (1,667 m³/h) via DCS feed-forward controller FFC-201.',
-  current_value: '100% (1,450 m³/h)',
-  proposed_value: '115% (1,667 m³/h)',
-  unit: 'm³/h',
-  parameter: 'FFC-201.SP (Feed Rate Setpoint)',
-  risk_level: 'CRITICAL',
-  warning:
-    'Operating above 110% reduces catalyst residence time (LHSV > 1.8 h⁻¹) and increases exothermic runaway risk. Fractionation column flooding probability increases to 34%.',
-  mitigation_required:
-    'Mandatory pre-condition: Quench flow controller (QFC-18) armed and H₂/HC ratio maintained > 1,000 Nm³/m³ before setpoint ramp.',
-}
-
 /**
  * Detects if a message expresses an explicit intent to ACT (commanding a critical
  * parameter change or setpoint adjustment) versus an intent to ASK/inquire.
@@ -190,28 +50,6 @@ export const MOCK_FEED_RATE_APPROVAL_ACTION = {
  * @param {string} msg
  * @returns {boolean}
  */
-export function isActionApprovalRequest(msg) {
-  if (!msg || typeof msg !== 'string') return false
-  const text = msg.trim()
-
-  // 1. Exclude questions or informational inquiries
-  if (text.endsWith('?')) return false
-  if (
-    /^(what|why|how|can you|could you|should we|would you|is it|are there|explain|tell me about)\b/i.test(
-      text
-    )
-  ) {
-    return false
-  }
-
-  // 2. Require action verbs commanding a change to feed rate
-  const actionVerbBefore =
-    /\b(increase|raise|set|change|modify|adjust|boost|ramp\s*up|scale\s*up)\s+(the\s+)?feed[- ]?rate\b/i
-  const actionVerbAfter =
-    /\bfeed[- ]?rate\s*(to|=|:=|\bset to\b|\bchanged to\b|\braised to\b|\bincreased to\b)\s*\d+/i
-
-  return actionVerbBefore.test(text) || actionVerbAfter.test(text)
-}
 
 export async function checkBackendHealth() {
   try {
@@ -229,43 +67,22 @@ export async function checkBackendHealth() {
  */
 export async function resolveApproval(requestId, confirmed = true, operator = 'operator') {
   try {
-    if (confirmed) {
-      const appRes = await fetch('/api/approvals/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ request_id: requestId, decided_by: operator }),
-      })
-      if (!appRes.ok) {
-        const errJson = await appRes.json().catch(() => ({}))
-        throw new Error(errJson.detail || `Approve failed with status ${appRes.status}`)
-      }
-      const appData = await appRes.json()
-
-      const execRes = await fetch('/api/approvals/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ request_id: requestId, token: appData.token }),
-      })
-      if (!execRes.ok) {
-        const errJson = await execRes.json().catch(() => ({}))
-        throw new Error(errJson.detail || `Execute failed with status ${execRes.status}`)
-      }
-      const execData = await execRes.json()
-      return { status: 'executed', result: execData.result }
-    } else {
-      const refRes = await fetch('/api/approvals/refuse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ request_id: requestId, decided_by: operator, reason: 'Operator cancelled action' }),
-      })
-      if (refRes.ok) {
-        return await refRes.json()
-      }
+    const res = await fetch('/api/approvals/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, confirmed, operator }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      return { ok: true, status: data.status || (confirmed ? 'approved' : 'refused'), ...data }
     }
+    const errData = await res.json().catch(() => ({}))
+    const errorMsg = errData.detail || errData.message || `Backend returned HTTP ${res.status}`
+    return { ok: false, status: 'error', error: errorMsg }
   } catch (err) {
-    console.warn('[API] resolveApproval error:', err)
+    console.warn('[API] /api/approvals/resolve error:', err)
+    return { ok: false, status: 'error', error: err?.message || 'Network error reaching /api/approvals/resolve' }
   }
-  return { status: confirmed ? 'approved' : 'refused' }
 }
 
 /**
@@ -276,6 +93,100 @@ export async function getNetworkStatus() {
     const res = await fetch('/api/network/status')
     if (res.ok) return await res.json()
   } catch {}
+  return null
+}
+
+/**
+ * Read a native File as base64 for the upload endpoint.
+ * @param {File} file
+ * @returns {Promise<string>} base64 payload (no data: prefix)
+ */
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * Upload files to the corpus (POST /api/sources/upload). The backend writes
+ * them into MRPL_RAG_Test_Corpus/07_User_Uploads, then chunks + embeds them
+ * into FAISS so later grounded answers can cite them.
+ *
+ * @param {Array<{ name: string, file?: File, size?: number }>} files
+ * @returns {Promise<object>} { success, count, total_chunks, details, saved, message }
+ */
+export async function uploadFilesToCorpus(files) {
+  const items = []
+  for (const f of files) {
+    const contentBase64 = await fileToBase64(f.file || f)
+    items.push({ name: f.name, contentBase64, sizeBytes: f.size })
+  }
+  const res = await fetch('/api/sources/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: items }),
+  })
+  if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Call a registered tool (POST /api/tools/call). Returns the tool's result,
+ * already unwrapped from the `{ result }` envelope.
+ * @param {string} name
+ * @param {object} args
+ */
+export async function callTool(name, args) {
+  const res = await fetch('/api/tools/call', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, arguments: args }),
+  })
+  if (!res.ok) throw new Error(`Tool ${name} failed: HTTP ${res.status}`)
+  const data = await res.json()
+  return data.result
+}
+
+// name -> { is_estimate, category } fetched once from /api/tools and cached.
+// Used to visibly label any tool output that is a model estimate (the vision
+// chart reader, measured doses of fabricated values — CHART_STRESS_REPORT.md).
+let cachedToolsMeta = null
+export async function getToolsMetadata() {
+  if (cachedToolsMeta) return cachedToolsMeta
+  try {
+    const res = await fetch('/api/tools')
+    if (res.ok) {
+      const data = await res.json()
+      cachedToolsMeta = Object.fromEntries(
+        (data.tools || []).map((t) => [
+          t.name,
+          { is_estimate: Boolean(t.is_estimate), category: t.category },
+        ])
+      )
+    }
+  } catch {}
+  return cachedToolsMeta || {}
+}
+
+/**
+ * Route an uploaded attachment through the OCR/defect pipeline.
+ * Images -> detect_defects (row 7: overlay-ready boxes labeled from OCR,
+ * fully offline). Audio -> transcribe_voice_note. Other types (PDF/DOCX/
+ * XLSX) are handled solely by corpus ingestion, so no tool call is needed.
+ *
+ * @param {{ name: string }} item
+ * @param {string} savedPath - server-side path returned by the upload
+ * @returns {Promise<object|null>} tool result, or null when no vision read applies
+ */
+export async function analyseAttachment(item, savedPath) {
+  const ext = (item.name || '').toLowerCase().split('.').pop()
+  const isImage = ['png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'].includes(ext)
+  const isAudio = ['wav', 'mp3', 'm4a', 'ogg', 'flac'].includes(ext)
+  if (isImage) return callTool('detect_defects', { image_path: savedPath })
+  if (isAudio) return callTool('transcribe_voice_note', { audio_path: savedPath })
   return null
 }
 
@@ -315,35 +226,123 @@ async function backendIsReachable() {
   }
 }
 
-export async function sendMessage(message, sessionId) {
-  // 1. Attempt live agent turn via backend orchestrator (/api/chat)
+/**
+ * Stream a chat turn from the backend via real SSE (POST /api/chat/stream).
+ * Interleaves narration tokens, tool call events, step updates, and approval gates.
+ *
+ * Falls back to labelled offline simulation only if the backend is genuinely unreachable.
+ */
+export async function sendMessageStream(message, sessionId, callbacks = {}, options = {}) {
+  const {
+    onStart,
+    onPlan,
+    onRoute,
+    onMemory,
+    onToolCall,
+    onToolResult,
+    onThought,
+    onTextDelta,
+    onApprovalRequired,
+    onDone,
+    onError,
+  } = callbacks
+
+  // Defaulting to [] here would tell the backend "every source is
+  // switched off" for any caller that does not pass the option at all.
+  // null is the only safe default: no filter.
+  const { activeDocuments = null } = options
+
   let liveError = null
+  let receivedAnyEvent = false
+
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), LIVE_TURN_TIMEOUT_MS)
-    const res = await fetch('/api/chat', {
+
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId || 'default' }),
+      body: JSON.stringify({
+        message,
+        session_id: sessionId || 'default',
+        // Sent only when it is a real answer. null is omitted so the
+        // backend applies no filter, rather than being told the user
+        // deselected everything.
+        active_documents: Array.isArray(activeDocuments) ? activeDocuments : null,
+      }),
       signal: controller.signal,
     })
-    clearTimeout(timeout)
 
-    if (res.ok) {
-      const data = await res.json()
-      if (data && (data.reply || data.plan?.length > 0 || data.citations?.length > 0)) {
-        return {
-          reply: data.reply || 'Analysis complete.',
-          citations: data.citations || [],
-          plan: data.plan || [],
-          session_id: data.session_id || sessionId,
-          awaiting_human_approval: Boolean(data.awaiting_human_approval),
-          approval_action: data.approval_action || null,
-          tool_call_events: data.tool_call_events || [],
-          live: true,
+    if (res.ok && res.body) {
+      clearTimeout(timeout)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop() // keep unparsed remainder
+
+        for (const block of blocks) {
+          const lines = block.split('\n')
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const rawJson = line.slice(6).trim()
+              if (!rawJson) continue
+              try {
+                const event = JSON.parse(rawJson)
+                receivedAnyEvent = true
+
+                switch (event.type) {
+                  case 'start':
+                    onStart?.(event)
+                    break
+                  case 'plan':
+                    onPlan?.(event)
+                    break
+                  case 'route':
+                    onRoute?.(event)
+                    break
+                  case 'memory':
+                    onMemory?.(event)
+                    break
+                  case 'tool_call':
+                    onToolCall?.(event)
+                    break
+                  case 'tool_result':
+                    onToolResult?.(event)
+                    break
+                  case 'thought':
+                    onThought?.(event)
+                    break
+                  case 'text_delta':
+                    onTextDelta?.(event.text || '')
+                    break
+                  case 'approval_required':
+                    onApprovalRequired?.(event)
+                    break
+                  case 'done':
+                    onDone?.(event)
+                    return { ok: true, ...event }
+                  case 'error':
+                    onError?.(event.message || 'Stream error occurred')
+                    return { ok: false, error: event.message }
+                  default:
+                    break
+                }
+              } catch (parseErr) {
+                console.warn('[SSE] JSON parse error:', parseErr, rawJson)
+              }
+            }
+          }
         }
       }
-      liveError = 'The backend returned an empty response.'
+
+      return { ok: true }
     } else {
       liveError = `The backend returned HTTP ${res.status}.`
     }
@@ -351,193 +350,138 @@ export async function sendMessage(message, sessionId) {
     liveError =
       err?.name === 'AbortError'
         ? `The agent turn exceeded ${LIVE_TURN_TIMEOUT_MS / 1000}s and was cancelled.`
-        : `Could not reach /api/chat: ${err?.message || err}`
-    console.warn('[API] Live /api/chat failed:', err)
+        : `Could not reach /api/chat/stream: ${err?.message || err}`
+    console.warn('[API] Live /api/chat/stream failed:', err)
   }
 
-  // 2. The backend is running and it failed. Say so.
-  //
-  // Falling through to the simulation here is what hid every real
-  // backend error behind a polished fake answer - including, for weeks,
-  // the fact that the live path was never reached at all.
+  // If stream dropped mid-turn after starting
+  if (receivedAnyEvent) {
+    const streamErr = `Stream connection interrupted: ${liveError}`
+    onError?.(streamErr)
+    return { ok: false, error: streamErr }
+  }
+
+  // 2. The backend is reachable and it failed. Report failure honestly without faking data.
   if (await backendIsReachable()) {
-    return {
-      reply:
-        `**The backend could not complete this turn.**\n\n` +
-        `${liveError}\n\n` +
-        `No simulated answer is being shown in its place: the backend is ` +
-        `running, so anything displayed here would be mistaken for its output. ` +
-        `Check the server log for the failing step.`,
-      citations: [],
-      plan: [],
-      session_id: sessionId,
-      awaiting_human_approval: false,
-      approval_action: null,
-      tool_call_events: [],
-      live: true,
-      error: true,
-    }
+    const failureMsg =
+      `**The backend could not complete this turn.**\n\n` +
+      `${liveError}\n\n` +
+      `No simulated answer is being shown in its place: the backend is running, ` +
+      `so anything displayed here would be mistaken for its output. ` +
+      `Check the server log for the failing step.`
+    onError?.(failureMsg)
+    return { ok: false, error: failureMsg }
   }
 
-  // 3. Backend genuinely absent - offline simulation, labelled as such.
-  await new Promise((r) => setTimeout(r, MOCK_LATENCY_MS))
+  // 3. THE BACKEND IS NOT RUNNING. Say so; simulate nothing.
+  //
+  // What used to be here was a local simulation of a whole turn: a fake
+  // route event, a fake search_documents tool call with a fake result,
+  // fabricated citations, and -- for anything that looked like an
+  // action request -- an invented safety scenario reading
+  //
+  //     Changing reactor feed rate from 100% (1,450 m3/h) to
+  //     115% (1,667 m3/h) exceeds the continuous design basis...
+  //     DCS controller FFC-201
+  //
+  // It was clearly labelled SIMULATED, and the label is the only reason
+  // it survived this long. It still has to go, for three reasons:
+  //
+  //   - Those exact figures are the fabricated approval payload that
+  //     has now been removed from this codebase THREE times (the
+  //     frontend modal's || fallbacks, the backend's chat handler, and
+  //     the streaming path after a branch merge). Every removal left a
+  //     copy somewhere else. This is the last one.
+  //
+  //   - A demo with the backend accidentally down would show a
+  //     confident refinery safety interlock over numbers nobody
+  //     measured. A viewer who misses one grey line reads it as the
+  //     product working.
+  //
+  //   - It buys nothing. A real demo needs the backend running. The
+  //     honest failure state is more useful than a fake success: it
+  //     tells you what to fix.
+  const offlineMsg =
+    '**The backend is not running.**\n\n' +
+    'Nothing is being simulated in its place — a simulated answer here ' +
+    'would be indistinguishable from a real one at a glance, and this ' +
+    'workbench exists to make that distinction impossible to miss.\n\n' +
+    'Start it with:\n\n' +
+    '```\npy -3 -m backend.main\n```'
+  onError?.(offlineMsg)
+  return { ok: false, error: offlineMsg, offline: true }
+}
 
-  const isApprovalNeeded = isActionApprovalRequest(message)
+/**
+ * Backwards-compatible single-shot wrapper around sendMessageStream.
+ */
+export async function sendMessage(message, sessionId) {
+  let reply = ''
+  let citations = []
+  let plan = []
+  let tool_call_events = []
+  let awaiting_human_approval = false
+  let approval_action = null
+  let isLive = true
 
-  if (isApprovalNeeded) {
-    return {
-      reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n**Action Request Intercepted:** You commanded a critical operating parameter change: _"${message}"_
+  const res = await sendMessageStream(message, sessionId, {
+    onRoute: () => {},
+    onToolCall: (call) => {
+      tool_call_events.push({
+        id: call.id,
+        tool_name: call.name,
+        input_params: call.arguments,
+        status: 'running',
+      })
+    },
+    onToolResult: (resEv) => {
+      const idx = tool_call_events.findIndex((e) => e.id === resEv.id)
+      if (idx >= 0) {
+        tool_call_events[idx] = {
+          ...tool_call_events[idx],
+          output: resEv.output,
+          status: resEv.status,
+          seconds: resEv.seconds,
+        }
+      }
+    },
+    onTextDelta: (delta) => {
+      reply += delta
+    },
+    onApprovalRequired: (appEv) => {
+      awaiting_human_approval = true
+      approval_action = appEv.action || {
+        id: appEv.id,
+        title: 'Confirm Critical Parameter Modification',
+        action_type: appEv.name || 'DCS_SETPOINT_WRITE',
+        description: appEv.effect || 'Critical parameter change intercepted',
+        arguments: appEv.arguments,
+      }
+    },
+    onDone: (doneEv) => {
+      if (doneEv.citations) citations = doneEv.citations
+      if (doneEv.plan) plan = doneEv.plan
+      if (doneEv.awaiting_approval !== undefined) awaiting_human_approval = doneEv.awaiting_approval
+      if (doneEv.approval_action) approval_action = doneEv.approval_action
+      if (doneEv.simulated) isLive = false
+    },
+    onError: (err) => {
+      reply = err
+    },
+  })
 
-> 🛑 **Safety Interlock Gate [FR-15 / §3.12]:** Changing reactor feed rate from **100% (1,450 m³/h)** to **115% (1,667 m³/h)** exceeds the continuous design basis and requires manual human operator authorization before DCS controller FFC-201 can accept the parameter update.
->
-> A human approval gate modal has been displayed. Composer input is locked until this action is confirmed or cancelled.`,
-      citations: MOCK_CITATIONS.slice(0, 2),
-      plan: MOCK_PLAN_STEPS,
-      session_id: sessionId,
-      awaiting_human_approval: true,
-      approval_action: MOCK_FEED_RATE_APPROVAL_ACTION,
-      live: false,
-    }
-  }
+  if (res?.simulated) isLive = false
 
   return {
-    reply: `> ⚠️ **SIMULATED RESPONSE — the backend is not running.** Nothing below came from the corpus, a model, or a tool call. Start the backend to get real answers.\n\n` + buildMockReply(message),
-    citations: MOCK_CITATIONS,
-    plan: MOCK_PLAN_STEPS,
+    reply,
+    citations,
+    plan,
+    tool_call_events,
     session_id: sessionId,
-    awaiting_human_approval: false,
-    approval_action: null,
-    live: false,
+    awaiting_human_approval,
+    approval_action,
+    live: isLive,
+    error: !res?.ok,
   }
 }
-
-/**
- * Upload an attachment payload to /api/attachments/upload.
- * Supports File upload or JSON payload.
- */
-export async function uploadAttachment(fileOrPayload, category = 'temporary', sessionId = 'default') {
-  try {
-    let res
-    if (fileOrPayload instanceof File) {
-      const formData = new FormData()
-      formData.append('file', fileOrPayload)
-      formData.append('filename', fileOrPayload.name)
-      formData.append('type', fileOrPayload.type || 'application/octet-stream')
-      formData.append('category', category)
-      formData.append('session_id', sessionId)
-      res = await fetch('/api/attachments/upload', {
-        method: 'POST',
-        body: formData,
-      })
-    } else {
-      const payload = {
-        filename: fileOrPayload.filename || fileOrPayload.name || 'attachment.pdf',
-        type: fileOrPayload.type || 'application/pdf',
-        category: fileOrPayload.category || category,
-        processing: true,
-        contentBase64: fileOrPayload.contentBase64 || fileOrPayload.content || null,
-        session_id: fileOrPayload.session_id || sessionId,
-      }
-      res = await fetch('/api/attachments/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-    }
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] uploadAttachment error:', err)
-  }
-  return { attachment_id: `att_mock_${Date.now()}`, status: 'queued' }
-}
-
-/**
- * Fetch current processing status for an attachment.
- */
-export async function getAttachmentStatus(attachmentId) {
-  try {
-    const res = await fetch(`/api/attachments/${attachmentId}`)
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] getAttachmentStatus error:', err)
-  }
-  return { attachment_id: attachmentId, status: 'ready', category: 'temporary', storage_ref: 'mock' }
-}
-
-/**
- * List currently tracked attachments, optionally filtered by category.
- */
-export async function getAttachments(category) {
-  try {
-    const url = category ? `/api/attachments?category=${encodeURIComponent(category)}` : '/api/attachments'
-    const res = await fetch(url)
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] getAttachments error:', err)
-  }
-  return { attachments: [], count: 0 }
-}
-
-/**
- * Session cleanup hook for temporary attachments.
- */
-export async function cleanupSessionAttachments(sessionId = 'default') {
-  try {
-    const res = await fetch(`/api/attachments/cleanup?session_id=${encodeURIComponent(sessionId)}`, {
-      method: 'POST',
-    })
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] cleanupSessionAttachments error:', err)
-  }
-  return { success: true, deleted_count: 0 }
-}
-
-/**
- * Upload voice recording blob for local offline transcription.
- */
-export async function uploadVoiceNote(audioBlob, category = 'temporary', sessionId = 'default') {
-  try {
-    const formData = new FormData()
-    formData.append('file', audioBlob, 'voice_recording.webm')
-    formData.append('category', category)
-    if (sessionId) formData.append('session_id', sessionId)
-
-    const res = await fetch('/api/voice/upload', {
-      method: 'POST',
-      body: formData,
-    })
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] uploadVoiceNote error:', err)
-  }
-  return { job_id: `vjob_mock_${Date.now()}` }
-}
-
-/**
- * Poll STT transcription status for a voice job.
- */
-export async function getVoiceStatus(jobId) {
-  try {
-    const res = await fetch(`/api/voice/${jobId}`)
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (err) {
-    console.warn('[API] getVoiceStatus error:', err)
-  }
-  return { status: 'failed', transcript: '', error: 'Could not fetch voice status' }
-}
-
-
 

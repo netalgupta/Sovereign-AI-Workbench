@@ -9,6 +9,8 @@ Verifies:
 5. GET /api/network/status returns telemetry conforming to NetworkMonitorBar contract.
 """
 
+import pytest
+
 from fastapi.testclient import TestClient
 from backend.main import app
 
@@ -25,6 +27,7 @@ def test_api_health_shape_compatibility():
     assert "graph_available" in data
 
 
+@pytest.mark.live_model
 def test_api_chat_standard_query():
     payload = {
         "message": "What is the design capacity and operational profile of MRPL?",
@@ -227,7 +230,14 @@ def test_the_approval_modal_describes_the_action_that_was_requested():
             f"fabricated value {invented!r} is back in the approval payload"
         )
 
-    # Unknown must read as unknown. A plausible placeholder reads as
-    # measured, which is how the original bug survived being looked at.
-    assert action["target"] is None
-    assert action["resolved_parameters"] is False
+    # Unknown must read as unknown -- AND KNOWN AS KNOWN. This asserted
+    # target None / unresolved unconditionally, but a document request
+    # resolves to a real draft_docx call with an exact output file, and
+    # the card then said "has NOT resolved a file path" directly above a
+    # preview naming it. Accuracy in both directions.
+    if action["resolved_parameters"]:
+        assert action["target"] and action["target"].endswith(".docx")
+        assert action["warning"] is None
+    else:
+        assert action["target"] is None
+        assert "NOT resolved" in action["warning"]

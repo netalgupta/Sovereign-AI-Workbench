@@ -298,3 +298,71 @@ def test_estimate_warning_is_printed_in_the_document_not_only_in_metadata(tmp_pa
     text = "\n".join(p.text for p in docx.Document(out).paragraphs)
     assert "estimated by a vision model" in text
     assert "not a measured figure" in text
+
+
+# ---------------------------------------------------------------------
+# A terminal request stops carrying the document.
+# ---------------------------------------------------------------------
+
+
+def test_an_executed_request_no_longer_stores_document_content(tmp_path):
+    """MEASURED on a working machine: requests.jsonl held 191 records,
+    the largest 11,344 characters, containing seven full document
+    sections -- one headed "Classification: Confidential - Internal
+    Use".
+
+    The corpus is already on the same disk, so this is not a leak. It is
+    a SECOND copy of confidential text in a file with a different
+    lifecycle and no expiry, which is exactly what NFR-3 is about and
+    exactly what an InfoSec reviewer looks for.
+    """
+    from backend.audit.approval_gate import ApprovalGate
+
+    gate = ApprovalGate(
+        requests_file=tmp_path / "requests.jsonl",
+    )
+    body = "CONFIDENTIAL BENZENE EXPOSURE LIMITS " * 40
+    request = gate.request(
+        tool_name="draft_docx",
+        arguments={
+            "title": "Approval note",
+            "output_path": str(tmp_path / "note.docx"),
+            "sections": [{"heading": "Finding 1", "body": body, "sources": ["a.pdf"]}],
+        },
+        effect="write a docx",
+    )
+    original_hash = request.arguments_hash
+
+    approved = gate.approve(request.request_id, approved_by="operator")
+    try:
+        gate.execute_approved(request.request_id, approved.token)
+    except Exception:  # noqa: BLE001 - the write may fail; redaction must not depend on it
+        pass
+
+    stored = gate.get(request.request_id)
+    rendered = str(stored.arguments)
+    assert "BENZENE" not in rendered, "document content survived in the approval record"
+    assert "redacted" in rendered
+
+    # THE HASH IS UNTOUCHED, so the record still proves what was
+    # approved even though the text is gone.
+    assert stored.arguments_hash == original_hash
+
+    # Short parameters are kept -- an audit entry reading "redacted"
+    # where the filename used to be is worse than useless.
+    assert stored.arguments["title"] == "Approval note"
+    assert stored.arguments["output_path"].endswith(".docx")
+
+
+def test_a_refused_request_also_drops_the_content(tmp_path):
+    from backend.audit.approval_gate import ApprovalGate
+
+    gate = ApprovalGate(requests_file=tmp_path / "requests.jsonl")
+    request = gate.request(
+        tool_name="draft_docx",
+        arguments={"title": "t", "sections": [{"body": "SECRET " * 60}]},
+        effect="write",
+    )
+    gate.refuse(request.request_id, refused_by="operator", reason="not wanted")
+
+    assert "SECRET" not in str(gate.get(request.request_id).arguments)

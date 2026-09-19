@@ -53,3 +53,30 @@
   # plausible-looking name that was never actually pulled.
   model: phi3.5
   task_tags: [classification, routing]
+
+- id: verify-coder-7b
+  backend: ollama
+  model: qwen2.5:7b
+  task_tags: [code]
+
+- id: deck-writer-large
+  backend: ollama
+  # Long-form planning for decks built from long or multiple sources,
+  # run as a BACKGROUND job. reasoning-model (7b) is kept for chat because
+  # there speed decides usability; a deck the operator waits minutes for
+  # anyway can afford the 14b's better structure. Router: deck_agent picks
+  # this when the anchored sources are long (see DECK_LARGE_SOURCE_CHARS).
+  # 9.0 GB against an 8 GB card: part of it runs on CPU, ~30-60s per call.
+  model: qwen2.5:14b
+  task_tags: [deck_planning, long_form_drafting]
+
+- id: image-model
+  backend: diffusers
+  # ABSTRACT deck artwork only (cover and section backgrounds) -- never a
+  # picture of equipment, plant or people, which would be an invented
+  # record. SD-Turbo: 1-step 512px generation, ~2.5 GB fp16, fits beside
+  # nothing else on the 8 GB card, so the deck job unloads the LLM first.
+  # Fetched once: python -m backend.ingestion.fetch_models --model sd-turbo
+  # Licence: Stability AI non-commercial research community licence.
+  model: stabilityai/sd-turbo
+  task_tags: [image_generation]

@@ -19,7 +19,12 @@ from pydantic import BaseModel
 
 class ModelConfig(BaseModel):
     id: str
-    backend: Literal["ollama"]
+    # "ollama": a tag served by the local Ollama daemon.
+    # "diffusers": weights in models/<category>/ on disk, loaded in-process
+    #   by Hugging Face diffusers with the Hub forced offline -- the image
+    #   model. Ollama cannot serve image generation, so this is the one
+    #   backend that is not a tag Ollama knows.
+    backend: Literal["ollama", "diffusers"]
     model: str
     task_tags: list[str]
 
@@ -80,3 +85,25 @@ def resolve_model_name(model_id: str, registry_path: str | None = None) -> str:
     if model_id not in registry:
         raise ValueError(f"Unknown model id {model_id!r} — not found in registry at {path}")
     return registry[model_id].model
+
+
+def diffusers_weights_dir(config: ModelConfig) -> Path:
+    """Where a diffusers model's weights live: models/image/<org>__<name>."""
+    from backend.ingestion.model_cache import local_cache_dir
+
+    return local_cache_dir("image", config.model)
+
+
+def is_locally_available(config: ModelConfig, pulled_ollama_tags: set[str] | None) -> bool | None:
+    """Is this model usable on this machine right now?
+
+    None when that cannot be known (Ollama unreachable, for an Ollama
+    entry). Every place that lists models asks this, rather than assuming
+    every entry is an Ollama tag -- which would tell the operator to run
+    `ollama pull stabilityai/sd-turbo`.
+    """
+    if config.backend == "diffusers":
+        return (diffusers_weights_dir(config) / "model_index.json").exists()
+    if pulled_ollama_tags is None:
+        return None
+    return config.model in pulled_ollama_tags or f"{config.model}:latest" in pulled_ollama_tags

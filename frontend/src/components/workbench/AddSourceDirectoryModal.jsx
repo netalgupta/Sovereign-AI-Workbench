@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   X,
   FolderPlus,
@@ -10,17 +10,30 @@ import {
   UploadCloud,
   Plus,
   Loader2,
+  FileText,
+  Check,
+  AlertCircle,
 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { showToast } from '../../store/toastStore'
+import { useIngestionStore } from '../../store/ingestionStore'
 
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
   return new Promise((resolve, reject) => {
+    if (!file || file.size === 0) {
+      resolve('')
+      return
+    }
     const reader = new FileReader()
     reader.onload = () => {
       const result = reader.result
-      const base64 = typeof result === 'string' ? result.split(',')[1] || '' : ''
-      resolve(base64)
+      if (typeof result === 'string') {
+        const comma = result.indexOf(',')
+        resolve(comma >= 0 ? result.slice(comma + 1) : result)
+      } else {
+        resolve('')
+      }
     }
     reader.onerror = (err) => reject(err)
     reader.readAsDataURL(file)
@@ -35,7 +48,30 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   const folderInputRef = useRef(null)
   const fileInputRef = useRef(null)
 
-  if (!isOpen) return null
+  const activeJob = useIngestionStore((s) => s.activeJob)
+  const startTracking = useIngestionStore((s) => s.startTracking)
+
+  // Auto-close modal when an in-progress job finishes (activeJob transitions
+  // from running → complete/failed).
+  const [jobStarted, setJobStarted] = useState(false)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
+  useEffect(() => {
+    if (jobStarted && (activeJob?.state === 'complete' || activeJob?.state === 'failed')) {
+      // Dispatch immediately on completion so sidebar updates chunks & tree right away
+      window.dispatchEvent(new CustomEvent('corpus-updated'))
+      if (onDirectoriesUpdated) onDirectoriesUpdated()
+
+      const t = setTimeout(() => {
+        setJobStarted(false)
+        onCloseRef.current?.()
+      }, 2500)
+      return () => clearTimeout(t)
+    }
+  }, [activeJob?.state, jobStarted])
 
   // Core file batch upload handler
   const uploadFiles = async (fileList) => {
@@ -59,9 +95,17 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       const filesToUpload = []
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i]
+        if (file.size === 0) {
+          showToast(`Skipped 0-byte empty file: ${file.name}`, 'warning')
+          continue
+        }
         setUploadStatus(`Reading ${i + 1}/${filesArray.length}: ${file.name}...`)
         try {
           const base64 = await readFileAsBase64(file)
+          if (!base64) {
+            showToast(`Could not read ${file.name} (file may be locked or empty)`, 'error')
+            continue
+          }
           const relPath = file.webkitRelativePath || file.name
           filesToUpload.push({
             name: file.name,
@@ -75,10 +119,8 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       }
 
       if (filesToUpload.length === 0) {
-        throw new Error('No files could be read from selected directory')
+        throw new Error('No readable non-empty files found to upload')
       }
-
-      setUploadStatus(`Ingesting, chunking & generating embeddings for ${filesToUpload.length} file(s)...`)
 
       const res = await fetch('/api/sources/upload', {
         method: 'POST',
@@ -90,14 +132,19 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         throw new Error(data.error || data.detail || 'Failed to upload source file(s)')
       }
 
-      const chunkNotice = data.total_chunks != null ? ` (${data.total_chunks} chunks embedded & indexed in FAISS)` : ''
-      showToast(
-        data.message || `Successfully ingested ${data.count || filesToUpload.length} source document(s)${chunkNotice}`,
-        'success'
-      )
-      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-      onClose()
+      // Start tracking AFTER the backend has registered the job
+      if (data.job_id) {
+        // Do NOT dispatch corpus-updated here — ingestion has not happened
+        // yet. The useEffect watching activeJob.state === 'complete' handles
+        // the refresh at the right moment (after all documents are indexed).
+        startTracking(data.job_id)
+        setJobStarted(true)
+      } else {
+        // Synchronous path (no background job) — safe to refresh now
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+        onClose()
+      }
     } catch (err) {
       showToast(err.message || 'Failed to upload source documents', 'error')
     } finally {
@@ -128,11 +175,21 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
         throw new Error(data.error || data.detail || 'Failed to add source')
       }
 
-      showToast(data.message || `Source registered: ${pathToAdd}`, 'success')
+      showToast(data.message || `Source queued for indexing: ${pathToAdd}`, 'success')
       setCustomPath('')
-      window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-      if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-      onClose()
+      // Start tracking AFTER backend confirms the job exists.
+      // Call startTracking BEFORE setJobStarted so activeJob is non-null
+      // when the effect first evaluates jobStarted=true.
+      if (data.job_id) {
+        // Do NOT dispatch corpus-updated here — ingestion is still running.
+        // The completion useEffect dispatches it once the job is done.
+        startTracking(data.job_id)
+        setJobStarted(true)
+      } else {
+        window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
+        if (onDirectoriesUpdated) onDirectoriesUpdated(data)
+        onClose()
+      }
     } catch (err) {
       showToast(err.message || 'Failed to register source', 'error')
     } finally {
@@ -141,47 +198,17 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
   }
 
-  // Native OS or Browser folder selection handler
+  // Native OS folder picker — instantly opens native folder dialog
   const handleBrowseFolder = async () => {
-    // 1. Try native backend folder picker (opens Windows Folder Selection dialog directly on host)
-    try {
-      setIsSubmitting(true)
-      setUploadStatus('Opening native Windows folder picker...')
-      const res = await fetch('/api/sources/dialog/folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.cancelled) {
-          setIsSubmitting(false)
-          setUploadStatus('')
-          return
-        }
-        if (data.success) {
-          showToast(data.message || `Folder "${data.name}" added to sources`, 'success')
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-          onClose()
-          return
-        }
-      }
-    } catch (err) {
-      console.warn('Native folder dialog failed, falling back to browser picker', err)
-    } finally {
-      setIsSubmitting(false)
-      setUploadStatus('')
-    }
-
-    // 2. Fallback: window.showDirectoryPicker (modern Chromium File System Access API)
+    // 1. Try modern directory picker (Chrome, Edge, Opera, Chromium)
     if (typeof window.showDirectoryPicker === 'function') {
       try {
         const dirHandle = await window.showDirectoryPicker({ mode: 'read' })
         if (dirHandle) {
           setIsSubmitting(true)
-          setUploadStatus(`Reading contents of folder "${dirHandle.name}"...`)
+          setUploadStatus(`Reading contents of "${dirHandle.name}"…`)
           const files = []
-          async function scanHandle(handle, pathPrefix = '') {
+          const scanHandle = async (handle, pathPrefix = '') => {
             for await (const entry of handle.values()) {
               const rel = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
               if (entry.kind === 'file') {
@@ -192,7 +219,8 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
                 })
                 files.push(f)
               } else if (entry.kind === 'directory') {
-                if (!['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode'].includes(entry.name)) {
+                const skip = ['node_modules', '.git', '.venv', '__pycache__', '.idea', '.vscode', 'dist', 'build']
+                if (!skip.includes(entry.name) && !entry.name.startsWith('.')) {
                   await scanHandle(entry, rel)
                 }
               }
@@ -202,58 +230,33 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
           if (files.length > 0) {
             await uploadFiles(files)
             return
+          } else {
+            showToast('No valid documents found in selected folder', 'info')
+            setIsSubmitting(false)
+            setUploadStatus('')
+            return
           }
         }
-      } catch (err) {
-        if (err.name === 'AbortError') return
-        console.warn('showDirectoryPicker error:', err)
-      } finally {
-        setIsSubmitting(false)
-        setUploadStatus('')
-      }
-    }
-
-    // 3. Fallback: hidden <input type="file" webkitdirectory>
-    folderInputRef.current?.click()
-  }
-
-  // Native OS or Browser files selection handler
-  const handleBrowseFiles = async () => {
-    // 1. Try native backend file picker (opens Windows Open File dialog on host)
-    try {
-      setIsSubmitting(true)
-      setUploadStatus('Opening native file picker...')
-      const res = await fetch('/api/sources/dialog/files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.cancelled) {
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          // User closed folder picker
           setIsSubmitting(false)
           setUploadStatus('')
           return
         }
-        if (data.success) {
-          showToast(data.message || `Successfully added ${data.count} document(s)`, 'success')
-          window.dispatchEvent(new CustomEvent('corpus-updated', { detail: data }))
-          if (onDirectoriesUpdated) onDirectoriesUpdated(data)
-          onClose()
-          return
-        }
+        console.warn('showDirectoryPicker cancelled or error, falling back to input:', e)
       }
-    } catch (err) {
-      console.warn('Native files dialog failed, falling back to browser picker', err)
-    } finally {
-      setIsSubmitting(false)
-      setUploadStatus('')
     }
+    // 2. Fallback: trigger native OS folder picker input
+    folderInputRef.current?.click()
+  }
 
-    // 2. Fallback: hidden <input type="file" multiple>
+  // Native OS file picker — instantly opens native Windows file explorer dialog
+  const handleBrowseFiles = () => {
     fileInputRef.current?.click()
   }
 
-  // Handle native folder browse fallback input
+  // Handle native folder browse input
   const handleFolderPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -261,7 +264,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     e.target.value = ''
   }
 
-  // Handle native files browse fallback input
+  // Handle native files browse input
   const handleFilesPicked = async (e) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -351,38 +354,32 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
-      style={{ background: 'rgba(0, 0, 0, 0.55)', backdropFilter: 'blur(3px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg rounded-xl shadow-2xl border flex flex-col overflow-hidden animate-scale-in"
-        style={{
-          background: 'var(--color-surface)',
-          borderColor: 'var(--color-border)',
-          color: 'var(--color-text)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Hidden inputs for native browser file/folder dialogs */}
-        <input
-          type="file"
-          ref={folderInputRef}
-          onChange={handleFolderPicked}
-          webkitdirectory="true"
-          directory="true"
-          multiple
-          className="hidden"
-        />
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFilesPicked}
-          multiple
-          accept=".pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.txt,.json,.csv,.md,.markdown,.yaml,.yml,.log,.py,.sql"
-          className="hidden"
-        />
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="add-source-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0, 0, 0, 0.55)', backdropFilter: 'blur(4px)' }}
+          onClick={onClose}
+        >
+          <motion.div
+            key="add-source-modal-card"
+            initial={{ opacity: 0, scale: 0.96, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="w-full max-w-lg rounded-xl shadow-2xl border flex flex-col overflow-hidden"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
 
         {/* Header */}
         <div
@@ -418,6 +415,25 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             <X size={15} />
           </button>
         </div>
+
+        {/* Hidden inputs for instant native file & folder picking */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.docx,.xlsx,.xls,.txt,.csv,.json,.md,.yaml,.yml,.py,.sql,.png,.jpg,.jpeg"
+          style={{ display: 'none' }}
+          onChange={handleFilesPicked}
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          webkitdirectory=""
+          directory=""
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleFolderPicked}
+        />
 
         {/* Modal Body */}
         <div className="p-5 flex flex-col gap-4 overflow-y-auto max-h-[75vh]">
@@ -484,25 +500,189 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             </button>
           </div>
 
-          {/* Active Ingestion / Upload Progress Indicator */}
-          {isSubmitting && (
+          {/* Active Ingestion Progress Card (Live Polling via backend ProgressTracker) */}
+          {(isSubmitting || (activeJob && (activeJob.state === 'running' || activeJob.state === 'complete' || activeJob.state === 'failed'))) && (
             <div
-              className="flex items-center gap-2.5 p-3 rounded-lg border text-xs animate-pulse"
+              className="flex flex-col gap-3 p-4 rounded-xl border animate-fade-in"
               style={{
-                background: 'var(--color-accent-tint, rgba(37,99,235,0.08))',
-                borderColor: 'var(--color-accent)',
-                color: 'var(--color-accent)',
+                background: activeJob?.state === 'complete'
+                  ? 'rgba(16, 185, 129, 0.08)'
+                  : activeJob?.state === 'failed'
+                  ? 'rgba(239, 68, 68, 0.08)'
+                  : 'var(--color-accent-tint, rgba(37,99,235,0.06))',
+                borderColor: activeJob?.state === 'complete'
+                  ? 'rgba(16, 185, 129, 0.4)'
+                  : activeJob?.state === 'failed'
+                  ? 'rgba(239, 68, 68, 0.4)'
+                  : 'var(--color-accent)',
               }}
             >
-              <Loader2 size={16} className="animate-spin flex-shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="font-semibold text-xs leading-tight">
-                  {uploadStatus || 'Processing documents...'}
-                </span>
-                <span className="text-[10px] opacity-80 mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                  Extracting pages, structuring metadata & updating local corpus
-                </span>
+              {/* ── Stage pipeline header ── */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {activeJob?.state === 'complete' ? (
+                    <CheckCircle2 size={15} className="text-emerald-500 flex-shrink-0" />
+                  ) : activeJob?.state === 'failed' ? (
+                    <AlertCircle size={15} className="text-red-500 flex-shrink-0" />
+                  ) : (
+                    <Loader2 size={14} className="animate-spin text-[var(--color-accent)] flex-shrink-0" />
+                  )}
+                  <span className="font-bold text-xs" style={{ color: 'var(--color-text)' }}>
+                    {activeJob?.state === 'complete'
+                      ? `Done \u2014 ${activeJob.completed || activeJob.total_documents} file(s) indexed`
+                      : activeJob?.state === 'failed'
+                      ? `Failed: ${activeJob.error || 'Unknown error'}`
+                      : activeJob?.total_documents
+                      ? (activeJob.total_documents > 1
+                          ? `Processing ${Math.min((activeJob.completed || 0) + 1, activeJob.total_documents)} / ${activeJob.total_documents} file(s)`
+                          : 'Processing 1 / 1 file')
+                      : uploadStatus || 'Initialising\u2026'}
+                  </span>
+                </div>
+                {/* Live elapsed timer */}
+                {activeJob?.elapsed_seconds != null && (
+                  <span className="text-[10px] font-mono tabular-nums flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                    {activeJob.state === 'complete'
+                      ? `\u2713 ${activeJob.elapsed_seconds}s`
+                      : activeJob.state === 'running' && activeJob.estimated_remaining_seconds
+                      ? `${activeJob.elapsed_seconds}s \u00b7 ~${activeJob.estimated_remaining_seconds}s left`
+                      : `${activeJob.elapsed_seconds}s`}
+                  </span>
+                )}
               </div>
+
+              {/* ── 4-step pipeline visualiser ── */}
+              {(() => {
+                const STAGES = [
+                  { key: 'extracting', label: 'Extract', desc: 'Reading & OCR' },
+                  { key: 'chunking',   label: 'Chunk',   desc: 'Splitting text' },
+                  { key: 'embedding',  label: 'Embed',   desc: 'Vectorising' },
+                  { key: 'indexing',   label: 'Index',   desc: 'Writing FAISS' },
+                ]
+                const currentStage = activeJob?.current_document?.stage || ''
+                let stageIdx = STAGES.findIndex(s => s.key === currentStage)
+                if (stageIdx === -1 && (currentStage === 'queued' || activeJob?.state === 'running')) {
+                  stageIdx = 0
+                }
+                const isComplete = activeJob?.state === 'complete'
+                const isFailed   = activeJob?.state === 'failed'
+                // Within-file pseudo-progress: each of 4 stages = 25%, active = midpoint
+                const stageProgress = isComplete ? 100
+                  : isFailed ? 100
+                  : stageIdx >= 0 ? Math.max(14, Math.round((stageIdx + 0.55) * 25))
+                  : activeJob?.total_documents > 0
+                    ? Math.max(10, Math.round(((activeJob.completed || 0) / activeJob.total_documents) * 100))
+                    : activeJob?.state === 'running' ? 12 : 0
+                return (
+                  <div className="flex flex-col gap-2.5">
+                    {/* Stage bubbles + connectors */}
+                    <div className="flex items-start">
+                      {STAGES.map((s, i) => {
+                        const done    = isComplete || stageIdx > i
+                        const active  = !isComplete && !isFailed && stageIdx === i
+                        const failed  = isFailed && stageIdx === i
+                        const pending = !done && !active && !failed
+                        return (
+                          <div key={s.key} className="flex items-center flex-1 min-w-0">
+                            <div className="flex flex-col items-center" style={{ flex: 1 }}>
+                              {/* Circle */}
+                              <div
+                                className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold transition-all duration-500"
+                                style={{
+                                  background: done ? 'rgba(16,185,129,0.18)' : active ? 'var(--color-accent)' : failed ? 'rgba(239,68,68,0.18)' : 'var(--color-overlay)',
+                                  border: done ? '1.5px solid rgba(16,185,129,0.5)' : active ? '1.5px solid var(--color-accent)' : failed ? '1.5px solid rgba(239,68,68,0.4)' : '1.5px solid var(--color-border)',
+                                  color: done ? '#10b981' : active ? '#fff' : failed ? '#ef4444' : 'var(--color-text-faint)',
+                                  boxShadow: active ? '0 0 0 3px rgba(37,99,235,0.18)' : 'none',
+                                }}
+                              >
+                                {done ? '\u2713' : failed ? '\u2715' : i + 1}
+                              </div>
+                              {/* Label */}
+                              <span className="text-[9px] font-semibold mt-0.5 uppercase tracking-wide" style={{ color: done ? '#10b981' : active ? 'var(--color-accent)' : 'var(--color-text-faint)' }}>
+                                {s.label}
+                              </span>
+                              {/* Sub-desc only on active */}
+                              {active && (
+                                <span className="text-[8.5px] mt-0.5 text-center leading-tight" style={{ color: 'var(--color-text-muted)' }}>
+                                  {s.desc}
+                                </span>
+                              )}
+                            </div>
+                            {/* Connector */}
+                            {i < STAGES.length - 1 && (
+                              <div className="h-px flex-1 mx-0.5 transition-all duration-500" style={{ background: done ? 'rgba(16,185,129,0.4)' : 'var(--color-border)', marginTop: '-14px' }} />
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                      <div
+                        className="h-full rounded-full transition-all duration-700"
+                        style={{
+                          width: `${stageProgress}%`,
+                          background: isComplete
+                            ? 'linear-gradient(90deg,#10b981,#34d399)'
+                            : isFailed
+                            ? '#ef4444'
+                            : 'linear-gradient(90deg,var(--color-accent),#60a5fa)',
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[9px]" style={{ color: 'var(--color-text-faint)' }}>
+                        {isComplete
+                          ? 'All stages complete'
+                          : isFailed
+                          ? 'Pipeline failed'
+                          : stageIdx >= 0
+                          ? `Stage ${stageIdx + 1} of 4 \u2014 ${STAGES[stageIdx]?.desc}`
+                          : activeJob?.state === 'running'
+                          ? 'Stage 1 of 4 \u2014 Starting pipeline\u2026'
+                          : 'Ready'}
+                      </span>
+                      <span className="text-[9px] font-mono tabular-nums" style={{ color: 'var(--color-text-faint)' }}>
+                        {stageProgress}%
+                      </span>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* ── Current file banner ── */}
+              {activeJob?.current_document && activeJob.state !== 'complete' && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+                  <FileText size={12} className="flex-shrink-0" style={{ color: 'var(--color-accent)' }} />
+                  <span className="font-mono text-[10.5px] truncate flex-1" style={{ color: 'var(--color-text)' }}>
+                    {activeJob.current_document.name}
+                  </span>
+                  <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded font-semibold flex-shrink-0"
+                    style={{ background: 'var(--color-accent-tint)', border: '1px solid var(--color-accent-border)', color: 'var(--color-accent)' }}>
+                    {activeJob.current_document.stage}
+                  </span>
+                </div>
+              )}
+
+              {/* ── Per-doc list (multi-file) ── */}
+              {activeJob?.documents && activeJob.documents.length > 1 && (
+                <div className="flex flex-col gap-0.5 max-h-28 overflow-y-auto pr-1">
+                  {activeJob.documents.map((doc, idx) => {
+                    const done    = doc.stage === 'indexed'
+                    const running = ['extracting','chunking','embedding','indexing'].includes(doc.stage)
+                    const failed  = doc.stage === 'failed'
+                    return (
+                      <div key={doc.path || idx} className="flex items-center justify-between py-1 px-2 rounded text-[10.5px]" style={{ background: running ? 'var(--color-surface)' : 'transparent' }}>
+                        <span className="truncate pr-2 font-mono" style={{ color: 'var(--color-text)' }}>{doc.name}</span>
+                        <span className="flex-shrink-0 font-semibold text-[9.5px]" style={{ color: done ? '#10b981' : running ? 'var(--color-accent)' : failed ? '#ef4444' : 'var(--color-text-faint)' }}>
+                          {done ? '\u2713 indexed' : running ? `\u27f3 ${doc.stage}` : failed ? '\u2715 failed' : 'queued'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -533,7 +713,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
               Drag and drop folders or files here
             </span>
             <span className="text-[10px] mt-0.5" style={{ color: 'var(--color-text-faint)' }}>
-              Auto-extracted with OCR & table structure preservation
+              Browser sandboxed transfer. For zero-copy in-place indexing, use Browse or Path below.
             </span>
           </div>
 
@@ -656,7 +836,9 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
             Done
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }

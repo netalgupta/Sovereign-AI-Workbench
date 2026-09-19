@@ -65,6 +65,66 @@ class ApprovedRequest(ApprovalRequest):
     token: str
 
 
+
+# Argument values large enough to be document content rather than a
+# parameter. A tag, a filename or a setpoint is short; a drafted
+# section body is not.
+_CONTENT_CHARS = 200
+
+
+def _redact_content(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Replace document text with a description of what was there.
+
+    WHY A TERMINAL REQUEST STOPS CARRYING THE DOCUMENT.
+
+    A draft_docx approval stores its full `sections` so that executing
+    it runs exactly what was approved -- that is the point of hashing
+    the arguments. But once the request is EXECUTED, REFUSED or EXPIRED
+    it will never run again, and the text stays on disk forever.
+
+    Measured on this machine: requests.jsonl held 191 records, the
+    largest 11,344 characters, containing seven full document sections
+    -- one of them headed "Classification: Confidential - Internal Use".
+    The corpus is already on this disk, so this is not a leak. It IS a
+    second copy of confidential text, in a file with a different
+    lifecycle and no expiry, which is precisely what an InfoSec reviewer
+    is looking for under NFR-3 (STAKEHOLDERS.md puts IT/InfoSec against
+    exactly that requirement).
+
+    THE HASH IS NOT TOUCHED. arguments_hash still proves what was
+    approved, so the audit record remains verifiable after the content
+    is gone -- you can still show that the executed call matched the
+    approved one, you just cannot re-read the document out of the
+    approval file.
+
+    Short values are kept: they are parameters, and an audit entry
+    reading "redacted" where the filename used to be is worse than
+    useless.
+    """
+    redacted: dict[str, Any] = {}
+    for key, value in (arguments or {}).items():
+        if isinstance(value, str) and len(value) > _CONTENT_CHARS:
+            redacted[key] = f"<{len(value)} characters of document content, redacted>"
+        elif isinstance(value, (list, tuple)):
+            rendered = str(value)
+            if len(rendered) > _CONTENT_CHARS:
+                redacted[key] = (
+                    f"<{len(value)} item(s), {len(rendered)} characters of "
+                    f"document content, redacted>"
+                )
+            else:
+                redacted[key] = value
+        elif isinstance(value, dict):
+            rendered = str(value)
+            if len(rendered) > _CONTENT_CHARS:
+                redacted[key] = f"<{len(rendered)} characters of content, redacted>"
+            else:
+                redacted[key] = value
+        else:
+            redacted[key] = value
+    return redacted
+
+
 class ApprovalGate:
     """Manages human approval requests, single-use tokens, and audited execution."""
 
@@ -198,6 +258,9 @@ class ApprovalGate:
         req.state = ApprovalState.REFUSED
         req.refused_by = refused_by
         req.refusal_reason = reason
+        # Refused means it will never run. Same reasoning as execution:
+        # the hash stays, the document text does not.
+        req.arguments = _redact_content(req.arguments)
         req.token = None
 
         all_reqs[request_id] = req
@@ -306,6 +369,16 @@ class ApprovalGate:
             summary=f"Tool {req.tool_name} executed successfully",
             details={"effect": req.effect},
         )
+
+        # The request is terminal and will never run again. Drop the
+        # document content, keep the hash that proves what ran.
+        terminal = self._read_all()
+        if request_id in terminal:
+            terminal[request_id].arguments = _redact_content(
+                terminal[request_id].arguments
+            )
+            self._write_all(terminal)
+
         return result
 
     def get(self, request_id: str) -> ApprovalRequest:

@@ -1,44 +1,57 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useLocation } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 import { AppShell } from './components/layout/AppShell'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 import { PlanStubPage } from './pages/PlanStubPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SourcesPage } from './pages/SourcesPage'
+import { GraphExplorerPage } from './pages/GraphExplorerPage'
+import { InstrumentationPage } from './pages/InstrumentationPage'
 
 // Plug-and-play teammate integrations (FRONTEND.md §5 / /src/integrations/)
-import { GraphExplorer } from './integrations/graph-explorer'
 import { OutputCards } from './integrations/output-cards'
 import { AuditLog } from './integrations/audit-log'
 import { NetworkMonitor } from './integrations/network-monitor'
 
 /**
- * App — top-level router.
- * All routes render inside AppShell (persistent nav chrome).
- *
- * Route inventory (FRONTEND.md §2):
- *   /                  → WorkbenchPage  (three-pane, fully built Day 1-2)
- *   /plan/:sessionId   → PlanStubPage   (full-screen plan graph — Day 5)
- *   /sources           → SourcesPanel   (knowledge base manager — Netal)
- *   /graph             → GraphExplorer  (graph explorer — Netal)
- *   /outputs           → OutputCards    (file library — Kanishka)
- *   /audit             → AuditLog       (audit log — Kanishka)
- *   /settings          → SettingsPage   (model registry, RBAC, encrypted storage — §3.11)
- *   /monitor           → NetworkMonitor (network monitor full view — Sahil)
+ * PageTransition helper for smooth, professional 160ms ease-out page route animations.
  */
-export default function App() {
+function PageTransition({ children }) {
   return (
-    <AppShell>
-      <Routes>
-        <Route path="/" element={<WorkbenchPage />} />
-        <Route path="/plan/:sessionId" element={<PlanStubPage />} />
-        <Route path="/sources" element={<SourcesPage />} />
-        <Route path="/graph" element={<GraphExplorer />} />
-        <Route path="/outputs" element={<OutputCards />} />
-        <Route path="/audit" element={<AuditLog />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/monitor" element={<NetworkMonitor mode="full" />} />
-      </Routes>
-    </AppShell>
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -5 }}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+      className="w-full h-full flex flex-col min-h-0 flex-1"
+    >
+      {children}
+    </motion.div>
   )
 }
 
+/**
+ * App — top-level router.
+ * All routes render inside AppShell (persistent nav chrome).
+ */
+export default function App() {
+  const location = useLocation()
+
+  return (
+    <AppShell>
+      <AnimatePresence mode="wait" initial={false}>
+        <Routes location={location} key={location.pathname}>
+          <Route path="/" element={<PageTransition><WorkbenchPage /></PageTransition>} />
+          <Route path="/plan/:sessionId" element={<PageTransition><PlanStubPage /></PageTransition>} />
+          <Route path="/sources" element={<PageTransition><SourcesPage /></PageTransition>} />
+          <Route path="/graph" element={<PageTransition><GraphExplorerPage /></PageTransition>} />
+          <Route path="/instrumentation" element={<PageTransition><InstrumentationPage /></PageTransition>} />
+          <Route path="/outputs" element={<PageTransition><OutputCards /></PageTransition>} />
+          <Route path="/audit" element={<PageTransition><AuditLog /></PageTransition>} />
+          <Route path="/settings" element={<PageTransition><SettingsPage /></PageTransition>} />
+          <Route path="/monitor" element={<PageTransition><NetworkMonitor mode="full" /></PageTransition>} />
+        </Routes>
+      </AnimatePresence>
+    </AppShell>
+  )
+}

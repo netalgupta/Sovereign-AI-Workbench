@@ -206,3 +206,35 @@ concurrently will be much slower than twice one chat.
 | Every answer says "not confirmed" | Expected for table values; the verifier is a 3.8B model and false-negatives on them |
 | `Could not start sandbox pool` | Build the image (§5) or ignore it |
 | Library warnings flooding the console | Restart the process, do not reload |
+
+## Running the tests without waiting three and a half minutes
+
+Measured: the full suite is 212s, and **8 tests are 127s of that**. They
+are the ones that call a real model through Ollama or load a
+multi-hundred-megabyte model from disk.
+
+```bash
+# Fast loop while iterating -- 443 tests, 85s
+py -3 -m pytest backend/tests -q -m "not live_model"
+
+# The 8 slow ones on their own -- 120s
+py -3 -m pytest backend/tests -q -m "live_model"
+
+# Everything. Run this before you commit, every time.
+py -3 -m pytest backend/tests -q
+```
+
+**The slow ones are not optional and must not be deleted.** They are
+precisely the tests that catch the failures this repo keeps having:
+
+- a model tag in `models.yaml` that does not exist on Ollama (happened
+  twice -- `qwen2-vl:7b` and `phi-3.5-mini`, both found only when
+  something tried to use them)
+- a prompt the model silently stops parsing (the planner and the
+  verifier both did this, and both were fixed after a live trace)
+- OCR falling back to CPU without saying so (21.08s vs 0.61s)
+- the full graph path dispatching and refusing correctly
+
+A mocked version of any of those passes while the real thing is broken.
+That is the whole reason they are slow: they are the only tests touching
+the parts that cannot be faked.

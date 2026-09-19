@@ -59,9 +59,85 @@ class OCRResult(BaseModel):
 _ocr_instance = None
 
 
+_device_cache: str | None = None
+
+
+def _ocr_device() -> str:
+    """"gpu" when this build of paddle can actually reach one, else "cpu".
+
+    Two separate conditions, and both matter. `paddlepaddle` (CPU) and
+    `paddlepaddle-gpu` are different distributions that both import as
+    `paddle`, so the CPU wheel reports is_compiled_with_cuda() False no
+    matter what hardware is present. And a CUDA build on a machine with
+    no visible device reports device_count() 0.
+
+    Honoured override for the venue: WORKBENCH_OCR_DEVICE=cpu forces the
+    CPU path without uninstalling anything, which is the difference
+    between a config change and a reinstall five minutes before a demo.
+    """
+    global _device_cache
+    if _device_cache is not None:
+        return _device_cache
+
+    override = (os.environ.get("WORKBENCH_OCR_DEVICE") or "").strip().lower()
+    if override in ("cpu", "gpu"):
+        _device_cache = override
+        return override
+    try:
+        # Before importing paddle, not after: the CUDA DLLs live in
+        # sibling nvidia/*/bin directories that Windows does not search,
+        # and the failure that causes surfaces only at the first
+        # convolution -- long after import, device query and tensor
+        # placement have all reported success.
+        from backend.utils.cuda_dll_path import ensure_cuda_dll_path
+
+        ensure_cuda_dll_path()
+
+        import paddle
+
+        if paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+            _device_cache = "gpu"
+            return "gpu"
+    except Exception:  # noqa: BLE001 - a probe must never break OCR
+        pass
+    _device_cache = "cpu"
+    return "cpu"
+
+
+def ocr_device() -> str:
+    """The device OCR will use, determining it if necessary (~4s cold).
+
+    A pipeline that silently fell back to CPU looks identical to one
+    that chose CPU, which is how "the GPU is not working" becomes an
+    afternoon of guessing. Memoised: the cost is paid once per process.
+    """
+    return _ocr_device()
+
+
+def ocr_device_if_known() -> str:
+    """The device, ONLY if it has already been determined.
+
+    A HEALTH CHECK MUST NOT DO EXPENSIVE WORK. ocr_device() imports
+    torch and paddle to answer, which is 3.87s on a cold process --
+    measured -- and /api/health is polled by the frontend. A health
+    endpoint that blocks a worker for four seconds is not reporting
+    health, it is degrading it, and with a single worker every other
+    request queues behind it.
+
+    Returns "not-initialised" rather than a guess. That is a real
+    answer: OCR has not run yet, so there is nothing to report, and
+    guessing "cpu" here would be a wrong claim on a GPU machine.
+    """
+    return _device_cache or "not-initialised"
+
+
 def _get_ocr_instance():
     global _ocr_instance
     if _ocr_instance is None:
+        from backend.utils.cuda_dll_path import ensure_cuda_dll_path
+
+        ensure_cuda_dll_path()
+
         from paddleocr import PaddleOCR
 
         _ocr_instance = PaddleOCR(
@@ -69,6 +145,25 @@ def _get_ocr_instance():
             # explicit model dirs are given below — verified directly,
             # not left in as harmless-looking dead configuration.
             enable_mkldnn=False,  # see module docstring point 2
+            # GPU WHEN THERE IS ONE, CPU WHEN THERE IS NOT.
+            #
+            # PaddleOCR was running on CPU because `paddlepaddle` (the
+            # CPU wheel) was installed; the CUDA build is a different
+            # distribution, not a flag. It is now `paddlepaddle-gpu`
+            # built against CUDA 12.6, matching torch's cu126 — and
+            # crucially with NO virtualenv, because the cascading
+            # dependency conflict this repo hit before was the Linux
+            # pattern where torch and paddle fight over shared nvidia-*
+            # wheels. On Windows torch bundles its CUDA DLLs inside
+            # torch/lib, so the two coexist. Verified after the swap:
+            # paddle on gpu:0 AND torch.cuda.is_available() still True.
+            #
+            # DETECTED, NOT ASSUMED. A hardcoded device="gpu" turns a
+            # machine without CUDA into a crash at first OCR call, which
+            # on venue hardware is a demo failure with no fallback. The
+            # CPU path stays fully supported and is what a CPU-only
+            # install silently gets.
+            device=_ocr_device(),
             doc_orientation_classify_model_dir=str(_MODELS_ROOT / "PP-LCNet_x1_0_doc_ori"),
             doc_unwarping_model_dir=str(_MODELS_ROOT / "UVDoc"),
             textline_orientation_model_dir=str(_MODELS_ROOT / "PP-LCNet_x1_0_textline_ori"),

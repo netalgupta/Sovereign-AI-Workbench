@@ -11,6 +11,8 @@ build/
 .env
 *.log
 
+.DS_Store
+
 # Model weights and portable-drive artifacts never belong in git — these
 # are fetched once via backend/ingestion/fetch_models.py (see model_cache.py)
 # and shipped on the portable drive per DEPENDENCIES.md §10, never checked in.
@@ -24,6 +26,7 @@ build/
 /models/ocr/
 /models/vision/
 /models/audio/
+/models/image/
 *.zip
 
 # Automated UI test & screenshot capture profiles
@@ -50,9 +53,9 @@ document_registry/
 # Audit trail and approval queue: machine-local records of what this
 # install did and who approved it. Never shared between machines — an
 # audit log is evidence about one deployment, not project source.
-audit/
 /audit/
 backend/audit/*.jsonl
+
 
 # Built standalone console: ~3.4MB of base64 images derived entirely from
 # files already tracked in the corpus directories. Regenerate with
@@ -67,3 +70,30 @@ frontend/standalone/workbench_console.html
 backend/evaluation/configured_sources.json
 
 backend/memory/*.db
+outputs/
+
+# Per-machine runtime state and exported snapshots.
+#
+# deleted_sources.json is a tombstone list so deleted files do not
+# reappear on re-scan. It was COMMITTED, carrying absolute paths from
+# two different machines (e:\hackathons\... and c:\sih\...), so one
+# person's deletions were being applied on another person's box.
+#
+# pipeline/*.json are exports of a corpus at one moment on one machine.
+# Committing them means every clone ships someone else's knowledge base,
+# which /sources and /graph would render as though it were local.
+backend/evaluation/deleted_sources.json
+frontend/public/pipeline/*.json
+
+# Per-machine corpus cache written by PipelineState. Committing a
+# corpus export is what made one person's 13 documents hydrate every
+# teammate's backend and hide folders they had just added.
+.workbench/
+
+# Synthetic MRPL archive corpus (backend/evaluation/generate_archive.py).
+# Regeneratable in ~1hr from the checked-in generator; would otherwise
+# bloat the repo with tens of MB of synthetic spreadsheets and images.
+MRPL_Archive_Corpus/
+MRPL_RAG_Test_Corpus/07_User_Uploads/*
+!MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
+/*.png

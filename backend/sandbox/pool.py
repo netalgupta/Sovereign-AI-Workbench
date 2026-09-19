@@ -226,7 +226,14 @@ class WorkerPool:
         # is the portable spelling and returns "Darwin" on macOS just
         # the same.
         if platform.system() == "Darwin" or "DOCKER_DEFAULT_PLATFORM" in os.environ:
-            extra_kwargs["platform"] = os.environ.get("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
+            try:
+                img_arch = self.client.images.get(resolved_img).attrs.get("Architecture")
+                if img_arch in ("arm64", "aarch64"):
+                    extra_kwargs["platform"] = "linux/arm64"
+                else:
+                    extra_kwargs["platform"] = "linux/amd64"
+            except Exception:
+                extra_kwargs["platform"] = os.environ.get("DOCKER_DEFAULT_PLATFORM", "linux/amd64")
 
         # useradd UID 1000 is baked into mrpl-sandbox:combined
         # if using plain python-slim, standard numeric user or root can run
@@ -252,10 +259,54 @@ class WorkerPool:
         container = self.client.containers.run(resolved_img, **container_kwargs)
         return Worker(name=name, container=container)
 
+    @staticmethod
+    def _already_gone(exc: Exception) -> bool:
+        """Is this exception "the container does not exist"?
+
+        Checked by TYPE first, falling back to the message only if the
+        docker package's exception classes cannot be imported. Matching
+        on "404" or "No such container" alone would also swallow a 404
+        from an unrelated endpoint, and silently succeeding at a removal
+        that did not happen leaks a sandbox.
+        """
+        try:
+            from docker.errors import NotFound
+
+            if isinstance(exc, NotFound):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return "No such container" in str(exc)
+
     def _destroy(self, w: Worker):
+        """Remove a worker's container. Already-gone is success.
+
+        A container that does not exist is the state this function is
+        trying to reach, so Docker's 404 is not an error -- but it was
+        logged with logger.exception, which prints a full traceback per
+        worker. On shutdown that is four tracebacks in a row, and under
+        `uvicorn --reload` it is four per file save:
+
+            ERROR pool.py:259 - failed removing container sandbox-worker-0
+            docker.errors.NotFound: 404 Client Error ...
+            No such container: 8c5cd984...
+
+        It happens routinely and means nothing -- Docker reaps containers
+        on exit, a previous reload already removed them, or the daemon
+        restarted. The cost is not the noise itself but what it hides: a
+        log where the normal case is a wall of tracebacks is a log where
+        nobody notices the real one.
+
+        Anything OTHER than a missing container is still reported in
+        full, because failing to remove a container that IS there leaks
+        a sandbox.
+        """
         try:
             w.container.remove(force=True)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            if self._already_gone(exc):
+                logger.debug("container %s was already removed", w.name)
+                return
             logger.exception("failed removing container %s", w.name)
 
     def _respawn(self, w: Worker):
@@ -275,6 +326,14 @@ class WorkerPool:
         is momentarily full. Raises WorkerPoolExhausted if none free up
         in time -- caller should surface this as a "system busy" message,
         not a code error."""
+        with self.lock:
+            if not self.workers:
+                logger.info("worker pool empty on acquire — auto-starting %d workers", self.size)
+                for i in range(self.size):
+                    self.workers.append(self._spawn(f"sandbox-worker-{i}"))
+                self._reaper_thread = threading.Thread(target=self._reaper_loop, daemon=True)
+                self._reaper_thread.start()
+
         deadline = time.time() + wait_timeout
         while True:
             with self.lock:

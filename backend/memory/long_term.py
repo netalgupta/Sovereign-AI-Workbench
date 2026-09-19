@@ -60,7 +60,15 @@ CREATE TABLE IF NOT EXISTS facts (
     created_at  REAL NOT NULL,
     last_used   REAL,
     use_count   INTEGER NOT NULL DEFAULT 0,
-    metadata    TEXT NOT NULL DEFAULT '{}'
+    metadata    TEXT NOT NULL DEFAULT '{}',
+    -- What this fact is ABOUT, so a later statement on the same subject
+    -- can replace it instead of sitting beside it.
+    subject     TEXT,
+    -- The fact that replaced this one. Superseded facts are kept, never
+    -- deleted: "I used to work on HCU" is a real part of the record,
+    -- and a memory that silently rewrites itself is one nobody can audit.
+    superseded_by TEXT,
+    superseded_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_facts_kind ON facts(kind);
 """
@@ -96,6 +104,51 @@ _FINDING_VERB = re.compile(
 )
 
 
+# WHAT A FACT IS ABOUT.
+#
+# Two statements conflict when they answer the same question about the
+# same thing. "I work on HCU" and "I moved to CCR" both answer "which
+# unit?", so the second replaces the first. "I work on HCU" and "always
+# answer in bullet points" answer different questions and both stand.
+#
+# The subject is the lead-in phrase, normalised -- deliberately crude.
+# A cleverer matcher would merge facts that only look similar, and a
+# wrongly merged preference is invisible: the user is never told which
+# of the two the system kept.
+_SUBJECT_PATTERNS = [
+    (re.compile(r"\bmy name is\b", re.I), "name"),
+    (re.compile(r"\b(i am|i'?m)\s+the\b", re.I), "role"),
+    (re.compile(r"\bmy role is\b", re.I), "role"),
+    (re.compile(r"\bi work (on|in|at)\b", re.I), "unit"),
+    (re.compile(r"\bmy unit is\b", re.I), "unit"),
+    (re.compile(r"\bi (handle|look after)\b", re.I), "responsibility"),
+    (re.compile(r"\b(we call|we refer to|our term for|here we call)\b", re.I),
+     "vocabulary"),
+]
+
+
+def subject_of(text: str) -> str | None:
+    """The thing a fact is about, or None when it is not on a known axis.
+
+    None means "cannot supersede anything and cannot be superseded",
+    which is the safe direction: an unrecognised statement is kept
+    alongside whatever came before rather than silently replacing it.
+    """
+    for pattern, subject in _SUBJECT_PATTERNS:
+        if pattern.search(text or ""):
+            return subject
+    return None
+
+
+# How long a durable fact keeps applying without being restated or used.
+# Not a guess dressed as a constant: the cost of expiring too early is
+# the user repeating themselves once, and the cost of never expiring is
+# a stale preference shaping every answer forever with no signal that it
+# is doing so.
+DEFAULT_TTL_DAYS = 180
+_SECONDS_PER_DAY = 86400.0
+
+
 @dataclass
 class Fact:
     fact_id: str
@@ -105,6 +158,22 @@ class Fact:
     created_at: float
     last_used: float | None
     use_count: int
+    subject: str | None = None
+    superseded_by: str | None = None
+    superseded_at: float | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.superseded_by is None
+
+    def is_stale(self, now: float, ttl_days: int = DEFAULT_TTL_DAYS) -> bool:
+        """Not used and not restated for a long time.
+
+        Measured from last USE, not from creation: a preference that
+        keeps being applied is evidently still wanted.
+        """
+        reference = self.last_used or self.created_at
+        return (now - reference) > ttl_days * _SECONDS_PER_DAY
 
 
 def _looks_like_a_document_fact(text: str) -> bool:
@@ -141,7 +210,24 @@ class LongTermMemory:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns a database from an earlier build lacks."""
+        existing = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(facts)").fetchall()
+        }
+        if not existing:
+            return
+        for column, decl in (
+            ("subject", "TEXT"),
+            ("superseded_by", "TEXT"),
+            ("superseded_at", "REAL"),
+        ):
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE facts ADD COLUMN {column} {decl}")
 
     def remember(
         self, content: str, kind: str | None = None, source_session: str | None = None
@@ -161,29 +247,52 @@ class LongTermMemory:
             # insisting is exactly when this matters.
             return None
 
+        subject = subject_of(content)
         with self._lock:
             existing = self._conn.execute(
-                "SELECT fact_id FROM facts WHERE content = ?", (content,)
+                "SELECT fact_id FROM facts WHERE content = ? AND superseded_by IS NULL",
+                (content,),
             ).fetchone()
             if existing:
                 return self.get(existing["fact_id"])
 
+            now_ts = time.time()
             fact = Fact(
                 fact_id=f"f-{uuid.uuid4().hex[:12]}",
                 kind=kind,
                 content=content[:500],
                 source_session=source_session,
-                created_at=time.time(),
+                created_at=now_ts,
                 last_used=None,
                 use_count=0,
+                subject=subject,
             )
             self._conn.execute(
                 "INSERT INTO facts (fact_id, kind, content, source_session, "
-                "created_at, last_used, use_count, metadata) "
-                "VALUES (?, ?, ?, ?, ?, NULL, 0, '{}')",
+                "created_at, last_used, use_count, metadata, subject) "
+                "VALUES (?, ?, ?, ?, ?, NULL, 0, '{}', ?)",
                 (fact.fact_id, fact.kind, fact.content, fact.source_session,
-                 fact.created_at),
+                 fact.created_at, subject),
             )
+
+            # A NEW STATEMENT ON THE SAME AXIS REPLACES THE OLD ONE.
+            #
+            # Without this, "I work on HCU" and "I moved to CCR" both
+            # persist and both get injected into every future prompt,
+            # and the model is handed a contradiction about the user
+            # with no way to tell which is current. Dedup was
+            # exact-string only, which catches a repetition and misses
+            # every actual change.
+            #
+            # The old fact is MARKED, not deleted. "I used to work on
+            # HCU" is a real part of the record, and a memory that
+            # quietly rewrites itself is one nobody can audit.
+            if subject:
+                self._conn.execute(
+                    "UPDATE facts SET superseded_by = ?, superseded_at = ? "
+                    "WHERE subject = ? AND fact_id != ? AND superseded_by IS NULL",
+                    (fact.fact_id, now_ts, subject, fact.fact_id),
+                )
             self._conn.commit()
         return fact
 
@@ -194,12 +303,43 @@ class LongTermMemory:
             ).fetchone()
         return _row_to_fact(row) if row else None
 
-    def all_facts(self, limit: int = 100) -> list[Fact]:
+    def all_facts(
+        self, limit: int = 100, include_superseded: bool = False
+    ) -> list[Fact]:
+        """Durable facts, newest first.
+
+        Superseded ones are excluded by default and available on
+        request: they must not shape an answer, and they must still be
+        inspectable, which are different requirements.
+        """
+        clause = "" if include_superseded else "WHERE superseded_by IS NULL "
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM facts ORDER BY created_at DESC LIMIT ?", (limit,)
+                f"SELECT * FROM facts {clause}ORDER BY created_at DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         return [_row_to_fact(r) for r in rows]
+
+    def expire_stale(self, ttl_days: int = DEFAULT_TTL_DAYS) -> list[Fact]:
+        """Retire facts nothing has used or restated in a long time.
+
+        Retired the same way as superseded ones -- marked, never
+        deleted -- so "this stopped applying in March" remains
+        answerable.
+        """
+        now_ts = time.time()
+        retired = [
+            f for f in self.all_facts(limit=1000) if f.is_stale(now_ts, ttl_days)
+        ]
+        if retired:
+            with self._lock:
+                self._conn.executemany(
+                    "UPDATE facts SET superseded_by = 'expired', superseded_at = ? "
+                    "WHERE fact_id = ?",
+                    [(now_ts, f.fact_id) for f in retired],
+                )
+                self._conn.commit()
+        return retired
 
     def forget(self, fact_id: str) -> bool:
         with self._lock:
@@ -239,6 +379,14 @@ class LongTermMemory:
         return "\n".join(lines)
 
 
+def _column(row: sqlite3.Row, name: str):
+    """A column's value, or None when the row predates the column."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
+
+
 def _row_to_fact(row: sqlite3.Row) -> Fact:
     return Fact(
         fact_id=row["fact_id"],
@@ -248,6 +396,9 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
         created_at=row["created_at"],
         last_used=row["last_used"],
         use_count=row["use_count"],
+        subject=_column(row, "subject"),
+        superseded_by=_column(row, "superseded_by"),
+        superseded_at=_column(row, "superseded_at"),
     )
 
 

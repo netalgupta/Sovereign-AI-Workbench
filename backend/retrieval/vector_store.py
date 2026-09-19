@@ -21,6 +21,7 @@ adding — it's the only way to know what id FAISS is about to assign.
 """
 
 import sqlite3
+import threading
 
 import numpy as np
 from pydantic import BaseModel
@@ -70,57 +71,77 @@ class VectorStore:
 
     def __init__(self, dim: int = 1024, db_path: str = ":memory:"):
         self.index = faiss.IndexFlatIP(dim)
+        # ONE LOCK FOR THE INDEX AND THE TABLE. FAISS is not safe to read
+        # while another thread adds: add() can reallocate the vector
+        # buffer under a concurrent search or reconstruct. MEASURED as a
+        # segfault (exit 139) of the whole API while a folder was being
+        # indexed and a page read the vectors -- and a chat search during
+        # an ingest takes the same path. The SQLite connection is shared
+        # across threads (check_same_thread=False) and needs the same
+        # guard. Re-entrant so a locked method may call another.
+        self._rw = threading.RLock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute(_CREATE_TABLE_SQL)
         self._conn.commit()
+        # Moves only when the corpus changes; see `generation`.
+        self._generation = 0
+        self._texts_cache: list | None = None
+        self._texts_cache_gen = -1
+        self._records_cache: list | None = None
+        self._records_cache_gen = -1
 
     def add_chunks(self, chunks: list[IngestedChunk], embeddings: np.ndarray) -> None:
-        if len(chunks) != embeddings.shape[0]:
-            raise ValueError(
-                f"chunks ({len(chunks)}) and embeddings ({embeddings.shape[0]}) "
-                f"must be the same length"
-            )
-        if not chunks:
-            return
+        with self._rw:
+            if len(chunks) != embeddings.shape[0]:
+                raise ValueError(
+                    f"chunks ({len(chunks)}) and embeddings ({embeddings.shape[0]}) "
+                    f"must be the same length"
+                )
+            if not chunks:
+                return
 
-        start_id = self.index.ntotal  # see module docstring for why this must come first
-        self.index.add(np.ascontiguousarray(embeddings, dtype=np.float32))
+            start_id = self.index.ntotal  # see module docstring for why this must come first
+            self.index.add(np.ascontiguousarray(embeddings, dtype=np.float32))
 
-        rows = [
-            (
-                start_id + i,
-                chunk.text,
-                chunk.metadata.source_document,
-                chunk.metadata.document_type,
-                chunk.metadata.page_number,
-                chunk.metadata.chunk_index,
-                chunk.metadata.ingestion_date,
+            rows = [
+                (
+                    start_id + i,
+                    chunk.text,
+                    chunk.metadata.source_document,
+                    chunk.metadata.document_type,
+                    chunk.metadata.page_number,
+                    chunk.metadata.chunk_index,
+                    chunk.metadata.ingestion_date,
+                )
+                for i, chunk in enumerate(chunks)
+            ]
+            self._conn.executemany(
+                "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)", rows
             )
-            for i, chunk in enumerate(chunks)
-        ]
-        self._conn.executemany(
-            "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)", rows
-        )
-        self._conn.commit()
+            self._conn.commit()
+            # The corpus changed. Anything holding a view of it is now stale
+            # and must rebuild rather than answer from what it remembers.
+            self._generation += 1
 
     def get_by_faiss_id(self, faiss_id: int) -> StoredChunk | None:
-        cursor = self._conn.execute(
-            "SELECT faiss_id, text, source_document, document_type, page_number, "
-            "chunk_index, ingestion_date FROM chunks WHERE faiss_id = ?",
-            (faiss_id,),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return None
-        return StoredChunk(
-            faiss_id=row[0],
-            text=row[1],
-            source_document=row[2],
-            document_type=row[3],
-            page_number=row[4],
-            chunk_index=row[5],
-            ingestion_date=row[6],
-        )
+        with self._rw:
+            cursor = self._conn.execute(
+                "SELECT faiss_id, text, source_document, document_type, page_number, "
+                "chunk_index, ingestion_date FROM chunks WHERE faiss_id = ?",
+                (faiss_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return StoredChunk(
+                faiss_id=row[0],
+                text=row[1],
+                source_document=row[2],
+                document_type=row[3],
+                page_number=row[4],
+                chunk_index=row[5],
+                ingestion_date=row[6],
+            )
 
     def dense_search(self, query_embedding: np.ndarray, top_k: int) -> list[tuple[int, float]]:
         """Returns [(faiss_id, inner_product_score), ...], best first.
@@ -128,12 +149,13 @@ class VectorStore:
         Empty store returns [] rather than letting FAISS error on a
         search against zero vectors.
         """
-        if self.index.ntotal == 0:
-            return []
-        top_k = min(top_k, self.index.ntotal)
-        query = np.ascontiguousarray(query_embedding.reshape(1, -1), dtype=np.float32)
-        scores, ids = self.index.search(query, top_k)
-        return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
+        with self._rw:
+            if self.index.ntotal == 0:
+                return []
+            top_k = min(top_k, self.index.ntotal)
+            query = np.ascontiguousarray(query_embedding.reshape(1, -1), dtype=np.float32)
+            scores, ids = self.index.search(query, top_k)
+            return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
 
     def get_neighbours(
         self, source_document: str, chunk_index: int, window: int = 1
@@ -163,34 +185,114 @@ class VectorStore:
         embedding, no scoring) and are the passages a human would read
         next. This is the standard repair for chunk-boundary truncation.
         """
-        rows = self._conn.execute(
-            "SELECT faiss_id, text, source_document, document_type, page_number, "
-            "chunk_index, ingestion_date FROM chunks "
-            "WHERE source_document = ? AND chunk_index BETWEEN ? AND ? "
-            "ORDER BY chunk_index",
-            (source_document, chunk_index - window, chunk_index + window),
-        ).fetchall()
-        return [
-            StoredChunk(
-                faiss_id=row[0],
-                text=row[1],
-                source_document=row[2],
-                document_type=row[3],
-                page_number=row[4],
-                chunk_index=row[5],
-                ingestion_date=row[6],
-            )
-            for row in rows
-        ]
+        with self._rw:
+            rows = self._conn.execute(
+                "SELECT faiss_id, text, source_document, document_type, page_number, "
+                "chunk_index, ingestion_date FROM chunks "
+                "WHERE source_document = ? AND chunk_index BETWEEN ? AND ? "
+                "ORDER BY chunk_index",
+                (source_document, chunk_index - window, chunk_index + window),
+            ).fetchall()
+            return [
+                StoredChunk(
+                    faiss_id=row[0],
+                    text=row[1],
+                    source_document=row[2],
+                    document_type=row[3],
+                    page_number=row[4],
+                    chunk_index=row[5],
+                    ingestion_date=row[6],
+                )
+                for row in rows
+            ]
+
+    @property
+    def generation(self) -> int:
+        """Bumped whenever the corpus changes.
+
+        Anything caching a view of the corpus must key on this. A cache
+        that outlives the data it was built from is the single most
+        repeated bug in this repository -- a committed JSON artifact
+        with stale numbers, a resume path serving a cached score instead
+        of the model's output, hash embeddings that satisfied every
+        shape assertion. A counter that only the write path can touch is
+        the cheap version of checking provenance.
+        """
+        return self._generation
 
     def all_chunk_texts(self) -> list[tuple[int, str]]:
         """[(faiss_id, text), ...] for every stored chunk, ordered by
         faiss_id. Needed by CARD 09's BM25 sparse index, which must be
         built over exactly the same corpus as the dense index — not a
         separately-maintained copy that could drift out of sync.
+
+        CACHED, because this is a full read of the corpus and it runs
+        THREE TIMES PER QUERY -- hybrid_search builds the sparse index
+        from it, grounded_retrieval reads it again for lexical evidence,
+        and generation reads it a third time to explain the query. At 52
+        documents that is invisible. At the 1000-page PDFs this is meant
+        for it is the dominant cost of a search that should be
+        sub-second.
+
+        Invalidated by `generation`, which only add_chunks can move, so
+        a re-ingest cannot be served from a stale list.
         """
-        cursor = self._conn.execute("SELECT faiss_id, text FROM chunks ORDER BY faiss_id")
-        return cursor.fetchall()
+        with self._rw:
+            if self._texts_cache is not None and self._texts_cache_gen == self._generation:
+                return self._texts_cache
+            cursor = self._conn.execute("SELECT faiss_id, text FROM chunks ORDER BY faiss_id")
+            rows = cursor.fetchall()
+            self._texts_cache = rows
+            self._texts_cache_gen = self._generation
+            return rows
+
+    def all_chunk_records(self) -> list[dict]:
+        """Every chunk with its metadata, as dicts.
+
+        all_chunk_texts() returns (faiss_id, text) because that is what
+        BM25 needs. Anything that filters by SOURCE -- revision
+        tracking, correspondence summarisation, per-document analysis --
+        needs the metadata too, and doing that as
+        get_by_faiss_id() in a loop is one query per chunk.
+
+        Cached on the same generation counter as all_chunk_texts, so a
+        re-ingest invalidates it and nothing can serve a view of a
+        corpus that has moved.
+        """
+        with self._rw:
+            if self._records_cache is not None and self._records_cache_gen == self._generation:
+                return self._records_cache
+            cursor = self._conn.execute(
+                "SELECT faiss_id, text, source_document, document_type, page_number, "
+                "chunk_index, ingestion_date FROM chunks ORDER BY faiss_id"
+            )
+            records = [
+                {
+                    "faiss_id": row[0],
+                    "text": row[1],
+                    "source_document": row[2],
+                    "document_type": row[3],
+                    "page_number": row[4],
+                    "chunk_index": row[5],
+                    "ingestion_date": row[6],
+                }
+                for row in cursor.fetchall()
+            ]
+            self._records_cache = records
+            self._records_cache_gen = self._generation
+            return records
+
+    def vectors(self, n: int) -> np.ndarray | None:
+        """The first `n` stored vectors, or None if fewer are stored.
+
+        Read under the store lock -- see __init__ for why reading the
+        index while an ingest adds to it is not safe.
+        """
+        with self._rw:
+            if n <= 0 or self.index.ntotal < n:
+                return None
+            return np.asarray(self.index.reconstruct_n(0, n), dtype=np.float32)
 
     def __len__(self) -> int:
-        return self.index.ntotal
+        with self._rw:
+            return self.index.ntotal

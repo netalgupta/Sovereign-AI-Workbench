@@ -333,6 +333,7 @@ def run_agent_loop(
     model_id: str = "reasoning-model",
     max_iterations: int = MAX_ITERATIONS,
     active_documents: list[str] | None = None,
+    memory=None,
 ) -> Iterator[dict]:
     """Work on `request`, yielding events as it goes.
 
@@ -372,14 +373,23 @@ def run_agent_loop(
     T.kv("tools offered count", len(tools))
     T.kv("tools offered names", ", ".join(tool_names))
 
+    # Conversation context goes in the SYSTEM message, not the user
+    # message. Appending it to the request makes the model answer the
+    # history; keeping it in the system role makes it background the
+    # request is interpreted against, which is what it is. It arrives
+    # already labelled "context only - NOT a source".
+    system = _SYSTEM_PROMPT
+    context = getattr(memory, "context_block", "") or ""
+    if context:
+        system = _SYSTEM_PROMPT + "\n" + context
     messages: list[dict] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": request},
     ]
 
     yield {"type": "start", "request": request}
 
-    full_text: list[str] = []
+    final_reply_chunks: list[str] = []
     tool_call_count = 0
 
     seen_searches: dict[str, int] = {}
@@ -397,8 +407,6 @@ def run_agent_loop(
                 chunk = message.get("content") or ""
                 if chunk:
                     assistant_text.append(chunk)
-                    full_text.append(chunk)
-                    yield {"type": "text_delta", "text": chunk}
 
                 for call in message.get("tool_calls") or []:
                     tool_calls.append(call)
@@ -424,40 +432,47 @@ def run_agent_loop(
             }
             return
 
-        text_so_far = "".join(assistant_text)
+        text_so_far = "".join(assistant_text).strip()
 
-        # No tool wanted -> the model is answering. Done.
-        if not tool_calls:
-            T.kv(f"iteration {iteration}", "final answer")
-            break
+        # If tools were called, this text is tool-selection reasoning / process narration.
+        # It belongs inside the thinking block, NEVER in the final reply body!
+        if tool_calls:
+            T.kv(f"iteration {iteration}", f"tool call reasoning ({len(text_so_far)} chars)")
+            if text_so_far:
+                yield {
+                    "type": "thought",
+                    "text": text_so_far,
+                    "iteration": iteration,
+                }
 
-        # Record the assistant's turn verbatim, including the tool calls,
-        # so the model sees its own decision on the next round-trip.
-        messages.append(
-            {"role": "assistant", "content": text_so_far, "tool_calls": tool_calls}
-        )
+            # Record the assistant's turn verbatim, including the tool calls,
+            # so the model sees its own decision on the next round-trip.
+            messages.append(
+                {"role": "assistant", "content": text_so_far, "tool_calls": tool_calls}
+            )
 
-        for call in tool_calls:
-            function = call.get("function") or {}
-            name = function.get("name") or ""
-            arguments = function.get("arguments") or {}
-            if isinstance(arguments, str):
-                # Some builds return the arguments JSON-encoded.
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            call_id = call.get("id") or f"call-{iteration}-{tool_call_count}"
-            tool_call_count += 1
+            for call in tool_calls:
+                function = call.get("function") or {}
+                name = function.get("name") or ""
+                arguments = function.get("arguments") or {}
+                if isinstance(arguments, str):
+                    # Some builds return the arguments JSON-encoded.
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                call_id = call.get("id") or f"call-{iteration}-{tool_call_count}"
+                tool_call_count += 1
 
-            tools_used.add(name)
-            T.note(f"    tool: {name}({json.dumps(arguments)[:70]})")
-            yield {
-                "type": "tool_call",
-                "id": call_id,
-                "name": name,
-                "arguments": arguments,
-            }
+                tools_used.add(name)
+                T.note(f"    tool: {name}({json.dumps(arguments)[:70]})")
+                yield {
+                    "type": "tool_call",
+                    "id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                    "reasoning": text_so_far,
+                }
 
             # HARD CONSTRAINT #4. A gated tool stops the loop. It is not
             # executed, the model is not asked whether it should be, and
@@ -467,6 +482,7 @@ def run_agent_loop(
                 from backend.audit.approval_gate import ApprovalGate
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
+                from backend.audit.approval_gate import ApprovalGate
 
                 spec = _REGISTRY.get(name)
                 effect = getattr(spec, "description", "") or name
@@ -581,6 +597,37 @@ def run_agent_loop(
                     "name": name,
                 }
             )
+        else:
+            # No tool wanted -> the model is delivering its FINAL ANSWER!
+            T.kv(f"iteration {iteration}", "final answer")
+
+            clean_answer = text_so_far
+            if "<think>" in clean_answer:
+                if "</think>" in clean_answer:
+                    thought_matches = re.findall(r"<think>(.*?)</think>", clean_answer, flags=re.DOTALL)
+                    for tb in thought_matches:
+                        tb_strip = tb.strip()
+                        if tb_strip:
+                            yield {
+                                "type": "thought",
+                                "text": tb_strip,
+                                "iteration": iteration,
+                            }
+                    clean_answer = re.sub(r"<think>.*?</think>", "", clean_answer, flags=re.DOTALL).strip()
+                else:
+                    parts = clean_answer.split("<think>", 1)
+                    clean_answer = parts[0].strip()
+                    thought_body = parts[1].strip()
+                    if thought_body:
+                        yield {
+                            "type": "thought",
+                            "text": thought_body,
+                            "iteration": iteration,
+                        }
+
+            final_reply_chunks.append(clean_answer)
+            yield {"type": "text_delta", "text": clean_answer}
+            break
     else:
         # Exhausted the iteration budget with the model still calling
         # tools. Reported, never presented as a finished answer.
@@ -594,7 +641,7 @@ def run_agent_loop(
             ),
         }
 
-    reply = "".join(full_text).strip()
+    reply = "".join(final_reply_chunks).strip()
 
     # HARD CONSTRAINT #3, checked on the way out.
     unverified = _unverified_arithmetic(reply, tools_used)
@@ -682,6 +729,7 @@ def run_turn(
     shape regardless, and a `route` event tells it which path ran and
     why, so the decision is visible rather than mysterious.
     """
+    from backend.memory.turn import close_turn, open_turn
     from backend.observability import turn_log as T
     from backend.orchestrator.path_router import decide_path
 
@@ -691,6 +739,143 @@ def run_turn(
     T.kv("path", decision.path)
     T.kv("reason", decision.reason)
 
+    # MEMORY, ON THIS PATH TOO.
+    #
+    # It was wired into graph.py's synthesize_node and nowhere else, so
+    # this endpoint neither remembered a conversation nor RECORDED one --
+    # which also left holes in the session for later turns answered by
+    # the other endpoint. Both paths now go through the same pair of
+    # functions; see backend/memory/turn.py.
+    memory = open_turn(session_id, request)
+    if memory.degraded:
+        T.warn(f"memory unavailable ({memory.degraded}); answering statelessly")
+    elif memory.has_context:
+        T.kv("memory", f"context {len(memory.context_block)} chars")
+        if memory.added_terms:
+            T.kv("resolved follow-up", f"+{memory.added_terms}")
+        if memory.focus_documents:
+            T.kv("focus documents", memory.focus_documents[:3])
+
+    # WHAT THE SYSTEM REMEMBERED, AS AN EVENT.
+    #
+    # Memory changed what was retrieved -- a follow-up gets rewritten,
+    # focus documents steer the search -- and none of that was visible.
+    # An answer that differs because of something remembered two turns
+    # ago, with no indication that anything was remembered, is the kind
+    # of behaviour a user reads as the system being inconsistent.
+    #
+    # Emitted before any work so the UI can show it while the turn runs,
+    # and carrying counts rather than contents; see TurnMemory.summary().
+    yield {"type": "memory", **memory.summary()}
+
+    reply_text = ""
+    citations: list = []
+    documents: list = []
+    tool_calls: list = []
+    try:
+        for event in _answer(
+            request,
+            decision,
+            memory,
+            session_id=session_id,
+            model_id=model_id,
+            active_documents=active_documents,
+        ):
+            kind = event.get("type")
+            if kind == "done":
+                reply_text = event.get("reply") or ""
+                citations = event.get("citations") or []
+                documents = _documents_from_citations(citations)
+            elif kind == "tool_result":
+                tool_calls.append({
+                    "tool_name": event.get("name"),
+                    "status": event.get("status"),
+                })
+                documents.extend(_documents_from_tool_result(event))
+            elif kind == "error":
+                reply_text = event.get("message") or reply_text
+            yield event
+    finally:
+        # Recorded in a finally block deliberately: a turn that crashed
+        # or was disconnected mid-stream still happened, and a session
+        # that silently drops it leaves the next turn interpreting a
+        # conversation with a hole in it.
+        close_turn(
+            session_id,
+            reply_text,
+            route=decision.path,
+            citations=citations,
+            documents=_dedupe(documents),
+            tool_calls=tool_calls,
+            entities=_entities_from_citations(citations),
+        )
+
+
+def _dedupe(values: list) -> list:
+    seen: list = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _documents_from_citations(citations: list) -> list:
+    return _dedupe([c.get("source_document") for c in citations if isinstance(c, dict)])
+
+
+def _documents_from_tool_result(event: dict) -> list:
+    output = event.get("output")
+    if isinstance(output, dict):
+        docs = output.get("documents")
+        if isinstance(docs, list):
+            return [d for d in docs if isinstance(d, str)]
+    return []
+
+
+def _entities_from_citations(citations: list) -> list:
+    """Equipment tags and segment names present in the cited passages.
+
+    Deterministic pattern matching, not a model call. An entity in this
+    list steers the NEXT turn's retrieval, so a hallucinated one would
+    silently bias a later answer -- and the tags this matches (HCU-2,
+    FFC-201, SOP-114-Rev3) have a shape that does not need inference.
+    """
+    found: list = []
+    for citation in citations:
+        text = citation.get("text") if isinstance(citation, dict) else None
+        if not text:
+            continue
+        for match in _ENTITY_RE.finditer(text):
+            token = match.group(0).strip()
+            if token and token not in found:
+                found.append(token)
+            if len(found) >= 12:
+                return found
+    return found
+
+
+# Equipment tags, instrument tags, document numbers and named pipeline
+# segments. Anchored on shape, so ordinary prose cannot match.
+_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z]{2,5}-\d{1,4}(?:-[A-Za-z0-9]{1,6})?"
+    r"|SOP-\d{2,4}(?:-Rev\d+)?"
+    r"|[A-Z][a-z]+(?:-[A-Z][a-z]+){1,3}\s+(?:segment|pipeline|line))\b"
+)
+
+
+def _answer(
+    request: str,
+    decision,
+    memory,
+    *,
+    session_id: str,
+    model_id: str,
+    active_documents: list[str] | None,
+) -> Iterator[dict]:
+    """The turn itself. Split out of run_turn so that memory is opened
+    and closed around EVERY path, including the ones that return early."""
+    from backend.observability import turn_log as T
+
     yield {"type": "start", "request": request}
     yield {
         "type": "route",
@@ -698,6 +883,120 @@ def run_turn(
         "reason": decision.reason,
         "tools_expected": decision.tools_expected,
     }
+
+    if decision.path == "approval":
+        # INTERCEPTION ON THIS PATH IS RIGHT. THE PAYLOAD WAS NOT.
+        #
+        # The streaming endpoint had no action gate at all, so a write
+        # request reached the tool loop -- catching that here is a real
+        # fix and it stays.
+        #
+        # What arrived with it was the fabricated approval payload,
+        # hardcoded in the backend for EVERY intercepted action:
+        #
+        #     action_type   DCS_SETPOINT_WRITE
+        #     target        HCU-2 / FFC-201
+        #     current       100% (1,450 m3/h)
+        #     proposed      115% (1,667 m3/h)
+        #     risk_level    CRITICAL
+        #     warning       "Operating above 110% reduces catalyst
+        #                    residence time (LHSV > 1.8 h-1)..."
+        #
+        # So "Draft an approval note and save it" asked an operator to
+        # authorise a feed-rate change on FFC-201. This is the same
+        # defect fixed in 879a8ef, and this time it is WORSE: it was
+        # removed from ApprovalModal.jsx and moved into the backend, so
+        # the frontend now renders invented figures as authoritative
+        # backend data. A visible fallback became an invisible claim.
+        #
+        # An approval screen that describes a different action than the
+        # pending one is not a safety control. It is consent obtained
+        # under a false description, and it produces a signed audit
+        # record for something nobody approved.
+        #
+        # The action is resolved instead -- same resolver the
+        # non-streaming path uses, so the two cannot describe the same
+        # request differently.
+        from backend.audit.approval_gate import ApprovalGate
+        from backend.orchestrator.action_resolver import resolve as resolve_action
+        from backend.orchestrator.graph import classify_action_request
+
+        action_kind = classify_action_request(request) or "operator action"
+        resolved = resolve_action(request, action_kind, session_id=session_id)
+
+        gate = ApprovalGate()
+        app_req = gate.request(
+            tool_name=resolved.tool_name or "unsupported_action",
+            arguments=(
+                resolved.arguments
+                if resolved.executable
+                else {"command": request, "category": action_kind}
+            ),
+            effect=resolved.effect,
+        )
+
+        # Only fields the system actually knows. A field it cannot know
+        # is ABSENT, never filled with a plausible placeholder: an empty
+        # field reads as unknown, a plausible one reads as measured.
+        approval_action = {
+            "id": app_req.request_id,
+            "title": f"Confirm {action_kind}",
+            "action_type": action_kind,
+            "description": app_req.effect,
+            "detail": request.strip(),
+            "executable": resolved.executable,
+            "tool_name": resolved.tool_name,
+            "preview": resolved.preview,
+            "reason": resolved.reason,
+        }
+
+        lines = [
+            "**Action intercepted — human approval required.**",
+            "",
+            f"This request was classified as a **{action_kind}**, which hard "
+            f"constraint #4 does not permit the system to perform unattended.",
+            "",
+        ]
+        if resolved.executable:
+            lines += ["> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                      "executed yet. Approving carries this out:", ""]
+            lines += [f"- {line}" for line in resolved.preview]
+        else:
+            lines += ["> 🛑 **Approval gate [FR-15 / §3.12]** — nothing has been "
+                      "executed, and nothing can be:", "", resolved.reason]
+        reply = "\n".join(lines)
+
+        yield {
+            "type": "plan",
+            "steps": [{
+                "step_id": "approval",
+                "description": f"Human approval for: {action_kind}",
+                "assigned_agent": "reasoning",
+                "status": "pending",
+                "depends_on": [],
+            }],
+            "path": "approval",
+        }
+        yield {
+            "type": "approval_required",
+            "id": app_req.request_id,
+            "name": resolved.tool_name or "unsupported_action",
+            "arguments": app_req.arguments,
+            "effect": app_req.effect,
+            "action": approval_action,
+        }
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.05,
+            "awaiting_approval": True,
+            "approval_action": approval_action,
+            "citations": [],
+        }
+        return
 
     # THE PLAN, EMITTED BEFORE ANY WORK STARTS.
     #
@@ -713,7 +1012,32 @@ def run_turn(
     # prerequisite for it.
     yield from _emit_plan(request, decision)
 
-    if decision.path == "agentic":
+    # Instant paths: no retrieval, no model, no planner.
+    if decision.path in ("greeting", "closing", "capability"):
+        from backend.orchestrator.intent import (
+            CLOSING_REPLY,
+            GREETING_REPLY,
+            capability_reply,
+        )
+
+        reply = {
+            "greeting": GREETING_REPLY,
+            "closing": CLOSING_REPLY,
+            "capability": capability_reply(),
+        }[decision.path]
+        yield {"type": "text_delta", "text": reply}
+        yield {
+            "type": "done",
+            "reply": reply,
+            "tool_calls": 0,
+            "iterations": 1,
+            "seconds": 0.0,
+            "awaiting_approval": False,
+            "citations": [],
+        }
+        return
+
+    if decision.path == "agentic" or decision.path == "arithmetic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
         for event in run_agent_loop(
@@ -721,13 +1045,16 @@ def run_turn(
             session_id=session_id,
             model_id=model_id,
             active_documents=active_documents,
+            memory=memory,
         ):
             if event.get("type") == "start":
                 continue
             yield event
         return
 
-    yield from _run_direct(request, decision, active_documents=active_documents)
+    yield from _run_direct(
+        request, decision, active_documents=active_documents, memory=memory
+    )
 
 
 def _emit_plan(request: str, decision) -> Iterator[dict]:
@@ -738,6 +1065,35 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     """
     from backend.observability import turn_log as T
     from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    # THE PLANNER MUST NOT RUN FOR A TURN THAT NEEDS NO PLAN.
+    #
+    # This is the 3.5s greeting from HANDOFF.md 3a, measured and now
+    # explained. Routing was never the cost -- decide_path and classify
+    # really do take 0.0001s. The cost was HERE, three lines above the
+    # instant-path check: a greeting is not a simple lookup (no question
+    # opener), so it fell through to the LLM planner and spent 10.5s
+    # planning work that the next statement was about to skip.
+    #
+    # It also explains why capability looked FASTER than greeting
+    # through the same path, which made no sense at the time: "what can
+    # you do" starts with "what", matches the question opener, and got
+    # the deterministic plan for free.
+    #
+    # An instant path still emits a plan -- the Plan Graph should not go
+    # blank because the answer was cheap -- but it describes the one
+    # thing that actually happens.
+    if decision.path in ("greeting", "closing", "capability", "arithmetic"):
+        steps = [{
+            "step_id": decision.path,
+            "description": decision.reason,
+            "assigned_agent": "math" if decision.path == "arithmetic" else "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+        T.kv("plan steps", len(steps))
+        yield {"type": "plan", "steps": steps, "path": decision.path}
+        return
 
     t_plan_start = time.perf_counter()
     steps = []
@@ -796,7 +1152,10 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
 
 
 def _run_direct(
-    request: str, decision, active_documents: list[str] | None = None
+    request: str,
+    decision,
+    active_documents: list[str] | None = None,
+    memory=None,
 ) -> Iterator[dict]:
     """The grounded path, emitted as stream events.
 
@@ -837,7 +1196,11 @@ def _run_direct(
     try:
         store, _ = get_state().ensure_corpus()
         answer = generate_grounded_answer(
-            store, request, active_documents=active_documents
+            store,
+            request,
+            active_documents=active_documents,
+            search_query=getattr(memory, "search_query", None),
+            conversation_context=getattr(memory, "context_block", "") or "",
         )
     except Exception as exc:  # noqa: BLE001
         yield {

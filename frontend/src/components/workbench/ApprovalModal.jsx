@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowRight, ShieldAlert, Check } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useChatStore } from '../../store/chatStore'
-import { MOCK_FEED_RATE_APPROVAL_ACTION } from '../../lib/api'
 
 /**
  * ApprovalModal — Safety-critical human approval gate modal per FRONTEND.md §3.12.
@@ -22,53 +22,92 @@ export function ApprovalModal({
 }) {
   const storeIsOpen = useChatStore((s) => s.isApprovalModalOpen)
   const storeAction = useChatStore((s) => s.pendingApprovalAction)
+  const storeApprovalError = useChatStore((s) => s.approvalError)
+  const isResolving = useChatStore((s) => s.isResolvingApproval)
   const resolveApproval = useChatStore((s) => s.resolveApproval)
 
   const isOpen = propIsOpen !== undefined ? propIsOpen : storeIsOpen
-  const action = propAction || storeAction || MOCK_FEED_RATE_APPROVAL_ACTION
+  const action = propAction || storeAction
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     if (propOnClose) {
       propOnClose()
     } else {
-      resolveApproval(false)
+      await resolveApproval(false)
     }
   }
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (propOnConfirm) {
-      propOnConfirm()
+      await propOnConfirm()
     } else {
-      resolveApproval(true)
+      await resolveApproval(true)
     }
   }
-
-  if (!isOpen) return null
 
   return (
-    <div
-      id="approval-gate-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in select-none"
-      style={{
-        background: 'rgba(5, 5, 8, 0.72)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="approval-modal-title"
-    >
-      {/* Modal Card — Deliberately weightier than regular cards */}
-      <div
-        id="approval-gate-modal-card"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[490px] rounded-2xl p-6 relative flex flex-col animate-fade-in shadow-2xl"
-        style={{
-          background: 'var(--color-card-bg)',
-          border: '1px solid var(--color-card-border)',
-          boxShadow: 'var(--shadow-lg)',
-        }}
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="approval-gate-modal-backdrop"
+          id="approval-gate-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 select-none"
+          style={{
+            background: 'rgba(5, 5, 8, 0.72)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="approval-modal-title"
+        >
+          {!action ? (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 6 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 6 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-[490px] rounded-2xl p-6 flex flex-col items-center gap-4 shadow-2xl"
+              style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)' }}
+            >
+              <ShieldAlert size={28} style={{ color: 'var(--color-accent)' }} />
+              <p className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
+                No action data available
+              </p>
+              <p className="text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
+                The approval gate was triggered but no action payload arrived from the backend.
+                Close this modal and retry the operation.
+              </p>
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="px-4 py-2 rounded-lg text-xs font-semibold border cursor-pointer hover:bg-[var(--color-surface-hover)]"
+                style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+              >
+                Close
+              </button>
+            </motion.div>
+          ) : (
+            /* Modal Card — Deliberately weightier than regular cards */
+            <motion.div
+              key="approval-gate-modal-card"
+              id="approval-gate-modal-card"
+              onClick={(e) => e.stopPropagation()}
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-[490px] rounded-2xl p-6 relative flex flex-col shadow-2xl"
+              style={{
+                background: 'var(--color-card-bg)',
+                border: '1px solid var(--color-card-border)',
+                boxShadow: 'var(--shadow-lg)',
+              }}
+            >
         {/* Top Badges: Safety Level + System Tag */}
         <div className="flex items-center justify-between gap-2 mb-3.5">
           <div
@@ -267,13 +306,32 @@ export function ApprovalModal({
           </div>
         </div>
 
+        {/* Authorization Failure Banner if backend rejection or network error */}
+        {storeApprovalError && (
+          <div
+            id="approval-gate-error-banner"
+            className="w-full mt-3 p-3 rounded-xl flex items-center gap-2.5 text-left border animate-shake"
+            style={{
+              background: 'rgba(239, 68, 68, 0.12)',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              color: '#ef4444',
+            }}
+          >
+            <ShieldAlert size={16} className="flex-shrink-0" />
+            <span className="text-xs font-semibold leading-tight">
+              {storeApprovalError}
+            </span>
+          </div>
+        )}
+
         {/* Explicit Action Buttons ONLY — No click-outside or top-right X dismiss */}
         <div className="w-full mt-5 flex items-center gap-3">
           <button
             type="button"
             id="approval-gate-cancel-btn"
+            disabled={isResolving}
             onClick={handleCancel}
-            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)]"
+            className="flex-1 py-2.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer border hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
             style={{
               background: 'var(--color-surface)',
               borderColor: 'var(--color-border-strong)',
@@ -285,17 +343,21 @@ export function ApprovalModal({
           <button
             type="button"
             id="approval-gate-confirm-btn"
+            disabled={isResolving}
             onClick={handleConfirm}
-            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5"
+            className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-fast shadow-sm cursor-pointer hover:brightness-110 flex items-center justify-center gap-1.5 disabled:opacity-60"
             style={{
               background: 'var(--color-accent)',
             }}
           >
             <Check size={14} strokeWidth={2.6} />
-            <span>Authorize &amp; Dispatch</span>
+            <span>{isResolving ? 'Authorizing…' : 'Authorize & Dispatch'}</span>
           </button>
         </div>
-      </div>
-    </div>
+            </motion.div>
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }

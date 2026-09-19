@@ -83,3 +83,21 @@ def quiet() -> None:
     ):
         logging.getLogger(name).setLevel(logging.ERROR)
         logging.getLogger(name).propagate = False
+
+
+def _register_cuda_dll_directories() -> None:
+    """Windows cannot find the pip CUDA libraries without this.
+
+    Called from here because this module already runs before every heavy
+    import; see backend/utils/cuda_dll_path.py for what goes wrong
+    otherwise and why the symptom appears so late.
+    """
+    try:
+        from backend.utils.cuda_dll_path import ensure_cuda_dll_path
+
+        ensure_cuda_dll_path()
+    except Exception:  # noqa: BLE001 - never block startup over a path hint
+        pass
+
+
+_register_cuda_dll_directories()

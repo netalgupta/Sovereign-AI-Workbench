@@ -129,9 +129,9 @@ def list_documents(category: Literal["all", "documents", "data", "charts"] = "al
     contents. Read from the source index, so every name and count is
     exact and nothing is generated.
     """
-    from backend.api.routes import get_corpus
+    from backend.api.routes import _get_corpus_data
 
-    data = get_corpus()
+    data = _get_corpus_data()
     sources = data.get("sources") or []
     if category != "all":
         sources = [s for s in sources if s.get("category") == category]

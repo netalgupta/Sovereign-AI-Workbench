@@ -88,17 +88,36 @@ def test_sources_upload_endpoint(tmp_path):
         ]
     }
 
+    target = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads" / "test_pump_log.txt"
+    # A leftover from an interrupted run would be skipped as already
+    # indexed, which is correct behaviour and not what this test checks.
+    client.delete("/api/sources", params={"path": str(target)})
+
     res = client.post("/api/sources/upload", json=payload)
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True
     assert data["count"] == 1
-    assert data["total_chunks"] >= 1
-    assert len(data["details"]) == 1
-    assert data["details"][0]["filename"] == "test_pump_log.txt"
+
+    # Ingestion runs in the background now, so "indexed" is checked on
+    # the JOB, not assumed from a 200. A response that returns before
+    # the work is done proves nothing about the work.
+    import time
+
+    deadline = time.time() + 120
+    job = None
+    while time.time() < deadline:
+        job = client.get(f"/api/ingestion/{data['job_id']}").json()
+        if job.get("state") in ("complete", "failed"):
+            break
+        time.sleep(0.5)
+    assert job and job["state"] == "complete", job
+    docs = [d for d in job["documents"] if d["name"] == "test_pump_log.txt"]
+    assert len(docs) == 1
+    assert docs[0]["stage"] == "indexed", docs[0]
+    assert docs[0]["chunks"] >= 1
 
     # Verify file exists on disk in 07_User_Uploads
-    target = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads" / "test_pump_log.txt"
     assert target.exists()
 
     # Clean up test artifact from disk
@@ -110,7 +129,14 @@ def test_sources_upload_endpoint(tmp_path):
 
 def test_sources_ingest_endpoint(tmp_path):
     """POST /api/sources/ingest indexes a specific file on disk."""
-    test_file = tmp_path / "sop_test_procedure.txt"
+    import uuid
+
+    # A UNIQUE name. This endpoint indexes into the real corpus, which is
+    # cached on disk across runs, and a file already indexed is skipped
+    # rather than duplicated -- so a fixed name passes once and then
+    # correctly reports 0 new chunks on every later run.
+    name = f"sop_test_procedure_{uuid.uuid4().hex[:8]}.txt"
+    test_file = tmp_path / name
     test_file.write_text("SOP 901: Nitrogen purging of reactor vessel R-101 before catalyst load.")
 
     res = client.post("/api/sources/ingest", json={"path": str(test_file)})
@@ -119,7 +145,7 @@ def test_sources_ingest_endpoint(tmp_path):
     assert data["success"] is True
     assert data["total_chunks"] >= 1
     assert len(data["documents"]) == 1
-    assert data["documents"][0]["filename"] == "sop_test_procedure.txt"
+    assert data["documents"][0]["filename"] == name
 
 
 def test_sources_add_folder_and_list(tmp_path):

@@ -55,7 +55,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PathDecision:
-    path: str          # "direct" | "agentic" | "corpus"
+    path: str          # greeting | closing | capability | arithmetic
+                       # | corpus | direct | agentic
     reason: str        # shown in the trace and to the UI
     tools_expected: bool
 
@@ -68,12 +69,39 @@ def decide_path(request: str) -> PathDecision:
     and the first question anyone asks about a bad answer will be "why
     did it do it that way?".
     """
+    from backend.orchestrator.intent import classify
     from backend.orchestrator.simple_intent import is_simple_lookup
     from backend.retrieval.corpus_questions import is_corpus_question
 
     text = (request or "").strip()
     if not text:
         return PathDecision("direct", "Empty request.", False)
+
+    # Safety-critical commands to change setpoints, files, or write to external systems
+    # must be intercepted before executing any model or tool step (FR-15 / Hard constraint #4).
+    # Safety gate runs BEFORE cheap intent — an operator command that
+    # looks like a greeting must still be gated, not fast-pathed.
+    from backend.orchestrator.graph import classify_action_request
+    action_kind = classify_action_request(text)
+    if action_kind is not None:
+        return PathDecision(
+            "approval",
+            f"Safety Interlock Gate [FR-15 / §3.12]: Intercepted operator-requested {action_kind}.",
+            False,
+        )
+
+    # CHEAP INTENTS NEXT -- after the safety gate above, never before
+    # it. "HolA aMIGO" previously ran the LLM planner
+    # (10.5s), a three-step fallback plan about safety envelopes, a
+    # corpus search, and a grounding refusal naming the three documents
+    # closest to a Spanish greeting -- 46.56 seconds to say "not found".
+    #
+    # Peeled off here because they provably need no corpus. The
+    # classifier vetoes on any plant vocabulary, so a question that
+    # deserves a citation can never land in one of these.
+    intent = classify(text)
+    if not intent.needs_corpus:
+        return PathDecision(intent.kind, intent.reason, intent.kind == "arithmetic")
 
     # Questions ABOUT the collection are answered from the document
     # registry: no retrieval, no model, nothing that can be fabricated.

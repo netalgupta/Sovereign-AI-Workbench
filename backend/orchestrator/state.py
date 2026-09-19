@@ -60,6 +60,24 @@ class AgentState(BaseModel):
     awaiting_human_approval: bool = False
     final_output_path: Optional[str] = None
     replan_count: int = 0
+    # Also not in the spec's listing. Memory is opened ONCE per turn, at
+    # the entry point, rather than inside the node that happens to need
+    # it -- otherwise a turn answered before synthesis (a greeting, an
+    # approval interception) never records itself, and the session grows
+    # holes. Carried on the state so every node sees the same context.
+    memory_context: str = ""
+    # The query RETRIEVAL should run, which may differ from what the
+    # user typed once a follow-up is resolved. Never changes the request
+    # shown to the model.
+    search_query: str | None = None
+    # How this turn was answered. Recorded with the message so a later
+    # turn can tell "I refused for lack of sources" from "I answered
+    # from a constant" -- the two look identical in the text and mean
+    # opposite things when interpreting what came before.
+    route: str | None = None
+    # What memory contributed, for the UI. Counts and names only -- the
+    # context block itself stays off screen (see TurnMemory.summary()).
+    memory_summary: dict = Field(default_factory=dict)
 
     def ready_steps(self) -> list[PlanStep]:
         """Steps whose dependencies are all satisfied and which have not run.

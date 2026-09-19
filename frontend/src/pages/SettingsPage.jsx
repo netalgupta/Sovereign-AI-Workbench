@@ -304,8 +304,8 @@ export function SettingsPage() {
       const modelsRes = await fetch('/api/models')
       if (modelsRes.ok) {
         const modelsData = await modelsRes.json()
-        if (modelsData.registry && modelsData.auxiliary) {
-          setModels([...modelsData.registry, ...modelsData.auxiliary])
+        if (Array.isArray(modelsData.models)) {
+          setModels(modelsData.models)
         } else if (Array.isArray(modelsData)) {
           setModels(modelsData)
         }
@@ -403,28 +403,35 @@ export function SettingsPage() {
       backend: formData.backend,
       model: formData.model.trim(),
       task_tags: tagsArray.length > 0 ? tagsArray : ['general_inference'],
-      vram_usage: `${estimatedVram} (Estimated)`,
-      status: 'active',
-      engine_type: 'ollama_registry',
     }
 
+    let backendError = null
     try {
-      await fetch('/api/models', {
+      const res = await fetch('/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newModel),
       })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        backendError = errData.detail || errData.message || `Backend returned HTTP ${res.status}`
+      }
     } catch (err) {
-      console.warn('Could not persist to models.yaml via API:', err)
+      backendError = `Network error: ${err?.message || err}`
     }
 
-    setModels((prev) => [...prev, newModel])
-    setFormData({ id: '', backend: 'ollama', model: '', task_tags: '' })
+    if (backendError) {
+      showToast(`Failed to register model: ${backendError}`, 'error')
+      return
+    }
 
+    // Re-fetch the live registry — get what the backend actually stored
+    setFormData({ id: '', backend: 'ollama', model: '', task_tags: '' })
     showToast(
-      `FR-4 Live Reload: Model '${newModel.model}' registered to models.yaml & loaded into memory`,
+      `FR-4 Live Reload: Model '${newModel.model}' registered to models.yaml and loaded into memory`,
       'success'
     )
+    await fetchSystemAndModels()
   }
 
   return (
@@ -1055,10 +1062,11 @@ export function SettingsPage() {
                 {systemInfo.storage.breakdown.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center gap-2 p-2 rounded-lg border text-left"
+                    className="flex items-center gap-2 p-2.5 rounded-lg border text-left card-hover-lift"
                     style={{
                       background: 'var(--color-surface)',
                       borderColor: 'var(--color-border)',
+                      boxShadow: 'var(--shadow-xs)',
                     }}
                   >
                     <div className="w-2 h-2 rounded-xs flex-shrink-0" style={{ background: item.color }} />
@@ -1077,10 +1085,11 @@ export function SettingsPage() {
 
             {/* Hardware Isolation Checklist */}
             <div
-              className="p-3.5 rounded-xl border flex flex-col gap-2"
+              className="p-4 rounded-xl border flex flex-col gap-2.5"
               style={{
                 background: 'var(--color-surface)',
                 borderColor: 'var(--color-border)',
+                boxShadow: 'var(--shadow-xs)',
               }}
             >
               <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>

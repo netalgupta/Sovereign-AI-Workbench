@@ -101,20 +101,43 @@ def test_math_tool_cannot_reach_a_vision_model():
         call_tool_as("math_tool", "describe_chart_image", {"image_path": "x.png"})
 
 
-def test_code_agent_has_no_tools_until_the_sandbox_exists():
-    """Sandbox mechanics are Aditya's (Aryan.md: explicitly not your
-    job). An empty set is the honest representation."""
-    assert allowed_tools("code_agent") == set()
+def test_code_agent_can_reach_the_sandbox_now_that_it_exists():
+    """This asserted an EMPTY set "until the sandbox exists". It exists
+    (run_in_sandbox, backend/sandbox/), so the code agent is wired to it."""
+    assert allowed_tools("code_agent") == {"run_in_sandbox"}
+
+
+def test_every_allowlisted_tool_is_registered():
+    """A contract naming a tool that does not exist grants nothing and
+    hides that it grants nothing. Five such names were merged at once
+    (sandbox_python, sandbox_node, render_slides, hybrid_search,
+    chart_understanding)."""
+    from backend.orchestrator.dispatch import _ALLOWED_TOOLS
+    from backend.tools import catalog  # noqa: F401 - registers the tools
+    from backend.tools.registry import get_tool
+
+    for agent, tools in _ALLOWED_TOOLS.items():
+        unregistered = sorted(t for t in tools if get_tool(t) is None)
+        assert not unregistered, f"{agent} allows unregistered tools: {unregistered}"
 
 
 def test_code_step_refuses_rather_than_reporting_a_step_done_without_running():
     """A step that reports success without running is worse than one that
     fails: the plan continues on output that does not exist, and
     verification is then asked to check nothing."""
-    step = PlanStep(step_id="c1", description="Run the calc", assigned_agent="code")
+    # The pool state is SET, not assumed. This relied on the pool never
+    # having started, so it failed whenever an earlier test (the deck
+    # render) had started it -- and the code then correctly ran.
+    from backend.sandbox import pool
 
-    with pytest.raises(SubAgentError, match="sandbox"):
-        run_code_step(step, "print(1)")
+    step = PlanStep(step_id="c1", description="Run the calc", assigned_agent="code")
+    saved = pool.workers
+    pool.workers = []
+    try:
+        with pytest.raises(SubAgentError, match="sandbox"):
+            run_code_step(step, "print(1)")
+    finally:
+        pool.workers = saved
 
     assert step.status == "failed"
 

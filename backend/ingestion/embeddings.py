@@ -18,6 +18,8 @@ from backend.ingestion.model_cache import force_offline_mode, require_cached
 # only when actually downloading a model. See model_cache.py.
 force_offline_mode()
 
+import threading  # noqa: E402 — guards _get_model against concurrent loads
+
 import numpy as np  # noqa: E402 — see force_offline_mode() ordering note above
 
 MODEL_ID = "BAAI/bge-large-en-v1.5"
@@ -118,6 +120,34 @@ def _deterministic_embed(texts: list[str], dim: int = 1024) -> np.ndarray:
 # A failed load is retried after this long, not abandoned for the
 # lifetime of the process. See _get_model.
 _RETRY_AFTER_SECONDS = 60.0
+
+# LOADING IS SERIALISED, AND THIS IS NOT A PERFORMANCE TUNING.
+#
+# FastAPI runs sync endpoints in a threadpool, so three concurrent
+# requests that each need an embedding -- a chat turn, a /api/verify,
+# and the Sources page polling -- all reach _get_model() at once. Before
+# this lock, all three entered SentenceTransformer(...) simultaneously.
+# Observed in a real log, three loads in the same MILLISECOND:
+#
+#   [22:23:06,201] Load pretrained SentenceTransformer: ...bge-large-en-v1.5
+#   [22:23:06,202] Load pretrained SentenceTransformer: ...bge-large-en-v1.5
+#   [22:23:06,203] Load pretrained SentenceTransformer: ...bge-large-en-v1.5
+#
+# followed by
+#
+#   NotImplementedError: Cannot copy out of meta tensor; no data!
+#
+# torch materialises a model from meta device during construction, and
+# that is not reentrant for the same weights. One load wins; the others
+# raise, and the except branch below then flips _active_backend to
+# deterministic-hash FOR THE WHOLE PROCESS.
+#
+# WHY THAT IS THE WORST POSSIBLE OUTCOME: hash vectors return results.
+# Searches succeed, answers carry citations, the UI looks healthy, and
+# the content is wrong. It is the exact failure that cost a teammate a
+# full session, arriving this time from nothing worse than two people
+# using the app at once.
+_model_lock = threading.Lock()
 _last_failure_at: float = 0.0
 _failure_count: int = 0
 
@@ -180,11 +210,29 @@ def _get_model():
     global _model, _active_backend, _load_failed, _last_failure_at, _failure_count
     import time as _time
 
+    # Fast path, deliberately outside the lock: once the model is
+    # loaded, every later call is a plain attribute read and must not
+    # queue behind anything.
     if _model is not None:
         return _model
 
-    if _load_failed and (_time.time() - _last_failure_at) < _RETRY_AFTER_SECONDS:
-        return None
+    with _model_lock:
+        # Re-checked inside the lock. Without this, the threads that
+        # were waiting would each load the model again the moment the
+        # winner released it -- which is the same race, just serialised.
+        if _model is not None:
+            return _model
+
+        if _load_failed and (_time.time() - _last_failure_at) < _RETRY_AFTER_SECONDS:
+            return None
+
+        return _load_model_locked()
+
+
+def _load_model_locked():
+    """Load the model. CALLER MUST HOLD _model_lock."""
+    global _model, _active_backend, _load_failed, _last_failure_at, _failure_count
+    import time as _time
 
     try:
         cache_dir = require_cached("embeddings", MODEL_ID)

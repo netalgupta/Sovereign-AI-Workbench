@@ -51,6 +51,7 @@ class WorkingMemory:
     session_id: str
     messages: list = field(default_factory=list)
     focus_documents: list[str] = field(default_factory=list)
+    focus_entities: list[str] = field(default_factory=list)
     last_user_request: str | None = None
     last_answer: str | None = None
     last_route: str | None = None
@@ -58,6 +59,18 @@ class WorkingMemory:
     @property
     def is_empty(self) -> bool:
         return not self.messages
+
+    @property
+    def oldest_turn_index(self) -> int | None:
+        """The first turn still inside the live window.
+
+        Everything below this has fallen out and belongs to the digest.
+        None when the window is empty, which means nothing has fallen
+        out yet.
+        """
+        if not self.messages:
+            return None
+        return min(m.turn_index for m in self.messages)
 
     def context_block(self, max_chars: int = 1800) -> str:
         """Prior turns, formatted for a prompt and labelled as context.
@@ -97,12 +110,27 @@ class WorkingMemory:
         return "\n".join(lines)
 
 
-def load(session_id: str, window: int = DEFAULT_WINDOW) -> WorkingMemory:
-    """Build the working set for this session."""
+def load(
+    session_id: str,
+    window: int = DEFAULT_WINDOW,
+    exclude_message_id: str | None = None,
+) -> WorkingMemory:
+    """Build the working set for this session.
+
+    `exclude_message_id` drops the message currently being answered.
+    The question is persisted BEFORE the turn runs, so that a crash
+    still leaves it on record -- but it must not then appear in the
+    history the turn is interpreted against, or the resolver tries to
+    resolve the question against itself and the prompt carries the
+    request twice.
+    """
     from backend.memory.store import get_store
 
     store = get_store()
-    messages = store.recent(session_id, limit=window)
+    # One extra, because the excluded message would otherwise shorten
+    # the window by one.
+    fetched = store.recent(session_id, limit=window + (1 if exclude_message_id else 0))
+    messages = [m for m in fetched if m.message_id != exclude_message_id][-window:]
 
     memory = WorkingMemory(session_id=session_id, messages=messages)
 
@@ -124,5 +152,19 @@ def load(session_id: str, window: int = DEFAULT_WINDOW) -> WorkingMemory:
                 seen.add(name)
                 focus.append(name)
     memory.focus_documents = focus
+
+    # Entities work the same way as documents and decay the same way.
+    # They are tracked separately because a follow-up names "the Hassan
+    # segment" or "HCU-2" far more often than it names a filename, and
+    # steering retrieval by an equipment tag is a much sharper signal
+    # than steering it by the document that happened to mention one.
+    seen_entities: set[str] = set()
+    entities: list[str] = []
+    for message in reversed(recent_assistant[-FOCUS_DECAY_TURNS:]):
+        for name in message.entities or []:
+            if name and name not in seen_entities:
+                seen_entities.add(name)
+                entities.append(name)
+    memory.focus_entities = entities
 
     return memory

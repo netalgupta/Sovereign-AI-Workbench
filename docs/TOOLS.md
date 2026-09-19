@@ -26,7 +26,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
-| 1 | Printed OCR (PaddleOCR) | Aryan | built | 🔴 | Core to FR-7, FR-12 |
+| 1 | Printed OCR (PaddleOCR) | Aryan | built | 🔴 | Core to FR-7, FR-12. **Runs on the GPU** — `paddlepaddle-gpu` cu126, no virtualenv. Measured on an RTX 4060: warm OCR of the scanned CCR1 checklist **21.08s → 0.61s (34.8x)**, byte-identical text on both devices. Device is DETECTED, not assumed, so a CPU-only install still works and `WORKBENCH_OCR_DEVICE=cpu` forces it; `/api/health` reports which is in use, because a silent CPU fallback looks exactly like a deliberate CPU choice. The setup is fragile in one specific way and it is pinned: torch bundles cuDNN 9.10.2, paddle pins 9.5.1.17, and Windows loads one DLL per base name per process — see requirements.txt and `backend/utils/cuda_dll_path.py`. |
 | 2 | Handwritten OCR (TrOCR/VLM fallback) | Aryan | built | 🔴 | Explicit PS requirement |
 | 3 | Image super-resolution (Real-ESRGAN) | Aryan | built | 🟡 | Improves OCR accuracy on poor scans |
 | 4 | Denoise/deskew/binarize (OpenCV) | Aryan | built | 🔴 | Cheap, always run before OCR |
@@ -43,9 +43,9 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 70 | Sub-agent dispatch + §6 contracts (implementation) | Aryan | built | 🔴 | AGENTS_SPEC §6's allowed/forbidden table as CODE, not prose: each sub-agent gets a closed tool set and the dispatcher refuses anything outside it, so `vision_agent` cannot write a file because `draft_docx` is not reachable — not because it is trusted not to try. `dispatch` releases ALL ready steps at once (the point of depends_on) and marks them running so the same step is never handed out twice. `code_agent` refuses loudly pending Aditya's sandbox rather than reporting a step done without running it. Owner: Aryan |
 | 71 | Self-verification agent (implementation) | Aryan | built | 🟡 | AGENTS_SPEC §5, prompt verbatim. Fails CLOSED: any unreadable verdict is treated as unverified, because defaulting to satisfied means a malformed response silently becomes a pass — the one direction this node must never fail in. After 2 re-plan cycles it produces a THIRD state, UNCONFIRMED, not a pass or a fail: an output that failed verification and is presented identically to one that passed makes verification actively harmful, since it creates confidence it did not earn. Owner: Aryan |
 | 15 | Contradiction detection across documents | Aryan | built | 🟡 | **IMPLEMENTED** — `backend/retrieval/contradiction.py`. The hard part is false positives, not detection: a detector that flags legitimate variation gets switched off within a day and then catches nothing. Four non-contradictions are excluded by construction — same limit in different units (compared through Pint, so 10 ppm vs 0.001% does not fire), readings vs limits, dated time-series values, and different equipment sharing a word. Comparison is fully deterministic; no model decides whether two values disagree. Extraction is injectable (LLM for recall) but defaults to patterns, because a safety artifact whose contents change between runs on identical input is not one anybody can act on. Owner: Aryan |
-| 7 | Defect/anomaly detection (YOLOv8) | Aryan | not started | 🟡 | Public dataset fine-tune |
+| 7 | Defect/anomaly detection (YOLOv8) | Sahil | built | 🟡 | **IMPLEMENTED (OCR-box stage, fully offline)** — `backend/tools/vision/defect_detection.py`, registered as tool `detect_defects`. Detects defect/anomaly regions on an inspection image and returns overlay contract-shaped boxes (`id, label, confidence, box{xmin,ymin,xmax,ymax}, severity`), rendered by the frontend DefectOverlay. The current detection source is local OCR, not YOLO: every text line becomes a detection box labeled by the recognized text, severity = OCR-confidence band (capped at "high", never "critical" — a sub-threshold OCR reading is a transcription-confidence signal, not a defect classification). Feeding pipeline + detector swap are done: uploaded images flow through ChatPane's `detect_defects` call and the overlay mounts from real backend output; the YOLOv8 detector drops into the same output contract later. THREE CONSTRAINTS that must survive the detector upgrade: (1) hard constraint #1 — ultralytics phones home 4 ways (analytics on import AND predict, weight download from GitHub, Arial.ttf fetch), all four must be disabled or proven absent before the import, offline test pattern in `test_defect_detection.py`; (2) torch/cuDNN are deliberately NOT in requirements.txt — keep it that way, Windows loads ONE cuDNN DLL per name per process, a CUDA-adjacent install can move it and break both frameworks, and extras belong in a venv not the shared env; (3) accuracy claims name their corpus — a public fine-tune number describes THAT dataset, not MRPL photos. Owner: Sahil. |
 | 8 | Photo-to-report matching | Aryan | not started | ⚪ | Registry-listed |
-| 9 | Document type classifier | Aryan | not started | 🔴 | Routes scans to correct pipeline |
+| 9 | Document type classifier | Aryan | built | 🔴 | **IMPLEMENTED** — `backend/ingestion/document_classifier.py`. The KIND of document, not its format: a P&ID and a scanned checklist are both PNGs and need opposite handling (one is a diagram whose value is the connections between tags, the other a table whose rows are findings), so format alone cannot route them. Rules rather than a model, for two reasons: a model call per document is the dominant cost of ingesting a corpus of any size, and an operator asking why their document was treated as correspondence would get no answer — every classification here names the phrases that decided it. Returns `unknown` rather than the best of a bad set, because forcing a guess is how a P&ID gets parsed as a spreadsheet. Confidence is the margin over the runner-up, not a probability, and is not presented as one. **Measured 13/13 against MRPL_RAG_Test_Corpus's own folder labels** (`backend/evaluation/classifier_accuracy.py`), which were written before the classifier existed and so cannot have been fitted to it. Owner: Aryan |
 | 10 | Image diffing/change detection | Aryan | not started | ⚪ | Registry-listed |
 | 11 | Signature/stamp detection | Aryan | not started | ⚪ | Nice MRPL-approval-workflow touch, low priority |
 | 59 | Vessel/cargo document processing (VLCC manifests, port paperwork) | Aryan | not started | 🟡 | MRPL-specific — OCR + structured extraction → auto-populated tracking sheet; feeds SPM "Mangala-1" workflow, Owner: Sahil (UI)/Aryan (extraction logic) |
@@ -73,19 +73,19 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 20 | Task planner with visible plan graph | Aryan | built | 🔴 | FR-5, judge-facing visual |
 | 21 | Multi-model router | Aryan | built | 🔴 | FR-3, FR-11 |
 | 22 | Sub-agent spawning per modality | Aryan | built | 🔴 | Core architecture |
-| 23 | Self-verification agent | Aryan | not started | 🟡 | Quality/trust booster |
-| 24 | Human approval gate | Aryan | not started | 🔴 | NFR-6, safety-critical |
+| 23 | Self-verification agent | Aryan | built | 🟡 | Same deliverable as row 71 — see there. `backend/orchestrator/verification.py`, AGENTS_SPEC §5, fails CLOSED. |
+| 24 | Human approval gate | Aryan | built | 🔴 | Same deliverable as rows 67-68 — see there. `backend/audit/approval_gate.py`: argument-hashed, single-use, expiring, no auto-approve flag. |
 | 25 | Long-running task checkpointing | Aryan | not started | ⚪ | Registry-listed |
 
 ## D. Computation — Owner: Aryan (tool wiring), Sahil (trace UI)
 
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
-| 26 | SymPy symbolic engine | Aryan | not started | 🔴 | No Wolfram Alpha — fully local |
+| 26 | SymPy symbolic engine | Aryan | built | 🔴 | `backend/tools/math/symbolic_calc.py`, registered as `evaluate_expression`. Never `eval()`. No Wolfram Alpha — fully local. |
 | 27 | Maxima CAS | Aryan | not started | 🟡 | Heavier symbolic ops |
 | 28 | NumPy/SciPy numerical + stats | Aryan | built | 🔴 | Trend analysis, curve fitting |
-| 29 | Pint unit-aware calculations | Aryan | not started | 🔴 | Prevents unit-error class entirely — VIBECODING_SPEC.md CARD 10 |
-| 30 | CoolProp thermophysical properties | Aryan | not started | 🟡 | Refinery-specific steam/fluid properties; backs tool 53's steam-table lookups — VIBECODING_SPEC.md CARD 11 |
+| 29 | Pint unit-aware calculations | Aryan | built | 🔴 | `backend/tools/math/unit_calc.py`, registered as `evaluate_unit_expression`. Raises on incompatible dimensions rather than coercing. CARD 10. |
+| 30 | CoolProp thermophysical properties | Aryan | built | 🟡 | `backend/tools/math/thermophysical.py`, registered as `lookup_thermophysical_property`. CARD 11. Deliberately excluded from the chat tool set — recorded plant values live in documents, and its description reads as if it would know them (see agent_loop.py's CHAT_TOOLS note). |
 | 31 | Matplotlib plotting | Aryan | built | 🔴 | Embedded charts in outputs |
 | 32 | NetworkX graph math | Netal | not started | 🟡 | Pipeline dependency graphs |
 | 51 | Catalyst deactivation / WABT creep trend model (hydrocracker) | Aryan | built | 🟡 | MRPL-specific — SciPy curve-fitting on historical operating data, flags approaching catalyst change-out, math shown step by step per NFR-5. Owner: Aryan |
@@ -97,7 +97,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
 | 33 | Code generation (routed) | Aditya | built | 🔴 | FR-13 |
-| 34 | Sandboxed execution (Docker, no network) | Aditya | not started | 🔴 | FR-13, NFR core |
+| 34 | Sandboxed execution (Docker, no network) | Aditya | built | 🔴 | FR-13, NFR core. **BUILT** — warm Docker pool, `--network none`, memory/CPU limits, read-only root, timeout. Egress isolation is PROVEN by test (`test_sandbox.py` asserts the container cannot reach 1.1.1.1), not merely configured. Now driven end to end by `backend/orchestrator/code_generation.py`: qwen2.5-coder:7b writes the program, the sandbox runs it, and the OUTPUT is checked — a program that exits 0 and prints nothing is reported FAILED, because "ran" is not "verified". Measured: "first 10 Fibonacci numbers" → `[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]`, 9.6s to generate, 4.0s to run warm. |
 | 35 | Automated test generation + run | Aditya | not started | 🟡 | Strengthens the verification story |
 | 36 | Static analysis/linting pass | Aditya | not started | ⚪ | Registry-listed |
 | 37 | Internal tool scaffolding | Aditya | not started | ⚪ | Registry-listed |
@@ -108,13 +108,13 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 |---|---|---|---|---|---|
 | 38 | DOCX generation (python-docx) | Aryan | built | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
 | 39 | XLSX generation with live formulas | Kanishka | not started | 🔴 | FR-9 |
-| 40 | PPTX generation | Kanishka | not started | 🟡 | FR-9 |
+| 40 | PPTX generation | Aditya / Aryan | built | 🔴 | FR-9 — `prepare_deck` (grounded storyline, every figure verified against the source) + approval-gated `generate_deck`, rendered by the code-driven deck design system (native charts/tables, text measured to fit, no slide cap). |
 | 41 | Calculation trace documents | Aryan | built | 🔴 | NFR-5 |
 | 42 | Audio briefing (Piper TTS) | Kanishka | not started | ⚪ | Polish item |
 | 43 | Redaction tool | Kanishka | not started | 🟡 | Confidentiality-relevant differentiator |
 | 54 | Novolen grade-changeover checklist generator | Kanishka | not started | 🟡 | MRPL-specific — retrieval-grounded checklist for gas-phase Ziegler-Natta grade transitions, sourced from the actual SOP for that transition. Owner: Aryan (retrieval)/Kanishka (checklist UI) |
 | 55 | Novolen batch quality report generator | Kanishka | not started | 🟡 | MRPL-specific — auto-drafts a QA summary DOCX from lab data + spec sheet comparison (uses tool 38). Owner: Kanishka |
-| 56 | Merox sulphur-spec compliance checker | Aryan | not started | 🟡 | MRPL-specific — cross-references lab results against product spec sheets in the KB, flags near-limit readings automatically. Owner: Aryan (logic)/Netal (flagging UI) |
+| 56 | Merox sulphur-spec compliance checker | Aryan | built | 🟡 | **IMPLEMENTED** — `backend/tools/spec_compliance.py`. Compliance is COMPUTED from the reading and the limit, never read from the Status column the corpus sheet already carries: a tool that reports that column adds nothing a reader could not see and inherits every mistake in it. Where the document states a status of its own, the two are compared, and a disagreement is the finding that matters most — a sheet marked OK on a reading that exceeds its limit is a compliance failure that has already passed somebody's review, and it is invisible to everyone reading the status column. Unit-aware through Pint (row 29): 10 ppm and 0.001% are the same limit, and a reading whose units cannot be reconciled is reported UNCOMPARABLE rather than silently compared. "Near limit" is a stated policy (default 10% of the limit), reported in every result, because how near counts as near belongs to the plant. Fully deterministic — no model — so the same sheet gives the same answer every run. Owner: Aryan (logic)/Netal (flagging UI) |
 | 58 | Aromatic Complex benzene safety-note drafting | Kanishka | not started | 🔴 | MRPL-specific — combines tool 17 (hard refuse-to-hallucinate grounding) + tool 38 (DOCX drafting), demoed as a dedicated safety-critical scenario, not a generic drafting example. This is the strongest safety USP in the catalog — treat as demo-critical even though its underlying components are shared with other 🔴 tools. Owner: Aryan (grounding)/Kanishka (doc output) |
 
 ## G. Governance, Audit & Trust — Owner: Aditya (backend), Kanishka (UI)
@@ -125,7 +125,7 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | 45 | Full audit log | Aditya | built | 🔴 | NFR-7 |
 | 46 | RBAC on knowledge base | Sahil | not started | 🟡 | Basic tiers sufficient for demo |
 | 47 | Model provenance tracking | Sahil | not started | ⚪ | Registry-listed |
-| 48 | Encrypted-at-rest storage | Sahil | not started | 🔴 | NFR-3 |
+| 48 | Encrypted-at-rest storage | **Aditya** | not started | 🔴 | NFR-3. Owner corrected from Sahil: `docs/OWNERSHIP.md` line 119 assigns "Encryption at rest" to Aditya and is the tie-breaker per CLAUDE.md, and `Aditya.md`'s own scope lists it. Covers the persisted stores — `backend/memory/*.db`, the FAISS index and its SQLite sidecar, `backend/audit/*.jsonl`, and `outputs/`. AES-256 or equivalent per REQUIREMENTS.md NFR-3. |
 | 49 | SAP read-only connector | Aditya | not started | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
 | 50 | Portable/air-gapped packaging | Aditya | not started | 🔴 | NFR-2 |
 

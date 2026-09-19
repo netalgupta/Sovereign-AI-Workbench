@@ -31,7 +31,7 @@ from backend.tools.registry import tool
 # corpus at all. Given the full registry and asked for a value that is
 # printed in the corpus, the model reached for find_contradictions, got
 # an empty list, and reported that no documents contained it.
-from backend.tools import mrpl_process, numeric_stats, retrieval_tools  # noqa: F401
+from backend.tools import mrpl_process, netal_tools, numeric_stats, retrieval_tools  # noqa: F401
 try:
     from backend.tools import plotting  # noqa: F401
 except BaseException:
@@ -146,6 +146,30 @@ def register_all() -> None:
     except Exception:
         pass
 
+    try:
+        from backend.tools.vision.defect_detection import detect_defects
+
+        tool(
+            name="detect_defects",
+            # THE DESCRIPTION IS WHAT THE MODEL BELIEVES. It said "Detect
+            # defect/anomaly regions", so asked to find defects in a photo the
+            # agent would report pump nameplates as defects. It does not
+            # detect defects: it returns where the printed text is.
+            description=(
+                "Return the regions of PRINTED TEXT on an inspection image, as "
+                "overlay-ready boxes with the text and its OCR confidence. THIS IS "
+                "NOT A DEFECT DETECTOR: no model here recognises corrosion, cracks or "
+                "leaks yet. Never describe these regions as defects or anomalies; if "
+                "asked to find defects, say that defect detection is not available. "
+                "Fully offline."
+            ),
+            category="vision",
+            priority="🟡",
+            tools_md_row=7,
+        )(detect_defects)
+    except ImportError:
+        pass
+
     # ---- audio -----------------------------------------------------------
 
     try:
@@ -202,6 +226,49 @@ def register_all() -> None:
 
     from backend.sandbox.executor import run_in_sandbox
 
+    # ---- compliance (MRPL-specific, TOOLS.md row 56) --------------------
+
+    from backend.tools.spec_compliance import check_spec_compliance
+
+    tool(
+        name="check_spec_compliance",
+        description=(
+            "Compare lab readings against their product spec limits and flag "
+            "exceedances and near-limit readings. Status is COMPUTED from the "
+            "reading and the limit, unit-aware, never copied from a status "
+            "column the document already carries -- and where the document "
+            "states a status of its own, a disagreement is reported, because a "
+            "sheet marked OK on a reading that exceeds its limit is a failure "
+            "that already passed review. A reading whose units cannot be "
+            "reconciled with its limit is reported as uncomparable rather than "
+            "compared."
+        ),
+        category="mrpl",
+        priority="🟡",
+        computes_numbers=True,
+        tools_md_row=56,
+    )(check_spec_compliance)
+
+    # ---- ingestion routing (FR-7, TOOLS.md row 9) -----------------------
+
+    from backend.ingestion.document_classifier import classify_document
+
+    tool(
+        name="classify_document",
+        description=(
+            "Identify what KIND of document this is -- SOP, inspection report, "
+            "maintenance log, lab/quality data, SAP export, correspondence, "
+            "engineering diagram, or scanned form -- and the processing pipeline "
+            "it needs. Distinct from file format: a P&ID and a scanned checklist "
+            "are both PNGs and need opposite handling. Returns the evidence that "
+            "decided it, and returns 'unknown' rather than guessing when nothing "
+            "matches."
+        ),
+        category="ingestion",
+        priority="🔴",
+        tools_md_row=9,
+    )(classify_document)
+
     tool(
         name="run_in_sandbox",
         description=(
@@ -213,6 +280,25 @@ def register_all() -> None:
         priority="🔴",
         tools_md_row=34,
     )(run_in_sandbox)
+
+    # ---- presentation generation (PPTX_AGENT_SPEC.md, TOOLS.md row 40) ----
+    from backend.orchestrator.slide_agent import generate_deck
+
+    tool(
+        name="generate_deck",
+        description=(
+            "Render an approved deck spec (from prepare_deck) to a PowerPoint (.pptx) "
+            "file, designed by the deck design system. WRITES A FILE, so it requires human "
+            "approval before it runs, like draft_docx."
+        ),
+        category="documents",
+        priority="🔴",
+        # Hard constraint #4. Decks were exempted as "safe deliverables";
+        # a presentation that leaves the building carrying refinery figures
+        # is exactly the kind of file the gate exists for.
+        requires_approval=True,
+        tools_md_row=40,
+    )(generate_deck)
 
 
 register_all()

@@ -328,6 +328,7 @@ def _reasoning_model_pulled() -> bool:
         "to exercise this for real."
     ),
 )
+@pytest.mark.live_model
 def test_live_extraction_against_the_configured_reasoning_model():
     text = (
         "Valve V-204, located on the Mangalore-Hassan pipeline segment, was "

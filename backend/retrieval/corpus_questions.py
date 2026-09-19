@@ -89,10 +89,10 @@ def answer_corpus_question(query: str) -> str:
     independent views of the corpus that can drift is how a user ends up
     trusting the wrong one.
     """
-    from backend.api.routes import get_corpus
+    from backend.api.routes import _get_corpus_data
 
     try:
-        data = get_corpus()
+        data = _get_corpus_data()
     except Exception as exc:  # noqa: BLE001
         return (
             "I could not read the source index to answer that.\n\n"
