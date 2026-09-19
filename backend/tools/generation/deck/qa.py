@@ -10,7 +10,7 @@ TWO KINDS OF EVIDENCE, AND WHY BOTH.
 
   Design, judged. A slide can pass every measurement and still look bad:
   lopsided, crowded, empty, weak hierarchy. The local vision model
-  (models.yaml `vision-model`) looks at each rendered page against a fixed
+  (models.yaml `page-reviewer`) looks at each rendered page against a fixed
   rubric and scores it 1-10 with specific issues. It is a judgement, not a
   measurement, and it is reported as one.
 
@@ -31,6 +31,8 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from backend.tools.generation.deck import theme
+
 logger = logging.getLogger("pptx.qa")
 
 # Measured-defect penalties, in score points.
@@ -38,23 +40,24 @@ PENALTY = {"overflow": 2.0, "overlap": 4.0, "off_page": 4.0, "small_type": 1.0, 
 MIN_FONT_PT = 10.5
 MAX_WORDS_PER_PAGE = 110
 PASS_SCORE = 7.0
+FOOTER_TOP_PT = theme.FOOTER_Y * 72
 
-_RUBRIC = """You are a senior presentation designer reviewing ONE slide from a corporate
-refinery operations briefing. Judge ONLY how it looks and reads, never the facts.
+# The model rates what it can SEE on four named dimensions; the page score
+# is computed here from those ratings (hard constraint #3: no arithmetic by
+# a model). Overlap, overflow and tiny type are deliberately NOT asked:
+# PowerPoint measures them exactly, and a first rubric that listed them
+# was echoed back verbatim ("text overlapping other text") on pages
+# measured to have none.
+DIMENSIONS = ("balance", "readability", "hierarchy", "finish")
+_RUBRIC = """Look at this presentation slide image and rate what you see.
 
-Check: text overlapping other text or cut off; text too small to read; crowding
-(too much text for the space); awkward empty space or a sparse, unfinished look;
-alignment and balance; visual hierarchy (is the takeaway obvious?); contrast.
+balance: 1 = content bunched in one area with most of the slide blank, 5 = content fills the slide evenly
+readability: 1 = walls of small text, 5 = can be read at a glance
+hierarchy: 1 = no clear headline or main point, 5 = one clear headline and an obvious takeaway
+finish: 1 = plain or amateur, 5 = looks professionally designed
 
-Score from 1 to 10:
- 10 = boardroom-ready, nothing to change
-  8 = good, one minor issue
-  6 = acceptable, noticeable issues
-  4 = poor, several problems
-  2 = broken: overlapping or cut-off text, unreadable
-
-Reply with ONLY: {"score": <integer 1-10>, "issues": ["short specific issue", ...]}
-List at most 3 issues. An empty list means you found none."""
+Reply with ONLY this JSON:
+{"balance": 1-5, "readability": 1-5, "hierarchy": 1-5, "finish": 1-5, "fix": "the single element that most needs fixing, described by where it is and what it says, or an empty string"}"""
 
 
 @dataclass
@@ -62,7 +65,8 @@ class PageQuality:
     page: int
     title: str
     score: float | None
-    vision_score: int | None = None
+    vision_score: float | None = None
+    ratings: dict[str, int] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
     defects: list[str] = field(default_factory=list)
 
@@ -135,7 +139,13 @@ def render_and_measure(pptx: str | Path, out_dir: str | Path, width_px: int = 96
                 size = tr.Font.Size
                 if size and size > biggest[0] and len(text) > 8:
                     biggest = (size, text)
-                if size and 0 < size < MIN_FONT_PT and len(text) > 3 and not text.isdigit():
+                # The footer band (source line, classification, page number)
+                # is 9 pt by design; the minimum applies to content.
+                # Short all-caps labels (status pills, table headers, cover
+                # metadata) are 10 pt caps by design and read at that size.
+                in_footer = shape.Top >= FOOTER_TOP_PT - 1
+                label = text.isupper() and len(text.split()) <= 3
+                if size and 0 < size < MIN_FONT_PT and len(text) > 3 and not (in_footer or label):
                     found.add("small_type")
                 bl, bt, bw, bh = tr.BoundLeft, tr.BoundTop, tr.BoundWidth, tr.BoundHeight
                 if bh > shape.Height + 2:
@@ -171,30 +181,67 @@ def render_and_measure(pptx: str | Path, out_dir: str | Path, width_px: int = 96
 # ── vision review ───────────────────────────────────────────────────────────
 
 
-def review_page(png: str, *, model_id: str = "vision-model", timeout: int = 240) -> dict | None:
-    """The vision model's score and issues for one rendered page, or None."""
+REVIEWER_ID = "page-reviewer"
+
+
+def _parse_review(reply: str) -> dict | None:
+    """Ratings -> a 1-10 page score, computed here. None when unusable."""
+    from backend.utils.llm_output import strip_code_fences
+
+    text = strip_code_fences(reply or "")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
     try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    ratings = {}
+    for dim in DIMENSIONS:
+        try:
+            value = int(data.get(dim))
+        except (TypeError, ValueError):  # missing, or a range like "2-5"
+            return None
+        if not 1 <= value <= 5:
+            return None
+        ratings[dim] = value
+    # Mean rating 1..5 mapped linearly onto 1..10.
+    score = round(1 + (sum(ratings.values()) / len(ratings) - 1) * 9 / 4, 1)
+    fix = str(data.get("fix") or "").strip()
+    return {"score": score, "ratings": ratings, "issues": [fix] if fix else []}
+
+
+def review_page(png: str, *, model_id: str = REVIEWER_ID, timeout: int = 240) -> dict | None:
+    """The reviewer model's score and issues for one rendered page, or None.
+
+    Which model, and how it runs, is models.yaml's call: a `transformers`
+    entry runs in-process with the GPU/CPU split its `placement` sets; an
+    `ollama` entry goes to the daemon.
+    """
+    try:
+        from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+
+        cfg = load_registry(_DEFAULT_REGISTRY_PATH)[model_id]
+        if cfg.backend == "transformers":
+            from backend.models import local_vision
+
+            return _parse_review(local_vision.ask(model_id, png, _RUBRIC, max_new_tokens=160))
+
         import requests
 
         from backend.models.ollama_client import OLLAMA_HOST
-        from backend.models.registry import resolve_model_name
 
         image = base64.b64encode(Path(png).read_bytes()).decode()
         res = requests.post(
             f"{OLLAMA_HOST}/api/generate",
-            json={"model": resolve_model_name(model_id), "prompt": _RUBRIC, "images": [image],
+            json={"model": cfg.model, "prompt": _RUBRIC, "images": [image],
                   "format": "json", "stream": False, "options": {"temperature": 0}},
             timeout=timeout,
         )
         res.raise_for_status()
-        data = json.loads(res.json().get("response") or "{}")
-        score = int(data.get("score"))
-        if not 1 <= score <= 10:
-            return None
-        issues = [str(i).strip() for i in (data.get("issues") or []) if str(i).strip()][:3]
-        return {"score": score, "issues": issues}
+        return _parse_review(res.json().get("response") or "")
     except Exception as exc:  # noqa: BLE001 - an unreviewed page is reported as such
-        logger.info("Vision review failed for %s: %s", png, exc)
+        logger.warning("Page review failed for %s: %s: %s", png, type(exc).__name__, exc)
         return None
 
 
@@ -202,11 +249,14 @@ def review_page(png: str, *, model_id: str = "vision-model", timeout: int = 240)
 
 
 def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = None,
-           previous: DeckQuality | None = None, progress=None) -> DeckQuality:
+           previous: DeckQuality | None = None, progress=None,
+           release_after: bool = True) -> DeckQuality:
     """Measure every page, and have the vision model review `pages` (default all).
 
     `previous` lets a re-assessment after a fix re-review only the pages
-    that changed and carry the other pages' reviews forward.
+    that changed and carry the other pages' reviews forward. The reviewer
+    stays loaded across pages and is released at the end unless
+    `release_after` is False (an improve loop that will call again).
     """
     work = Path(tempfile.mkdtemp(prefix="deckqa-"))
     measured = render_and_measure(pptx, work)
@@ -227,7 +277,8 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
                 progress(f"Reviewing page {idx} of {total}")
             review = review_page(png)
         elif idx in carried and carried[idx].vision_score is not None:
-            review = {"score": carried[idx].vision_score, "issues": carried[idx].issues}
+            review = {"score": carried[idx].vision_score, "issues": carried[idx].issues,
+                      "ratings": carried[idx].ratings}
         reviewed_any = reviewed_any or review is not None
         penalty = sum(PENALTY[d] for d in defects)
         base = float(review["score"]) if review else 10.0
@@ -236,7 +287,13 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
             page=idx, title=measured["titles"].get(idx, ""), score=round(score, 1),
             vision_score=review["score"] if review else None,
             issues=(review["issues"] if review else []), defects=defects,
+            ratings=(review.get("ratings", {}) if review else {}),
         ))
+
+    if release_after:
+        from backend.models import local_vision
+
+        local_vision.release()
 
     deck_score = round(sum(p.score for p in out) / len(out), 1) if out else None
     method = "layout+vision" if reviewed_any else "layout"
@@ -246,7 +303,7 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
     from backend.models.registry import resolve_model_name
 
     try:
-        reviewer = resolve_model_name("vision-model") if reviewed_any else None
+        reviewer = resolve_model_name(REVIEWER_ID) if reviewed_any else None
     except Exception:  # noqa: BLE001
         reviewer = None
     return DeckQuality(score=deck_score, grade=grade_for(deck_score), method=method, pages=out,

@@ -2312,9 +2312,9 @@ def list_models() -> dict:
         if pulled is not None:
             entry = pulled.get(tag) or pulled.get(f"{tag}:latest")
 
-        if cfg.backend == "diffusers":
+        if cfg.backend in ("diffusers", "transformers"):
             # On disk, loaded in-process -- not an Ollama tag.
-            from backend.models.registry import diffusers_weights_dir, is_locally_available
+            from backend.models.registry import fetch_command, is_locally_available, weights_dir
 
             entry = None
             if is_locally_available(cfg, None):
@@ -2322,8 +2322,8 @@ def list_models() -> dict:
             else:
                 status, detail = (
                     "not_pulled",
-                    f"Weights not found at {diffusers_weights_dir(cfg)}. "
-                    f"Run once, online: python -m backend.ingestion.fetch_models --model sd-turbo",
+                    f"Weights not found at {weights_dir(cfg)}. "
+                    f"Run once, online: {fetch_command(cfg)}",
                 )
         elif pulled is None:
             status, detail = "unknown", f"Ollama unreachable ({ollama_error})"

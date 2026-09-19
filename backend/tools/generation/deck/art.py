@@ -54,23 +54,14 @@ _load_failed = False
 
 
 def _free_gpu_for_art() -> None:
-    """Ask Ollama to unload resident models so the image model fits.
+    """Unload Ollama's resident models so the image model fits.
 
-    The 8 GB card cannot hold a 7b LLM (4.7 GB) and the image model
-    (~2.5 GB) with headroom. A deck job generates art after all its text
-    is written, so the LLM is idle; keep_alive=0 unloads it until next use.
+    A deck job generates art after all its text is written, so the LLM is
+    idle; Ollama reloads it on its next call.
     """
-    try:
-        import requests
+    from backend.models.gpu import free_ollama_vram
 
-        from backend.models.ollama_client import OLLAMA_HOST
-
-        ps = requests.get(f"{OLLAMA_HOST}/api/ps", timeout=3).json()
-        for m in ps.get("models", []):
-            requests.post(f"{OLLAMA_HOST}/api/generate",
-                          json={"model": m["name"], "keep_alive": 0}, timeout=15)
-    except Exception as exc:  # noqa: BLE001 - freeing memory is best effort
-        logger.info("Could not unload Ollama models before art generation: %s", exc)
+    free_ollama_vram()
 
 
 def _load():

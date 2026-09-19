@@ -80,11 +80,39 @@ def _fetch_sd_turbo(model_id: str = "stabilityai/sd-turbo") -> None:
     print(f"Saved to {cache_dir} — future loads are fully offline.")
 
 
+def _fetch_qwen_vl(model_id: str) -> None:
+    """A vision-language model run in-process (models.yaml backend `transformers`).
+
+    In-process rather than through Ollama so the GPU/CPU split is ours to
+    set: Ollama estimates Qwen2.5-VL far above its real size and places all
+    of it on the CPU, ignoring num_gpu. Safetensors, config, tokenizer and
+    processor files only.
+    """
+    from huggingface_hub import snapshot_download
+
+    cache_dir = local_cache_dir("vision", model_id)
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {model_id} (one-time, requires internet)...")
+    snapshot_download(
+        repo_id=model_id,
+        local_dir=str(cache_dir),
+        allow_patterns=["*.json", "*.safetensors", "*.txt", "*.jinja", "merges.txt", "vocab.json"],
+    )
+    print(f"Saved to {cache_dir} — future loads are fully offline.")
+
+
 _FETCHERS = {
     "bge-large-en-v1.5": _fetch_bge_large,
     "faster-whisper-base": _fetch_whisper_base,
     "sd-turbo": _fetch_sd_turbo,
+    "qwen2.5-vl-3b": lambda: _fetch_qwen_vl("Qwen/Qwen2.5-VL-3B-Instruct"),
+    "qwen2.5-vl-7b": lambda: _fetch_qwen_vl("Qwen/Qwen2.5-VL-7B-Instruct"),
 }
+# models.yaml names a model by its hub id; registry.fetch_command prints
+# `--model <that id>`, so the hub id is accepted too.
+_FETCHERS["stabilityai/sd-turbo"] = _FETCHERS["sd-turbo"]
+_FETCHERS["Qwen/Qwen2.5-VL-3B-Instruct"] = _FETCHERS["qwen2.5-vl-3b"]
+_FETCHERS["Qwen/Qwen2.5-VL-7B-Instruct"] = _FETCHERS["qwen2.5-vl-7b"]
 
 
 def main() -> None:
@@ -94,7 +122,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.all:
-        for fetch in _FETCHERS.values():
+        for fetch in dict.fromkeys(_FETCHERS.values()):
             fetch()
     elif args.model:
         _FETCHERS[args.model]()
