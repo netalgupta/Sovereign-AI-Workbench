@@ -1252,6 +1252,17 @@ def request_approval(body: ApprovalRequestBody) -> dict:
             )
         except Exception:  # noqa: BLE001 — a bad payload is the human's to judge
             pass
+    elif body.tool_name == "draft_xlsx":
+        from backend.tools.documents.draft_xlsx import describe_effect
+
+        try:
+            effect = describe_effect(
+                body.arguments.get("title", ""),
+                body.arguments.get("sheets", []),
+                body.arguments.get("output_path", ""),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     request = _gate().request(body.tool_name, body.arguments, effect or "(no description given)")
     return request.model_dump(exclude={"token"})

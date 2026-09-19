@@ -81,7 +81,7 @@ def _call_planner_model(prompt: str, model_name: str) -> str:
     return ollama_generate(
         model_name,
         prompt,
-        timeout=300,
+        timeout=45,
     )
 
 

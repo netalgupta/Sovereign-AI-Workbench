@@ -117,10 +117,11 @@ def test_describe_effect_returns_plain_language_summary(tmp_path: Path):
 
     assert 'Create the Excel spreadsheet "MRPL Polymer Batch Quality & MFI Comparison"' in effect
     assert "1 sheet(s)" in effect
-    assert "4 data row(s)" in effect
-    assert "WARNING: 1 row(s)/item(s) have NO sources (UNSOURCED)." in effect
+    assert "4 row(s)" in effect
+    assert "data cells are sourced" in effect
     assert "WARNING: contains vision-model ESTIMATE(S)" in effect
     assert "Includes live Excel formulas" in effect
+
 
 
 def test_draft_xlsx_approval_gate_integration(tmp_path: Path):

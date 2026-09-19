@@ -74,53 +74,102 @@ def describe_effect(
     approval prompt.
     """
     total_rows = 0
+    total_data_cells = 0
+    unsourced_cells = 0
     total_sources = 0
-    unsourced_rows = 0
     has_estimates = False
     has_formulas = False
 
     for s in sheets:
-        headers = s.get("headers") or []
+        headers = list(s.get("headers") or [])
         rows = s.get("rows") or []
         total_rows += len(rows)
 
-        sheet_sources = s.get("sources") or []
+        sheet_sources = list(s.get("sources") or [])
         total_sources += len(sheet_sources)
         if s.get("contains_estimate"):
             has_estimates = True
 
+        # Sources column check
+        has_sources_col = any("source" in h.lower() or "citation" in h.lower() for h in headers)
+        data_col_count = len(headers) if has_sources_col else max(len(headers), 1)
+
         for r in rows:
+            row_srcs = list(sheet_sources)
+            row_unsourced = False
+            cells = []
+
             if isinstance(r, dict):
-                r_sources = r.get("sources") or []
-                total_sources += len(r_sources)
-                if not r_sources and (r.get("is_unsourced") or not sheet_sources):
-                    unsourced_rows += 1
+                cells = list(r.get("cells") or [])
+                r_srcs = r.get("sources") or []
+                if r.get("is_unsourced"):
+                    row_unsourced = True
+                    row_srcs = []
+                else:
+                    if r_srcs:
+                        row_srcs.extend(r_srcs)
+                        total_sources += len(r_srcs)
+                    if not row_srcs:
+                        row_unsourced = True
                 if r.get("contains_estimate"):
                     has_estimates = True
-                cells = r.get("cells") or []
             elif isinstance(r, (list, tuple)):
-                cells = r
-                if not sheet_sources:
-                    unsourced_rows += 1
+                cells = list(r)
+                if not row_srcs:
+                    row_unsourced = True
             else:
-                cells = []
+                cells = [r]
+                if not row_srcs:
+                    row_unsourced = True
 
-            for c in cells:
-                val = c.get("value") if isinstance(c, dict) else c
-                if isinstance(val, str) and val.startswith("="):
-                    has_formulas = True
+            # Limit data cells iteration to data columns
+            num_data_cols = min(len(cells), data_col_count)
+            if num_data_cols == 0:
+                num_data_cols = data_col_count
+
+            for idx in range(data_col_count):
+                total_data_cells += 1
+                c = cells[idx] if idx < len(cells) else None
+
+                cell_val = None
+                cell_srcs = []
+                c_unsourced = row_unsourced
+
                 if isinstance(c, dict):
+                    cell_val = c.get("value")
+                    cell_srcs = c.get("sources") or []
+                    if cell_srcs:
+                        total_sources += len(cell_srcs)
+                        c_unsourced = False
+                    if c.get("is_unsourced"):
+                        c_unsourced = True
                     if c.get("contains_estimate"):
                         has_estimates = True
-                    if c.get("sources"):
-                        total_sources += len(c.get("sources"))
+                else:
+                    cell_val = c
+                    if row_srcs:
+                        c_unsourced = False
+
+                if isinstance(cell_val, str) and cell_val.startswith("="):
+                    has_formulas = True
+
+                if c_unsourced or cell_val is None or (isinstance(cell_val, str) and (not cell_val.strip() or cell_val.strip() == "UNSOURCED")):
+                    unsourced_cells += 1
+
+    sourced_cells = max(0, total_data_cells - unsourced_cells)
 
     lines = [
-        f'Create the Excel spreadsheet "{title}" at {output_path}',
-        f"{len(sheets)} sheet(s), {total_rows} data row(s), {total_sources} source citation(s).",
+        f'Create the Excel spreadsheet "{title}" at {output_path} — {len(sheets)} sheet(s), {total_rows} row(s).',
     ]
-    if unsourced_rows > 0:
-        lines.append(f"WARNING: {unsourced_rows} row(s)/item(s) have NO sources (UNSOURCED).")
+    if total_data_cells > 0:
+        if unsourced_cells > 0:
+            lines.append(
+                f"{sourced_cells} of {total_data_cells} data cells are sourced. "
+                f"{unsourced_cells} cells could not be sourced and will be marked UNSOURCED and left empty."
+            )
+        else:
+            lines.append(f"All {total_data_cells} data cells are sourced from cited documents.")
+
     if has_estimates:
         lines.append("WARNING: contains vision-model ESTIMATE(S), not measured figures.")
     if has_formulas:
@@ -184,6 +233,48 @@ def draft_xlsx(
             "under another extension will not open in user tools."
         )
 
+    # Pre-calculate cell sourcing stats across all sheets
+    total_data_cells_all = 0
+    unsourced_data_cells_all = 0
+    for s in sheets:
+        headers_cnt = len(s.get("headers") or [])
+        has_src_col = any("source" in h.lower() or "citation" in h.lower() for h in (s.get("headers") or []))
+        data_col_cnt = headers_cnt if has_src_col else max(headers_cnt, 1)
+        s_srcs = s.get("sources") or []
+
+        for r in (s.get("rows") or []):
+            r_unsourced = False
+            r_srcs = list(s_srcs)
+            cells = []
+            if isinstance(r, dict):
+                cells = list(r.get("cells") or [])
+                r_srcs.extend(r.get("sources") or [])
+                if r.get("is_unsourced") or not r_srcs:
+                    r_unsourced = True
+            elif isinstance(r, (list, tuple)):
+                cells = list(r)
+                if not r_srcs:
+                    r_unsourced = True
+
+            for idx in range(data_col_cnt):
+                total_data_cells_all += 1
+                c = cells[idx] if idx < len(cells) else None
+                c_unsourced = r_unsourced
+                cell_val = None
+                if isinstance(c, dict):
+                    cell_val = c.get("value")
+                    if c.get("sources"):
+                        c_unsourced = False
+                    if c.get("is_unsourced"):
+                        c_unsourced = True
+                else:
+                    cell_val = c
+                    if r_srcs:
+                        c_unsourced = False
+
+                if c_unsourced or cell_val is None or (isinstance(cell_val, str) and (not cell_val.strip() or cell_val.strip() == "UNSOURCED")):
+                    unsourced_data_cells_all += 1
+
     wb = openpyxl.Workbook()
     # Remove default sheet
     wb.remove(wb.active)
@@ -225,10 +316,17 @@ def draft_xlsx(
         # Row 1: Title
         ws.cell(row=1, column=1, value=title).font = title_font
 
-        # Row 2: Subtitle / Provenance stamp
+        # Row 2: Subtitle / Provenance stamp with cell sourcing counts
+        if unsourced_data_cells_all > 0 and total_data_cells_all > 0:
+            sourcing_stamp = f"{unsourced_data_cells_all} of {total_data_cells_all} data cells could not be sourced from the provided corpus and are marked UNSOURCED."
+        elif total_data_cells_all > 0:
+            sourcing_stamp = f"All {total_data_cells_all} data cells sourced from cited documents."
+        else:
+            sourcing_stamp = "Drafted from cited sources."
+
         stamp_text = (
             f"{subtitle} — " if subtitle else ""
-        ) + f"Drafted by Sovereign Workbench on {date.today().isoformat()} from cited sources. Review before circulation."
+        ) + f"Drafted by Sovereign Workbench on {date.today().isoformat()}. {sourcing_stamp} Review before circulation."
         ws.cell(row=2, column=1, value=stamp_text).font = stamp_font
 
         # Row 3: Blank spacing
@@ -317,10 +415,14 @@ def draft_xlsx(
                         contains_estimates = True
                     c_comment = raw_c.get("comment")
 
+                is_sources_col_cell = (not has_sources_col and col_idx == len(headers)) or (has_sources_col and "source" in headers[col_idx-1].lower())
+
                 cell = ws.cell(row=current_row, column=col_idx)
 
-                # Formula handling (Live Excel formulas start with =)
-                if isinstance(cell_val, str) and cell_val.startswith("="):
+                # Unsourced data cell constraint: leave cell value EMPTY (empty string) and apply amber UNSOURCED formatting.
+                if c_unsourced and not is_sources_col_cell:
+                    cell.value = ""
+                elif isinstance(cell_val, str) and cell_val.startswith("="):
                     has_formulas = True
                     cell.value = cell_val
                 else:
@@ -339,8 +441,11 @@ def draft_xlsx(
                 elif c_unsourced or (isinstance(cell_val, str) and cell_val.strip() == "UNSOURCED"):
                     cell.fill = unsourced_fill
                     cell.font = unsourced_font
-                    if col_idx == len(headers):
+                    if is_sources_col_cell:
                         unsourced_count += 1
+                        cell.value = "UNSOURCED"
+                    else:
+                        cell.value = ""
                     comment_msg = c_comment or "UNSOURCED — this value is not traceable to a source document."
                     cell.comment = Comment(comment_msg, "Sovereign Workbench")
 
@@ -370,3 +475,4 @@ def draft_xlsx(
         has_formulas=has_formulas,
         byte_size=destination.stat().st_size,
     )
+

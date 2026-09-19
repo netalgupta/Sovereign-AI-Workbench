@@ -162,18 +162,26 @@ _SYSTEM_PROMPT = (
     "Values such as MFI, purity, temperature limits, spec ranges and "
     "catalyst life are RECORDED IN DOCUMENTS. They are not computed from "
     "physics, so never reach for a property-lookup tool to find them.\n\n"
+    "TOOL DISAMBIGUATION & DOCUMENT CREATION RULES:\n"
+    "- If asked to build, draft, create, or generate a spreadsheet, Excel file, "
+    "comparison table, matrix, or .xlsx file, or if the request specifies an output "
+    "filename ending in .xlsx, you MUST call draft_xlsx with title, sheets (headers, "
+    "rows with sources or marked unsourced, live Excel formulas), and output_path "
+    "(e.g. \"storage/outputs/filename.xlsx\").\n"
+    "- If asked to draft, create, write, or generate a Word document, text report, memo, "
+    "or .docx file, or if the request specifies a .docx filename, call draft_docx with title, "
+    "sections (including source citations), and output_path (e.g. \"storage/outputs/filename.docx\").\n"
+    "- An explicit filename ending in .xlsx is a HARD SIGNAL to call draft_xlsx.\n"
+    "- INSUFFICIENT OR MISSING SOURCE DATA IS NOT A REASON TO SKIP CALLING THE TOOL OR REFUSE THE REQUEST. "
+    "You MUST ALWAYS call draft_xlsx to generate the requested file structure. "
+    "For any requested values or cells that cannot be found in the sources, leave the cell value empty "
+    "and mark it unsourced (is_unsourced: true). NEVER fabricate, guess, infer, or invent numeric figures "
+    "(such as MFI values, flow rates, temperatures) to fill cells.\n\n"
     "How to work:\n"
     "- Say what you are about to do in one short sentence, then do it.\n"
     "- After a tool returns, say what it gave you before moving on.\n"
     "- Never do arithmetic yourself; call the calculation tool.\n"
     "- Name the source document when you use a retrieved passage.\n"
-    "- If asked to draft, create, write, or generate a Word document, text report, "
-    "or .docx file, call draft_docx with appropriate title, sections "
-    "(including source citations), and output_path (e.g. \"storage/outputs/filename.docx\").\n"
-    "- If asked to build, draft, create, or generate a spreadsheet, Excel file, "
-    "comparison table, matrix, or .xlsx file, call draft_xlsx with appropriate title, "
-    "sheets (headers, rows with sources and Excel formulas), and output_path (e.g. \"storage/outputs/filename.xlsx\"). "
-    "Use draft_docx for prose documents, draft_xlsx for tabular data/spreadsheets.\n"
     "- When you have enough, give the final answer and stop.\n"
     "- If a tool call fails twice, stop calling it and say what is "
     "missing. Do not keep retrying with different arguments.\n"
@@ -267,7 +275,7 @@ def _requires_approval(name: str) -> bool:
     return bool(spec and spec.requires_approval)
 
 
-def _chat_once(model: str, messages: list[dict], tools: list[dict]) -> dict:
+def _chat_once(model: str, messages: list[dict], tools: list[dict], timeout: int = 90) -> dict:
     """One non-streaming round-trip. Returns the assistant message."""
     response = requests.post(
         f"{OLLAMA_HOST}/api/chat",
@@ -278,13 +286,13 @@ def _chat_once(model: str, messages: list[dict], tools: list[dict]) -> dict:
             "stream": False,
             "options": default_options(),
         },
-        timeout=600,
+        timeout=timeout,
     )
     response.raise_for_status()
     return response.json().get("message", {}) or {}
 
 
-def _stream_once(model: str, messages: list[dict], tools: list[dict]) -> Iterator[dict]:
+def _stream_once(model: str, messages: list[dict], tools: list[dict], timeout: int = 90) -> Iterator[dict]:
     """One streaming round-trip, yielding raw Ollama message fragments.
 
     Streaming matters for the narration specifically. A tool call arrives
@@ -302,7 +310,7 @@ def _stream_once(model: str, messages: list[dict], tools: list[dict]) -> Iterato
             "stream": True,
             "options": default_options(),
         },
-        timeout=600,
+        timeout=timeout,
         stream=True,
     ) as response:
         response.raise_for_status()
@@ -349,12 +357,20 @@ def run_agent_loop(
 
     started = time.perf_counter()
     model = resolve_model_name(model_id)
+
+    # Instrument tool schema construction
+    t_schema_start = time.perf_counter()
     tools = _tools_for_chat()
+    t_schema_ms = round((time.perf_counter() - t_schema_start) * 1000, 2)
+
+    tool_names = [t["function"]["name"] for t in tools]
 
     T.section("AGENT LOOP")
     T.kv("request", repr(request))
     T.kv("model", f"{model_id} -> {model}")
-    T.kv("tools offered", len(tools))
+    T.kv("step: tool_schema_construction (ms)", t_schema_ms)
+    T.kv("tools offered count", len(tools))
+    T.kv("tools offered names", ", ".join(tool_names))
 
     messages: list[dict] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -366,17 +382,6 @@ def run_agent_loop(
     full_text: list[str] = []
     tool_call_count = 0
 
-    # Searches already run this turn. Observed: asked one question, the
-    # model ran search_documents SIX times with near-identical boolean
-    # queries, got materially the same documents each time, and drifted
-    # off the question entirely -- 42.5s and a wrong answer, where the
-    # same question answered correctly in 25.9s with two calls on
-    # another run.
-    #
-    # Silently returning the same passages again is what sustains that:
-    # to the model, an unhelpful result means "search differently", so
-    # it searches differently, gets the same thing, and repeats. Telling
-    # it plainly that it already has these results breaks the loop.
     seen_searches: dict[str, int] = {}
     tools_used: set[str] = set()
 
@@ -384,8 +389,9 @@ def run_agent_loop(
         assistant_text: list[str] = []
         tool_calls: list[dict] = []
 
+        t_llm_start = time.perf_counter()
         try:
-            for frame in _stream_once(model, messages, tools):
+            for frame in _stream_once(model, messages, tools, timeout=90):
                 message = frame.get("message") or {}
 
                 chunk = message.get("content") or ""
@@ -399,8 +405,19 @@ def run_agent_loop(
 
                 if frame.get("done"):
                     break
+            t_llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
+            T.kv(f"iteration {iteration} step: llm_call (ms)", t_llm_ms)
+        except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as exc:
+            t_llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
+            T.error(f"iteration {iteration} step: llm_call TIMEOUT after {t_llm_ms}ms: {exc}")
+            yield {
+                "type": "error",
+                "message": f"LLM call timed out ({t_llm_ms:.0f}ms). The model turn exceeded the 90s per-step limit.",
+            }
+            return
         except Exception as exc:  # noqa: BLE001
-            T.error(f"model call failed: {type(exc).__name__}: {exc}")
+            t_llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
+            T.error(f"iteration {iteration} step: llm_call failed after {t_llm_ms}ms: {type(exc).__name__}: {exc}")
             yield {
                 "type": "error",
                 "message": f"The model call failed: {type(exc).__name__}: {exc}",
@@ -446,6 +463,7 @@ def run_agent_loop(
             # executed, the model is not asked whether it should be, and
             # there is no parameter that skips this.
             if _requires_approval(name):
+                t_gate_start = time.perf_counter()
                 from backend.audit.approval_gate import ApprovalGate
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
@@ -477,8 +495,10 @@ def run_agent_loop(
 
                 gate = ApprovalGate()
                 app_req = gate.request(tool_name=name, arguments=arguments, effect=effect)
+                t_gate_ms = round((time.perf_counter() - t_gate_start) * 1000, 2)
 
-                T.warn(f"{name} requires approval - loop stopped (request {app_req.request_id})")
+                T.kv(f"step: approval_gate_request ({name}) (ms)", t_gate_ms)
+                T.warn(f"{name} requires approval - loop stopped in {t_gate_ms}ms (request {app_req.request_id})")
                 yield {
                     "type": "approval_required",
                     "id": app_req.request_id,
@@ -497,6 +517,7 @@ def run_agent_loop(
                 return
 
             call_started = time.perf_counter()
+            step_category = "retrieval" if name in ("search_documents", "list_documents") else ("file_write" if name in ("draft_docx", "draft_xlsx") else "tool_execution")
 
             signature = f"{name}:{_normalise_query(arguments)}"
             repeat_count = seen_searches.get(signature, 0)
@@ -538,14 +559,12 @@ def run_agent_loop(
                 output = call_tool(name, arguments)
                 status = "done"
             except Exception as exc:  # noqa: BLE001
-                # The failure goes back to the MODEL, not just to the UI.
-                # A tool that failed is information the agent needs in
-                # order to try something else; swallowing it leaves the
-                # model to answer as though the call had succeeded.
                 output = {"error": f"{type(exc).__name__}: {exc}"}
                 status = "failed"
 
             seconds = round(time.perf_counter() - call_started, 2)
+            t_step_ms = round(seconds * 1000, 2)
+            T.kv(f"step: {step_category} ({name}) (ms)", t_step_ms)
             yield {
                 "type": "tool_result",
                 "id": call_id,
@@ -720,6 +739,7 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     from backend.observability import turn_log as T
     from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
 
+    t_plan_start = time.perf_counter()
     steps = []
     try:
         if decision.path == "corpus":
@@ -767,6 +787,9 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
             "status": "pending",
             "depends_on": [],
         }]
+
+    t_plan_ms = round((time.perf_counter() - t_plan_start) * 1000, 2)
+    T.kv("step: plan_generation (ms)", t_plan_ms)
 
     T.kv("plan steps", len(steps))
     yield {"type": "plan", "steps": steps, "path": decision.path}
