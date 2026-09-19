@@ -3,7 +3,7 @@
 ## Scope of Ownership
 - Model registry design + router/classifier logic (TOOLS.md §C, items 20-22)
 - Hybrid RAG + GraphRAG pipeline, entity/relationship extraction (TOOLS.md §B, items 12-14, 17)
-- Vision model integration (Qwen2.5-VL wiring, not the UI around it — that's Sahil's; note **TOOLS.md row 7 defect/anomaly detection moved to Sahil in full — model AND overlay**, you support the `detect_defects` tool's printed-OCR source, you do not own the detector)
+- Vision model integration (Qwen2.5-VL wiring, not the UI around it — that's Sahil's; note **TOOLS.md row 7 defect/anomaly detection moved to Sahil in full, then DESCOPED to OCR text-region overlay only (not started)**; you support the `detect_defects` tool's printed-OCR source, you do not own the detector)
 - Math tool wiring into the agent's tool-call layer (TOOLS.md §D)
 - Overall technical direction and architecture sign-off (SYSTEM.md is your document to keep accurate)
 - Final say on model selection/quantization tradeoffs given the RTX 4060 constraint (DEPENDENCIES.md §1)
@@ -77,4 +77,4 @@ FR-2, FR-3, FR-4, FR-8, FR-10, FR-11, FR-14, NFR-4, NFR-5 (see REQUIREMENTS.md f
 
 ## Handed off
 
-- **TOOLS.md row 7, defect/anomaly detection (YOLOv8) — now Sahil's, model included.** It was split between us (I integrate the model, he renders the boxes), which made the output format a dependency in both directions and left nothing built on either side. Brief with the three hazards — ultralytics' four phone-home paths, the cuDNN pin, and the fact that public-dataset accuracy does not describe MRPL imagery — is in `docs/Assignments/Sahil_Defect_Detection_Handoff.md`. Model-integration questions still come to me.
+- **TOOLS.md row 7, defect/anomaly detection (YOLOv8) — now Sahil's, model included, but DESCOPED (not started) as of 2026-09-19.** The split between us (I integrate the model, he renders the boxes) made the output format a dependency in both directions and left nothing built on either side; ownership was consolidated under Sahil, and then the row was descoped to an OCR text-region overlay only (status `not started (OCR text-region overlay only)`). Brief with the three hazards — ultralytics' four phone-home paths, the cuDNN pin, and the fact that public-dataset accuracy does not describe MRPL imagery — is in `docs/Assignments/Sahil_Defect_Detection_Handoff.md`. If a real detector is ever built it stays Sahil's; model-integration questions still come to me.

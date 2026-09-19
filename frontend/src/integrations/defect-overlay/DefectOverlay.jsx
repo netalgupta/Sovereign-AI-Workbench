@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Scan, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { Scan, ShieldAlert } from 'lucide-react'
 
 const SEVERITY = {
   low: { color: '#10b981', label: 'low' },
@@ -55,15 +55,16 @@ function boxToPercent(box, image) {
 }
 
 /**
- * Real Defect/Annotation Overlay Viewer (FRONTEND.md §3.14 / CARD 10).
+ * Real OCR Text-Region Overlay Viewer (FRONTEND.md §3.14 / TOOLS.md row 7).
  *
- * Renders an inspection image with YOLOv8-style bounding boxes overlaid,
- * labeled with class + confidence. Clicking a box (or a linked finding in the
- * side panel) selects and highlights it.
+ * Renders an image with boxes overlaid on where PRINTED TEXT is. Each
+ * box is an OCR text region: label = the recognized text, confidence =
+ * OCR transcription confidence, severity is always "low", kind is
+ * "text_region". This is NOT a defect/anomaly detector and must never
+ * present its output as defect findings.
  *
- * It renders ONLY real model output. When mounted without detections or an
- * image, it shows an explicit empty state rather than a crafted sample — the
- * CARD 10 backend does not exist yet, so nothing fake is ever displayed.
+ * It renders ONLY real tool output. When mounted without detections or an
+ * image, it shows an explicit empty state rather than a crafted sample.
  *
  * @param {import('./contract').DefectOverlayProps} props
  */
@@ -84,21 +85,7 @@ export default function DefectOverlay({
 
   const hasDetections = boxes.length > 0
 
-  const sevCounts = {}
-  for (const d of Array.isArray(detections) ? detections : []) {
-    const sev = d.severity || 'medium'
-    sevCounts[sev] = (sevCounts[sev] || 0) + 1
-  }
-
-  let highest = null
-  for (const key of ['critical', 'high', 'medium', 'low']) {
-    if (sevCounts[key]) {
-      highest = { key, count: sevCounts[key] }
-      break
-    }
-  }
-
-  // Empty state — no fabricated overlay when there is no real model output.
+  // Empty state — no fabricated overlay when there is no real tool output.
   if (!imageUrl || !hasDetections) {
     return (
       <div
@@ -107,12 +94,12 @@ export default function DefectOverlay({
       >
         <Scan size={18} style={{ color: 'var(--color-text-muted)' }} />
         <span className="font-semibold" style={{ color: 'var(--color-text)' }}>
-          No defect detections available
+          No text regions detected
         </span>
         <span style={{ color: 'var(--color-text-muted)' }}>
           {!imageUrl
-            ? 'No inspection image was provided for this tool output.'
-            : 'The detection tool returned no bounding boxes for this image — an overlay is only drawn from real model output.'}
+            ? 'No image was provided for this tool output.'
+            : 'The OCR text-region tool returned no boxes for this image — an overlay is only drawn from real tool output.'}
         </span>
       </div>
     )
@@ -137,19 +124,11 @@ export default function DefectOverlay({
         <div className="flex items-center gap-2">
           <Scan size={15} style={{ color: 'var(--color-accent)' }} />
           <span className="font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
-            Defect &amp; Anomaly Overlay
+            OCR Text-Region Overlay
           </span>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] font-mono" style={{ color: 'var(--color-text-muted)' }}>
-          {highest && (
-            <span className="flex items-center gap-1">
-              <AlertTriangle size={12} style={{ color: SEVERITY[highest.key].color }} />
-              <span style={{ color: SEVERITY[highest.key].color }}>
-                {highest.count} {highest.key === 'critical' ? 'critical' : 'high'} risk
-              </span>
-            </span>
-          )}
           <span>{detections.length} box{detections.length === 1 ? '' : 'es'}</span>
         </div>
       </div>
@@ -229,12 +208,13 @@ export default function DefectOverlay({
         >
           <div className="flex items-center gap-1.5 font-bold text-xs" style={{ color: 'var(--color-text)' }}>
             <ShieldAlert size={14} style={{ color: 'var(--color-accent)' }} />
-            <span>Inspection Findings</span>
+            <span>Detected Text Regions</span>
           </div>
 
           {findings.length === 0 ? (
             <p className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-              No linked findings in this tool output. Findings arrive with the detection result.
+              These are OCR text regions, not defect findings. No linked
+              descriptions were returned with this tool output.
             </p>
           ) : (
             <div className="space-y-2">

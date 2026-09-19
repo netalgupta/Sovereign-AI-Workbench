@@ -38,7 +38,7 @@
 | Real-ESRGAN | Image super-resolution for degraded scans |
 | OpenCV | Deskew, denoise, binarization preprocessing |
 | LayoutLMv3 / table-transformer | Layout and table extraction |
-| Ultralytics YOLOv8 | Defect/anomaly detection (fine-tuned on public corrosion datasets) |
+| Ultralytics YOLOv8 | Intended for defect/anomaly detection — **NOT started (descoped 2026-09-19, TOOLS.md row 7); not installed today.** Row 7's tool is an OCR text-region overlay only. |
 | PyMuPDF (fitz) | Rasterizing a specific PDF page to an image, for routing just that page through OCR (a mixed scanned+text-native PDF must not OCR the whole document) |
 | faster-whisper | Local speech-to-text for voice-note transcription — **team addition, not PS-traceable, see REQUIREMENTS.md §6 / TOOLS.md #61 / VIBECODING_SPEC.md CARD 12**. Same fetch-once/offline-forever caching discipline as sentence-transformers (§4) — see `backend/ingestion/model_cache.py` |
 

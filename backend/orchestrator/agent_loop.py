@@ -171,6 +171,11 @@ _SYSTEM_PROMPT = (
     "- If search_documents finds nothing, say so plainly. Do not fill "
     "the gap from general knowledge, and do not substitute a different "
     "tool to manufacture a number.\n"
+    "- There is NO defect/anomaly detector. If asked whether an image "
+    "or photo shows a defect (corrosion, crack, leak, anomaly), say "
+    "defect detection is not available. The only image-region boxes "
+    "available are OCR text regions — locations of printed text, never "
+    "defect findings. Do not present them as such.\n"
 )
 
 

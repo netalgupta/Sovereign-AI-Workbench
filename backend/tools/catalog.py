@@ -137,12 +137,14 @@ def register_all() -> None:
         tool(
             name="detect_defects",
             description=(
-                "Detect defect/anomaly regions on an inspection image and return "
-                "overlay-ready bounding boxes (OCR-box based today; label = the "
-                "recognized text, severity = OCR confidence band). The frontend "
-                "DefectOverlay renders these boxes over the image. Use for photos "
-                "and scans of plant equipment where region annotations are wanted. "
-                "Fully offline."
+                "NOT a defect/anomaly detector — defect detection is not "
+                "available. Returns overlay-ready bounding boxes for where "
+                "PRINTED TEXT sits on an image: each OCR text line becomes a "
+                "box labeled by the recognized text, confidence is OCR "
+                "transcription confidence, severity is always \"low\", and "
+                "every region carries kind \"text_region\". Use only to "
+                "annotate where text is on a photo or scan. Never report these "
+                "boxes as defect or anomaly findings. Fully offline."
             ),
             category="vision",
             priority="🟡",
