@@ -36,11 +36,13 @@ from backend.tools.generation.deck import theme
 logger = logging.getLogger("pptx.qa")
 
 # Measured-defect penalties, in score points.
-PENALTY = {"overflow": 2.0, "overlap": 4.0, "off_page": 4.0, "small_type": 1.0, "dense": 1.0}
+PENALTY = {"overflow": 2.0, "overlap": 4.0, "off_page": 4.0, "small_type": 1.0, "dense": 1.0,
+           "empty": 6.0}
 MIN_FONT_PT = 10.5
 MAX_WORDS_PER_PAGE = 110
 PASS_SCORE = 7.0
 FOOTER_TOP_PT = theme.FOOTER_Y * 72
+BODY_TOP_PT = (theme.BODY_Y - 0.3) * 72
 
 # The model rates what it can SEE on four named dimensions; the page score
 # is computed here from those ratings (hard constraint #3: no arithmetic by
@@ -134,7 +136,14 @@ def render_and_measure(pptx: str | Path, out_dir: str | Path, width_px: int = 96
             slide.Export(str(png), "PNG", width_px, height_px)
             pngs.append(str(png))
             boxes, found, count, biggest = [], set(), 0, (0, "")
+            body_content = 0
             for shape in slide.Shapes:
+                # Anything centred in the body band that carries content: text, a
+                # chart, a table or a picture. Rules and bars do not count.
+                if BODY_TOP_PT <= shape.Top + shape.Height / 2 < FOOTER_TOP_PT - 1 and (
+                        (shape.HasTextFrame and shape.TextFrame.HasText) or shape.HasChart
+                        or shape.HasTable or shape.Type == 13):
+                    body_content += 1
                 if not (shape.HasTextFrame and shape.TextFrame.HasText):
                     continue
                 tr = shape.TextFrame.TextRange
@@ -165,6 +174,10 @@ def render_and_measure(pptx: str | Path, out_dir: str | Path, width_px: int = 96
                         found.add("overlap")
             if count > MAX_WORDS_PER_PAGE:
                 found.add("dense")
+            # A page with a header and nothing under it: the timeline whose
+            # events all lacked a title rendered a bare axis like this.
+            if body_content == 0:
+                found.add("empty")
             defects[i] = sorted(found)
             words[i] = count
             titles[i] = biggest[1].replace("\r", " ")[:90]

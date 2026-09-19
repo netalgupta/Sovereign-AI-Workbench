@@ -493,6 +493,13 @@ def _dedupe_unit(item: dict) -> dict:
     return item
 
 
+# Per list type: the list, and the field in each item the layout renders.
+ITEM_TEXT_FIELD = {
+    "timeline": ("events", "title"), "process": ("steps", "title"), "actions": ("items", "action"),
+    "kpis": ("items", "label"), "comparison": ("columns", "title"),
+}
+
+
 def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
     """A slide fit to render, or (None, why not).
 
@@ -554,6 +561,20 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
         value = out.get(field)
         if value in (None, "", [], {}):
             return None, f"required field {field!r} is empty"
+
+    # EVERY ITEM MUST CARRY WHAT ITS LAYOUT DRAWS. Measured: a timeline's
+    # events came back with KPI field names (value/label/note), passed the
+    # "events is non-empty" check, and rendered as a bare axis on an
+    # otherwise blank page. Caught by the page reviewer, not by layout
+    # measurement -- an empty page has nothing to overflow.
+    if stype in ITEM_TEXT_FIELD:
+        list_field, text_field = ITEM_TEXT_FIELD[stype]
+        items = out.get(list_field) or []
+        bad = [i for i, it in enumerate(items, 1)
+               if not isinstance(it, dict) or not str(it.get(text_field) or "").strip()]
+        if bad:
+            return None, (f"{stype} {list_field} {bad[:4]} have no {text_field!r}; each needs: "
+                          f"{meta['spec']}")
 
     if stype == "table":
         cols = out.get("columns") or []

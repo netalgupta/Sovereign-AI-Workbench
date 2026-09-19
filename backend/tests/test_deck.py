@@ -477,3 +477,61 @@ def test_a_big_stat_is_checked_the_same_way():
             "context": "Cycle 18 chlorination efficiency was below the 90-96 normal range."}
     assert D.validate_slide(stat, DOCS)[0] is None
     assert D.validate_slide({**stat, "status": "below"}, DOCS)[0] is not None
+
+
+# ── every list item carries what its layout draws ───────────────────────────
+
+
+def test_timeline_events_with_kpi_field_names_are_rejected():
+    """Measured: these rendered as a bare axis on an otherwise blank page."""
+    slide = {"type": "timeline", "title": "Corrective Actions Timeline", "sources": ["S1"],
+             "events": [{"value": "Replace P-HS-02 discharge flange gasket", "label": "Action Taken",
+                         "note": "Completed on 2026-07-24", "status": "normal"},
+                        {"value": "Inspect all pump seals", "label": "Action Taken",
+                         "note": "Scheduled for 2026-08-05", "status": "watch"}]}
+    out, why = D.validate_slide(slide, DOCS)
+    assert out is None and "'title'" in why and "date" in why, why
+
+
+def test_timeline_events_with_titles_pass():
+    slide = {"type": "timeline", "title": "Corrective Actions Timeline", "sources": ["S1"],
+             "events": [{"date": "July", "title": "Gasket replaced", "detail": "P-HS-02 discharge flange"},
+                        {"date": "August", "title": "Seal inspection", "detail": "All Hassan pumps"}]}
+    assert D.validate_slide(slide, DOCS)[0] is not None
+
+
+def test_a_kpi_without_a_label_is_rejected():
+    slide = {"type": "kpis", "title": "Cycle 18 parameters", "sources": ["S1"],
+             "items": [{"value": "34", "unit": "h", "label": "Cycle time"}, {"value": "84", "unit": "%"}]}
+    out, why = D.validate_slide(slide, DOCS)
+    assert out is None and "[2]" in why
+
+
+def _powerpoint_available() -> bool:
+    try:
+        import win32com.client  # noqa: F401
+        import winreg
+
+        winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "PowerPoint.Application").Close()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@pytest.mark.skipif(not _powerpoint_available(), reason="needs PowerPoint to lay out and measure")
+def test_powerpoint_measures_an_empty_page_as_empty(tmp_path):
+    """The renderer drew an axis and no events: nothing to overflow, so nothing measured."""
+    from backend.tools.generation.deck import qa
+
+    spec = {"title": "Pipeline incident", "sources": [], "sections": [{"title": "Actions", "slides": [
+        {"type": "timeline", "title": "Corrective Actions Timeline", "sources": [],
+         "events": [{"value": "no title here"}, {"value": "nor here"}]},
+        {"type": "points", "title": "What happened on the segment", "sources": [],
+         "bullets": ["A gasket failed at the discharge flange.", "The line was isolated in minutes."]},
+    ]}]}
+    result = render.render_deck(spec, tmp_path / "d.pptx")
+    measured = qa.render_and_measure(result["path"], tmp_path / "png")
+    timeline_page = result["page_map"].index((0, 0)) + 1
+    points_page = result["page_map"].index((0, 1)) + 1
+    assert "empty" in measured["defects"][timeline_page]
+    assert measured["defects"][points_page] == []
