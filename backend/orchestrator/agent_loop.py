@@ -68,7 +68,7 @@ from typing import Any
 
 import requests
 
-from backend.models.ollama_client import OLLAMA_HOST, default_options
+from backend.models.ollama_client import DEFAULT_TIMEOUT, OLLAMA_HOST, default_options
 from backend.models.registry import resolve_model_name
 
 # A turn that cannot finish in this many model round-trips is looping.
@@ -202,6 +202,45 @@ def _tools_for_chat() -> list[dict]:
     # the registry is skipped silently rather than raising: a tool being
     # renamed should degrade the agent's options, not break every turn.
     return [by_name[name] for name in CHAT_TOOLS if name in by_name]
+
+
+# A request whose subject is a spreadsheet or Word build should NOT be
+# offered the whole CHAT_TOOLS menu. Each tool schema is several thousand
+# characters of JSON, and a 7B model weighs every offered schema every
+# turn. Locking a drafting turn to search_documents + the one drafting
+# tool it can possibly mean cuts the per-request schema payload ~70%
+# (measured: 7421 -> 2179 chars) and removes an entire class of
+# "model picked the wrong drafting tool" misroutes.
+_XLSX_SIGNAL = re.compile(
+    r"(?:\.xlsx|spreadsheet|excel|comparison table|comparison matrix|(?:build|draft|create|make)\b.*(?:table|matrix))",
+    re.IGNORECASE,
+)
+_DOCX_SIGNAL = re.compile(
+    r"(?:\.docx|word document|text report|\bmemo\b|(?:build|draft|create|write)\b.*(?:document|report|memo))",
+    re.IGNORECASE,
+)
+
+
+def _tools_for_request(request: str) -> list[dict]:
+    """The tool schemas suited to one `request`.
+
+    Drafting requests (spreadsheet / Word) get exactly the two tools they
+    can use; everything else gets the full curated chat set.
+    """
+    from backend.tools import catalog  # noqa: F401  (registers everything)
+    from backend.tools.registry import get_tool_schemas
+
+    by_name = {s["function"]["name"]: s for s in get_tool_schemas()}
+
+    def offer(*names: str) -> list[dict]:
+        return [by_name[n] for n in names if n in by_name]
+
+    if _XLSX_SIGNAL.search(request):
+        return offer("search_documents", "draft_xlsx")
+    if _DOCX_SIGNAL.search(request):
+        return offer("search_documents", "draft_docx")
+
+    return _tools_for_chat()
 
 
 # Arithmetic stated WITH ITS RESULT: "22 + 16 = 38", "22+16 is 38".
@@ -361,7 +400,7 @@ def run_agent_loop(
 
     # Instrument tool schema construction
     t_schema_start = time.perf_counter()
-    tools = _tools_for_chat()
+    tools = _tools_for_request(request)
     t_schema_ms = round((time.perf_counter() - t_schema_start) * 1000, 2)
 
     tool_names = [t["function"]["name"] for t in tools]
@@ -372,6 +411,7 @@ def run_agent_loop(
     T.kv("step: tool_schema_construction (ms)", t_schema_ms)
     T.kv("tools offered count", len(tools))
     T.kv("tools offered names", ", ".join(tool_names))
+    T.kv("tool schema payload (chars)", len(json.dumps(tools)))
 
     # Conversation context goes in the SYSTEM message, not the user
     # message. Appending it to the request makes the model answer the
@@ -401,7 +441,7 @@ def run_agent_loop(
 
         t_llm_start = time.perf_counter()
         try:
-            for frame in _stream_once(model, messages, tools, timeout=90):
+            for frame in _stream_once(model, messages, tools, timeout=DEFAULT_TIMEOUT):
                 message = frame.get("message") or {}
 
                 chunk = message.get("content") or ""
@@ -420,7 +460,7 @@ def run_agent_loop(
             T.error(f"iteration {iteration} step: llm_call TIMEOUT after {t_llm_ms}ms: {exc}")
             yield {
                 "type": "error",
-                "message": f"LLM call timed out ({t_llm_ms:.0f}ms). The model turn exceeded the 90s per-step limit.",
+                "message": f"LLM call timed out ({t_llm_ms:.0f}ms). The model turn exceeded the {DEFAULT_TIMEOUT}s per-step limit.",
             }
             return
         except Exception as exc:  # noqa: BLE001

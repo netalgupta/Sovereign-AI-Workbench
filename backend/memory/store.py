@@ -48,8 +48,6 @@ it survives a restart, and a session that vanishes when uvicorn reloads
 is not memory.
 """
 
-from __future__ import annotations
-
 import json
 import sqlite3
 import threading
