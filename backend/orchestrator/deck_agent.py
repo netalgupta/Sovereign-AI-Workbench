@@ -59,14 +59,15 @@ SLIDE_TYPES: dict[str, dict[str, Any]] = {
     "big_stat": {
         "required": ["value", "label", "context"],
         "spec": '"value": str (the number alone), "unit": str, "label": str (what it measures), '
-                '"context": str (2-3 sentences), "status": one of exceeded|watch|normal, '
+                '"context": str (2-3 sentences), "status": one of exceeded|below|watch|normal, '
                 'optional "compare": {"value": str, "label": str}',
         "use": "one number that carries the whole message",
     },
     "kpis": {
         "required": ["items"],
         "spec": '"items": [{"value": str, "unit": str, "label": str, "note": str, '
-                '"status": exceeded|watch|normal}] (2-4)',
+                '"status": exceeded|below|watch|normal}] (2-4); exceeded = above its limit, '
+                'below = under its range',
         "use": "several parameters read side by side",
     },
     "chart": {
@@ -98,7 +99,7 @@ SLIDE_TYPES: dict[str, dict[str, Any]] = {
     },
     "comparison": {
         "required": ["columns"],
-        "spec": '"columns": [{"title": str, "points": [str], "status": exceeded|watch|normal}] (2-3)',
+        "spec": '"columns": [{"title": str, "points": [str], "status": exceeded|below|watch|normal}] (2-3)',
         "use": "two or three options, units or periods set against each other",
     },
     "actions": {
@@ -598,6 +599,11 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
                               "use an actions or points slide for statements")
     if stype == "big_stat" and not _MEASUREMENT.match(str(out.get("value", "")).strip()):
         return None, "big_stat value must be a number"
+    status_bearers = [out] if stype == "big_stat" else (out.get("items") or []) if stype == "kpis" else []
+    for item in status_bearers:
+        clash = _status_contradiction(item)
+        if clash:
+            return None, clash
     if stype == "points" and isinstance(out.get("callout"), dict):
         if not _MEASUREMENT.match(str(out["callout"].get("value", "")).strip()):
             out.pop("callout")
@@ -614,6 +620,30 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
         pretty = ", ".join(f"{n:g}" for n in sorted(unsourced)[:6])
         return None, f"these figures are in no source document: {pretty}"
     return out, ""
+
+
+_SAYS_BELOW = re.compile(r"\b(below|under|lower than|short of|less than)\b", re.I)
+_SAYS_ABOVE = re.compile(r"\b(above|exceed\w*|over|higher than|more than|breach\w*)\b", re.I)
+
+
+def _status_contradiction(item: dict) -> str:
+    """The status pill must agree with the words beside it.
+
+    Measured: CCR-1's chlorination efficiency (84% against 90-96) shipped
+    with the note "Below normal range" and a red EXCEEDED pill, because
+    the schema offered no status for a value under its range. Rejected so
+    the repair pass picks the status that matches, never silently changed.
+    """
+    status = str(item.get("status") or "").strip().lower()
+    words = " ".join(str(item.get(k) or "") for k in ("note", "context", "label"))
+    below, above = bool(_SAYS_BELOW.search(words)), bool(_SAYS_ABOVE.search(words))
+    if status == "exceeded" and below and not above:
+        return (f"status 'exceeded' contradicts {words.strip()[:80]!r}; use status 'below' "
+                "for a value under its range")
+    if status == "below" and above and not below:
+        return (f"status 'below' contradicts {words.strip()[:80]!r}; use status 'exceeded' "
+                "for a value over its limit")
+    return ""
 
 
 # ── assembly ────────────────────────────────────────────────────────────────

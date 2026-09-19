@@ -440,3 +440,40 @@ def test_anything_less_regular_stays_a_list(bullets):
 
     slide = {"type": "points", "title": "t", "bullets": bullets, "sources": ["S1"]}
     assert _chart_from_list(slide) is slide
+
+
+# ── the status pill agrees with its own note ────────────────────────────────
+
+
+def _kpi(status: str, note: str) -> dict:
+    return {"type": "kpis", "title": "Cycle 18 parameters", "sources": ["S1"],
+            "items": [{"value": "84", "unit": "%", "label": "Chlorination efficiency",
+                       "note": note, "status": status},
+                      {"value": "34", "unit": "h", "label": "Cycle time", "note": "Target 28 h",
+                       "status": "watch"}]}
+
+
+def test_a_value_below_its_range_is_not_labelled_exceeded():
+    """Measured: 84% against 90-96 shipped as 'Below normal range' with a red EXCEEDED pill."""
+    slide, why = D.validate_slide(_kpi("exceeded", "Below normal range"), DOCS)
+    assert slide is None and "below" in why
+
+
+def test_the_below_status_is_accepted_and_shown_as_below_range():
+    slide, why = D.validate_slide(_kpi("below", "Below normal range"), DOCS)
+    assert slide is not None, why
+    assert theme.status_label("below") == "below range"
+    assert theme.status_colours("below") == theme.status_colours("exceeded")
+
+
+def test_a_below_status_over_a_note_saying_exceeded_is_rejected():
+    slide, why = D.validate_slide(_kpi("below", "Exceeds the upper limit"), DOCS)
+    assert slide is None and "exceeded" in why
+
+
+def test_a_big_stat_is_checked_the_same_way():
+    stat = {"type": "big_stat", "title": "Chlorination fell short", "value": "84", "unit": "%",
+            "label": "Chlorination efficiency", "status": "exceeded", "sources": ["S1"],
+            "context": "Cycle 18 chlorination efficiency was below the 90-96 normal range."}
+    assert D.validate_slide(stat, DOCS)[0] is None
+    assert D.validate_slide({**stat, "status": "below"}, DOCS)[0] is not None

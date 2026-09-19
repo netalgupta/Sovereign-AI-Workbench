@@ -42,6 +42,7 @@ PALETTE = Palette()
 STATUS_COLOURS = {
     "critical": ("red", "red_light"),
     "exceeded": ("red", "red_light"),
+    "below": ("red", "red_light"),
     "high": ("red", "red_light"),
     "failed": ("red", "red_light"),
     "watch": ("amber", "amber_light"),
@@ -56,6 +57,15 @@ STATUS_COLOURS = {
     "complete": ("green", "green_light"),
     "completed": ("green", "green_light"),
 }
+
+
+# What a pill SAYS for a status word, where the bare word would mislead.
+# "below" alone reads as a direction, not a verdict.
+STATUS_LABELS = {"below": "below range"}
+
+
+def status_label(word: str) -> str:
+    return STATUS_LABELS.get(word.strip().lower(), word)
 
 
 def status_colours(word: str | None) -> tuple[str, str] | None:

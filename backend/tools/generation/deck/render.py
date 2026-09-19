@@ -390,7 +390,7 @@ def _big_stat(prs, ctx, sec_title, sd):
     P.text(s, theme.MARGIN_X, theme.BODY_Y + 2.72, left_w, 1.0, sd.get("label", ""), size=18, colour=C.navy,
            weight="semibold", line_spacing=1.15)
     if status:
-        P.pill(s, theme.MARGIN_X, theme.BODY_Y + 3.65, sd["status"], status[0], status[1])
+        P.pill(s, theme.MARGIN_X, theme.BODY_Y + 3.65, theme.status_label(sd["status"]), status[0], status[1])
 
     px = theme.MARGIN_X + left_w + 0.6
     pw = theme.PAGE_W - theme.MARGIN_X - px
@@ -437,7 +437,8 @@ def _kpis(prs, ctx, sec_title, sd):
             if it.get("note"):
                 P.text(s, x + 0.3, y + 2.45, w - 0.6, 0.85, it["note"], size=12, colour=C.ink_2, line_spacing=1.2)
             if status:
-                P.pill(s, x + 0.3, y + h - 0.5, it["status"], status[0], status[1], size=9, h=0.26)
+                P.pill(s, x + 0.3, y + h - 0.5, theme.status_label(it["status"]), status[0], status[1],
+                       size=9, h=0.26)
 
 
 def _chart(prs, ctx, sec_title, sd):
