@@ -15,7 +15,7 @@ The `/src/integrations/` directory provides an isolated adapter layer and strict
 | [`calc-trace/`](file:///c:/SIH/SIH26117-Sovereign-Workbench/frontend/src/integrations/calc-trace) | `CalcTraceCard` | **Kanishka** | Inline Chat Tool Call Results | `stub` | Symbolic derivation trace with `✓ verified by SymPy` badge (§3.8) |
 | [`audit-log/`](file:///c:/SIH/SIH26117-Sovereign-Workbench/frontend/src/integrations/audit-log) | `AuditLog` | **Kanishka** | `/audit` route | `stub` | Tamper-evident operational event stream with CSV export (§3.10) |
 | [`network-monitor/`](./network-monitor) | `NetworkMonitor` / `NetworkMonitorBar` | **Sahil** | `/monitor` route & Chat Bottom Bar | `integrated` | Real-time air-gap security & socket monitor (§3.9); 1s polling of `GET /api/network/status` IS the live feed — there is no network-telemetry websocket to subscribe to |
-| [`multimodal-upload/`](./multimodal-upload) | `MultimodalUpload` | **Sahil** | Chat Composer Paperclip & Dropzone | `integrated` | Drag-and-drop ingestion for scans, photos, PDFs + thumbnails; images → `detect_defects`, audio → `transcribe_voice_note` (§3.13) |
+| `—` | Multimodal upload (drop zone + thumbnails) | **Sahil** | Chat Composer (`components/workbench/ChatPane.jsx`) | `integrated` | §3.13 now lives directly in Advay's composer: drop zone over the composer, image thumbnail chips + `queued → uploading → processing → ready/error` status, object-URL revocation on remove/send. The old `multimodal-upload/` folder was deleted — no dead code |
 | [`defect-overlay/`](./defect-overlay) | `DefectOverlay` | **Sahil** | Chat Findings & Image Viewer | `integrated` | OCR-box detection overlay on plant inspection photos (§3.14); YOLOv8 detector swap planned behind the same contract |
 
 ---

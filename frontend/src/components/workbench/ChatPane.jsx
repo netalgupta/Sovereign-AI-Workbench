@@ -93,8 +93,8 @@ export function ChatPane() {
   const [draft, setDraft] = useState('')
   const [isPending, setIsPending] = useState(false)
 
-  // Files queued via the MultimodalUpload integration (§3.13). Each item's
-  // status/progress is driven ONLY by the real upload/OCR steps below.
+  // Files queued in the composer tray (§3.13). Each item's status/progress
+  // is driven ONLY by the real upload/OCR steps below.
   const [attachments, setAttachments] = useState([])
 
   // Top tabs: Chat / Notebooks / Artifacts
@@ -130,6 +130,8 @@ export function ChatPane() {
   const docFileInputRef = useRef(null)
   const photoFileInputRef = useRef(null)
   const startTrackingIngestion = useIngestionStore((s) => s.startTracking)
+  // Drag-over state for the drop target over the composer (§3.13).
+  const [isDragOver, setIsDragOver] = useState(false)
 
   // ── Real-Time Network Monitor Telemetry for Header Button ─────────────────
   const [networkStatus, setNetworkStatus] = useState({ isAirGapped: true, socketCount: 0, available: false })
@@ -186,14 +188,13 @@ export function ChatPane() {
     window.dispatchEvent(new CustomEvent('open-add-source-modal'))
   }
 
-  const handleBrowserFilesUpload = async (e, label) => {
-    const fileList = Array.from(e.target.files || [])
-    if (fileList.length === 0) return
-    e.target.value = ''
+  const addFiles = async (fileList, label) => {
+    const files = Array.from(fileList || [])
+    if (files.length === 0) return
 
     const newAttachments = []
     const mediaAttachments = []
-    for (const file of fileList) {
+    for (const file of files) {
       let previewUrl = null
       let textContent = null
       if (file.type.startsWith('image/')) {
@@ -239,6 +240,46 @@ export function ChatPane() {
     if (mediaAttachments.length) setAttachments((prev) => [...prev, ...mediaAttachments])
     setTemporaryAttachments((prev) => [...prev, ...newAttachments])
     showToast(`Attached ${newAttachments.length + mediaAttachments.length} file(s) to this message`, 'info')
+  }
+
+  // Paperclip inputs reach the tray through the same code as drag-and-drop,
+  // so one path decides what is media (OCR/transcription pipeline) and what
+  // is a small inline text file.
+  const handleBrowserFilesUpload = (e, label) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    e.target.value = ''
+    addFiles(files, label)
+  }
+
+  // ── Drag-and-drop over the composer (§3.13) ──────────────────────────────
+  const handleDragEnter = (e) => {
+    if (isPending || awaitingHumanApproval) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer?.types?.includes('Files')) setIsDragOver(true)
+  }
+
+  const handleDragOver = (e) => {
+    if (isPending || awaitingHumanApproval) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    if (isPending || awaitingHumanApproval) return
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length) addFiles(files, 'drop')
   }
 
   // Detect code or markdown structure in draft
@@ -1196,7 +1237,7 @@ export function ChatPane() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 2 }}
               transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-              className={`flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-[var(--shadow-md)] ${
+              className={`relative flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-[var(--shadow-md)] ${
                 isCodeOrMarkdown ? 'ring-1 ring-[var(--color-accent-border)]' : ''
               }`}
               style={{
@@ -1207,7 +1248,28 @@ export function ChatPane() {
                 boxShadow: 'var(--shadow-md)',
                 opacity: awaitingHumanApproval ? 0.75 : 1,
               }}
+              onDragEnter={handleDragEnter}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
             >
+              {isDragOver && (
+                <div
+                  className="pointer-events-none absolute inset-0 z-20 rounded-xl flex items-center justify-center border-2 border-dashed"
+                  style={{
+                    borderColor: 'var(--color-accent)',
+                    background: 'var(--color-accent-tint)',
+                  }}
+                >
+                  <div
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ color: 'var(--color-accent)', background: 'var(--color-surface)' }}
+                  >
+                    <ImageIcon size={14} strokeWidth={2} />
+                    Drop files to attach — images and audio enter the OCR/transcription pipeline
+                  </div>
+                </div>
+              )}
           {/* Hidden file inputs for document and photo attachments */}
           <input
             ref={docFileInputRef}
@@ -1397,7 +1459,7 @@ export function ChatPane() {
                 {attachments.map((att) => (
                   <div
                     key={att.id}
-                    className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] border"
+                    className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md text-[11px] border"
                     style={{
                       background: 'var(--color-surface)',
                       borderColor: att.status === 'error' ? 'var(--color-danger, #C8413B)' : 'var(--color-border)',
@@ -1405,12 +1467,24 @@ export function ChatPane() {
                     }}
                     title={att.status === 'error' ? 'Upload or analysis failed' : `Status: ${att.status}`}
                   >
-                    <FileText size={11} className="text-[var(--color-accent)]" />
+                    {att.previewUrl ? (
+                      <img
+                        src={att.previewUrl}
+                        alt={att.name}
+                        className="w-6 h-6 rounded object-cover border flex-shrink-0"
+                        style={{ borderColor: 'var(--color-border)' }}
+                      />
+                    ) : (
+                      <FileText size={11} className="text-[var(--color-accent)] flex-shrink-0" />
+                    )}
                     <span className="font-medium truncate max-w-[120px]">{att.name}</span>
                     <span className="text-[9px] text-[var(--color-text-muted)]">{att.status}</span>
                     <button
                       type="button"
-                      onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== att.id))}
+                      onClick={() => {
+                        if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
+                        setAttachments((prev) => prev.filter((x) => x.id !== att.id))
+                      }}
                       className="w-3.5 h-3.5 rounded flex items-center justify-center hover:bg-[var(--color-overlay)] text-[var(--color-text-muted)] hover:text-red-500 cursor-pointer"
                     >
                       <X size={10} />
