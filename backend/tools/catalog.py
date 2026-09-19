@@ -155,6 +155,27 @@ def register_all() -> None:
     except ImportError:
         pass
 
+    try:
+        from backend.tools.vision.image_description import describe_image
+
+        tool(
+            name="describe_image",
+            description=(
+                "Describe what a photo, P&ID, diagram, sketch or scan DEPICTS using "
+                "a vision model: subject, equipment, connections, and text LITERALLY "
+                "PRINTED in the image. Any quantity stated is an ESTIMATE, never a "
+                "measurement. Use when an uploaded image needs interpretation, not "
+                "just OCR. Does NOT extract structured P&ID symbols/lines — that is "
+                "row 6's job."
+            ),
+            category="vision",
+            priority="🟡",
+            is_estimate=True,
+            tools_md_row=72,
+        )(describe_image)
+    except ImportError:
+        pass
+
     # ---- audio -----------------------------------------------------------
 
     try:

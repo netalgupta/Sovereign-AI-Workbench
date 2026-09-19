@@ -108,14 +108,24 @@ a P&ID or a photo is never *interpreted* — only its text is read.
 - For images, also call the vision model. `describe_chart_image` exists for
   charts; for photos/diagrams coordinate with Aryan on a general
   image-description tool (row 6, P&ID extraction, is Aryan's and not started —
-  that is the demo's Flow 3).
+  that is the demo's Flow 3). **RESOLVED 2026-09-19:** a general image-description
+  tool (`describe_image`, TOOLS.md row 72) is now Sahil's and built —
+  `backend/tools/vision/image_description.py`, `is_estimate=True`. It is a PROSE
+  description (subject, equipment, connections, printed text) and deliberately
+  does NOT step on row 6's structured P&ID symbol/connection *extraction* into
+  the graph layer — that stays Aryan's. Coordination point preserved in the
+  row-72 module docstring and TOOLS.md row 72.
 - Anything a vision model says about quantities is an **estimate** — render it
   with the ESTIMATE badge your MessageBubble already supports (`is_estimate`
-  from `/api/tools`), exactly as for chart reading.
+  from `/api/tools`), exactly as for chart reading. **Done:** the image pipeline
+  now calls `describe_image` alongside `detect_defects`, and `/api/tools`
+  metadata (`is_estimate=True`) makes the trace badge it ESTIMATE automatically.
 
 Acceptance: upload the corpus P&ID (`Hydrocracker_PID_Schematic.png`) → the
 reply describes the equipment and connections, and any number is badged
-ESTIMATE.
+ESTIMATE. **Status:** pipeline + tool + badge are in; full end-to-end needs the
+vision model running at the venue (the dev box cannot test live vision — models
+absent), pending Ollama vision availability.
 
 ### Task 4 (🟡): prove the monitor goes red, on camera
 

@@ -125,6 +125,7 @@ Read across: the deliverable, who builds the backend, who builds the UI.
 | Watched folders / priority queue | Aryan | Netal |
 | OCR (printed + scanned) | Aryan | Sahil |
 | OCR text-region overlay (row 7 — NOT defect detection) | **Sahil** (tool + overlay) | Sahil |
+| General image/diagram description (row 72, FR-14) | **Sahil** (tool + trace badge) | Sahil |
 | Voice transcription | Aryan | Sahil |
 | Image storage + retrieval | Aryan | Netal |
 | Page preview from the user's own file | Aryan (API) | **Netal** |

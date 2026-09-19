@@ -37,7 +37,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
 import { useIngestionStore } from '../../store/ingestionStore'
-import { sendMessageStream, uploadFilesToCorpus, analyseAttachment } from '../../lib/api'
+import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
@@ -666,6 +666,11 @@ export function ChatPane() {
     // tool event below carries genuine backend output; a failure becomes a
     // visible 'failed' event instead of a silent pretend success.
     let pipelineEvents = []
+    // FR-14: vision-model readings of uploaded images, appended to the
+    // outbound message so the reply can actually describe what the image
+    // depicts. Each is an ESTIMATE (badged in the trace via /api/tools
+    // metadata), never a measurement.
+    let visionContext = []
     if (hasAttachments) {
       setAttachments((prev) => prev.map((a) => ({ ...a, status: 'uploading', progress: 10 })))
 
@@ -733,6 +738,35 @@ export function ChatPane() {
               },
             })
           }
+          // FR-14: OCR alone never INTERPRETS an image. For pictures and
+          // diagrams (P&IDs, photos, scans) also run the vision model and
+          // surface its reading as an ESTIMATE-badged event, exactly like
+          // chart reading. The `is_estimate` badge comes from /api/tools
+          // metadata, so no custom rendering is needed here.
+          if (tool === 'detect_defects') {
+            try {
+              const vision = await callTool('describe_image', { image_path: path })
+              if (vision && vision.description) {
+                const desc = String(vision.description)
+                pipelineEvents.push({
+                  tool_name: 'describe_image',
+                  status: 'done',
+                  output: {
+                    full_text: desc.slice(0, 6000),
+                  },
+                })
+                visionContext.push(
+                  `\n\n_Vision-model description of attached image (${a.name}) — ESTIMATE, not a measurement:_\n${desc}`
+                )
+              }
+            } catch (err) {
+              pipelineEvents.push({
+                tool_name: 'describe_image',
+                status: 'failed',
+                error: String(err?.message || err).slice(0, 240),
+              })
+            }
+          }
           setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'ready', progress: 100 } : i)))
         } catch (err) {
           setAttachments((prev) => prev.map((i) => (i.id === a.id ? { ...i, status: 'error' } : i)))
@@ -746,7 +780,9 @@ export function ChatPane() {
     }
 
     const names = attachments.map((a) => a.name)
-    const userText = hasAttachments && !text ? `Analyse the attached file${names.length > 1 ? 's' : ''}: ${names.join(', ')}` : text
+    const userText =
+      (hasAttachments && !text ? `Analyse the attached file${names.length > 1 ? 's' : ''}: ${names.join(', ')}` : text) +
+      visionContext.join('')
     const attachNote =
       hasAttachments && text ? `\n\n_Attached: ${names.join(', ')}_` : ''
     addMessage('user', userText + attachNote)
