@@ -5,7 +5,12 @@ Verifies:
 2. Result is sorted with external connections first.
 3. Telemetry metrics returns cpuPercent, memoryGb, and networkRate.
 4. get_network_status() returns contract-compliant dictionary.
+5. An external socket owned by THIS application's process tree flips the
+   monitor red — the /monitor demo beat, proven offline with a mocked
+   psutil connection list (hard constraint #1 forbids the real thing).
 """
+
+import os
 
 from unittest.mock import MagicMock, patch
 from backend.audit.network_monitor import (
@@ -122,3 +127,73 @@ def test_unattributable_sockets_are_not_counted_as_ours():
     machine_conns = get_active_connections(scope="machine")
 
     assert len(app_conns) <= len(machine_conns)
+
+
+# ---- the /monitor red-state demo beat (Task 4) ---------------------------
+
+
+def _mock_own_external_socket():
+    """A socket on a public IP owned by THIS process tree.
+
+    The application-scope filter in get_active_connections_with_status
+    (``c.pid in own_pids``) keeps only sockets whose pid is us or a child
+    we spawned, so the mock must carry ``pid=os.getpid()`` or it is
+    correctly filtered out and never reaches the external count.
+    """
+    return MagicMock(
+        laddr=MagicMock(ip="127.0.0.1", port=8000),
+        raddr=MagicMock(ip="8.8.8.8", port=443),
+        status="ESTABLISHED",
+        pid=os.getpid(),
+    )
+
+
+def test_own_external_socket_flips_the_status_to_external_detected():
+    """The demo beat, proven offline.
+
+    The whole point of the /monitor page is "prove the monitor goes red,
+    on camera". Red fires on externalCount >= 1 for THIS application's
+    process tree — no other figure. The only offline way to exercise that
+    path is a mocked psutil connection list carrying our own pid: making
+    a REAL outbound call to a public IP would be exactly the egress this
+    product exists to detect (hard constraint #1). A mock is not a
+    substitute for the real socket, but there is no real socket to make;
+    this proves the classification -> count -> status path is alive.
+    """
+    with patch("psutil.net_connections", return_value=[_mock_own_external_socket()]):
+        status = get_network_status()
+
+    assert status["status"] == "external_detected"
+    assert status["externalCount"] >= 1
+    assert status["is_air_gapped"] is False
+    assert status["scope"] == "application"
+    assert status["connections"][0]["is_external"] is True
+
+
+def test_api_network_status_goes_red_end_to_end():
+    """The red state survives the whole HTTP path, not just the unit.
+
+    A tool is not built until it has been CALLED; the route is what the
+    frontend poll hits every second, so the red signal has to survive
+    /api/network/status exactly as the browser consumes it."""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    with patch("psutil.net_connections", return_value=[_mock_own_external_socket()]):
+        response = TestClient(app).get("/api/network/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "external_detected"
+    assert data["externalCount"] >= 1
+    assert data["is_air_gapped"] is False
+
+
+def test_host_wide_figure_survives_the_mock_without_driving_the_alarm():
+    """With the mocked socket, hostExternalCount reflects it too — but the
+    ALARM key (externalCount / status / is_air_gapped) stays the claim."""
+    with patch("psutil.net_connections", return_value=[_mock_own_external_socket()]):
+        status = get_network_status()
+
+    assert status["hostExternalCount"] >= 1
+    assert status["status"] == "external_detected"
