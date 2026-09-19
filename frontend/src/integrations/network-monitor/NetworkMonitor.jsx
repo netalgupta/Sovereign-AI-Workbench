@@ -172,11 +172,6 @@ export default function NetworkMonitor({
   }
 
   // ── FULL (/monitor) ──────────────────────────────────────────────────────
-  const statusPillColor = isSecure
-    ? SECURE
-    : security === 'external_detected'
-    ? DANGER
-    : UNKNOWN
   const externalConns = conns.filter((c) => c.is_external)
 
   return (

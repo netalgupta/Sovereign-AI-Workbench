@@ -146,13 +146,25 @@ assignment says so). Today we have only ever seen it green.
   drives the alarm; errored poll never shows green.
 - Remaining action: demo rehearsal (manual, not code).
 
-### Task 5 (⚪, registry-listed is acceptable): rows 46 and 47
+### Task 5 (✅ DONE): rows 46 and 47 (RBAC & Model Provenance)
 
-- Row 46 RBAC on the knowledge base — `not started`.
-- Row 47 Model provenance tracking — `not started`.
+**Status: COMPLETE.** 15 backend tests prove both deliverables end-to-end:
 
-Both are ⚪/🟡 and may stay registry-listed for the demo. If you start them,
-say so in TOOLS.md first so nobody duplicates work.
+- **Row 46 RBAC on the knowledge base (built):**
+  * `backend/auth/rbac.py` implements the 4 role tiers (Plant Engineer, HSE Specialist, Superintendent, System Administrator) and maps the 6 MRPL corpus folder categories (`01_SOPs_and_Procedures` through `06_Diagrams_and_Scans`).
+  * Backend endpoints enforce access:
+    - `/api/rbac/tiers` returns the authoritative manifest for frontend UI consumption.
+    - `/api/corpus?role=...` filters directories, tree nodes, and sources by role (tested: HSE Specialist cannot see `04_SAP_Mock_Exports` or `05_Correspondence`).
+    - `/api/search` filters retrieved passages by role and returns explicit grounded refusal when all matches belong to unauthorized categories.
+  * `SettingsPage.jsx` dynamically fetches `/api/rbac/tiers` with resilient fallback to static matrix.
+  * 10 tests in `backend/tests/test_rbac.py` passing.
+
+- **Row 47 Model provenance tracking (built):**
+  * `backend/models/provenance.py` tracks complete provenance records (upstream repo, author organization, license, architecture, parameter count, quantization, air-gap attestation, SHA256 integrity) for all 7 registry models plus 3 auxiliary engines (BGE embeddings, faster-whisper, PaddleOCR).
+  * `/api/models` attaches provenance to every listed model artifact.
+  * Dedicated `/api/models/provenance` endpoint returns the sovereign audit ledger.
+  * `SettingsPage.jsx` renders provenance metadata (organization, license, air-gapped sovereign badge).
+  * 5 tests in `backend/tests/test_model_provenance.py` passing.
 
 ---
 

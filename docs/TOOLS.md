@@ -124,8 +124,8 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 |---|---|---|---|---|---|
 | 44 | Live network monitor panel | Aditya | built | 🔴 | FR-1, FR-15 — single most important judge-facing proof |
 | 45 | Full audit log | Aditya | built | 🔴 | NFR-7 |
-| 46 | RBAC on knowledge base | Sahil | not started | 🟡 | Basic tiers sufficient for demo |
-| 47 | Model provenance tracking | Sahil | not started | ⚪ | Registry-listed |
+| 46 | RBAC on knowledge base | Sahil | built | 🟡 | 4 role tiers enforced in backend (/api/rbac/tiers, /api/search?role=..., /api/corpus?role=...) across 6 corpus categories + SettingsPage matrix |
+| 47 | Model provenance tracking | Sahil | built | ⚪ | Sovereign provenance tracking in backend/models/provenance.py, /api/models, /api/models/provenance + SettingsPage registry ledger |
 | 48 | Encrypted-at-rest storage | **Aditya** | not started | 🔴 | NFR-3. Owner corrected from Sahil: `docs/OWNERSHIP.md` line 119 assigns "Encryption at rest" to Aditya and is the tie-breaker per CLAUDE.md, and `Aditya.md`'s own scope lists it. Covers the persisted stores — `backend/memory/*.db`, the FAISS index and its SQLite sidecar, `backend/audit/*.jsonl`, and `outputs/`. AES-256 or equivalent per REQUIREMENTS.md NFR-3. |
 | 49 | SAP read-only connector | Aditya | not started | 🔴 | REQUIREMENTS.md §5 — highest-leverage MRPL-specific USP; MRPL has run SAP live since Oct 2010 across Finance, Materials, Maintenance, Projects, Marketing, Production, QA |
 | 50 | Portable/air-gapped packaging | Aditya | not started | 🔴 | NFR-2 |
