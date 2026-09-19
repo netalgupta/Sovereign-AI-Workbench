@@ -127,16 +127,24 @@ ESTIMATE. **Status:** pipeline + tool + badge are in; full end-to-end needs the
 vision model running at the venue (the dev box cannot test live vision — models
 absent), pending Ollama vision availability.
 
-### Task 4 (🟡): prove the monitor goes red, on camera
+### Task 4 (✅ DONE): prove the monitor goes red, on camera
 
 The judges will scrutinise this panel more than anything else (your
 assignment says so). Today we have only ever seen it green.
 
-- Write a test that makes the backend open one outbound connection (to a
-  local non-loopback address you control, or a mocked `psutil` connection
-  list) and asserts `/api/network/status` reports `externalCount >= 1` and
-  the component renders the ALERT state.
-- Rehearse the demo beat: monitor visible from boot, zero throughout.
+**Status: COMPLETE.** 10 backend tests + 6 frontend tests prove the red path:
+
+- `test_own_external_socket_flips_the_status_to_external_detected` — mocked
+  psutil socket with `pid=os.getpid()` on 8.8.8.8:443 → `status:
+  "external_detected"`, `externalCount >= 1`, `is_air_gapped: False`.
+- `test_api_network_status_goes_red_end_to_end` — the red state survives
+  the full HTTP path via `TestClient(app).get("/api/network/status")`.
+- `test_host_wide_figure_survives_the_mock_without_driving_the_alarm` —
+  `hostExternalCount >= 1` alongside the alarm, but the alarm key is app-only.
+- Frontend `security-state.test.js` (6 tests): `externalCount >= 1` →
+  `security: "external_detected"`, `dotColor: DANGER`; host-wide alone never
+  drives the alarm; errored poll never shows green.
+- Remaining action: demo rehearsal (manual, not code).
 
 ### Task 5 (⚪, registry-listed is acceptable): rows 46 and 47
 
