@@ -126,6 +126,7 @@ CHAT_TOOLS = (
     "extract_printed_text",
     "draft_docx",
     "draft_xlsx",
+    "generate_pdf",
 )
 
 # ORDERED AND EXPLICIT, because a 7B model choosing among 19 tools picks
@@ -171,7 +172,11 @@ _SYSTEM_PROMPT = (
     "- If asked to draft, create, write, or generate a Word document, text report, memo, "
     "or .docx file, or if the request specifies a .docx filename, call draft_docx with title, "
     "sections (including source citations), and output_path (e.g. \"storage/outputs/filename.docx\").\n"
+    "- If asked to draft, create, write, generate, or export a PDF document, report, or .pdf file, "
+    "call generate_pdf with title, sections (including source citations), and output_path "
+    "(e.g. \"storage/outputs/filename.pdf\").\n"
     "- An explicit filename ending in .xlsx is a HARD SIGNAL to call draft_xlsx.\n"
+    "- An explicit filename ending in .pdf is a HARD SIGNAL to call generate_pdf.\n"
     "- INSUFFICIENT OR MISSING SOURCE DATA IS NOT A REASON TO SKIP CALLING THE TOOL OR REFUSE THE REQUEST. "
     "You MUST ALWAYS call draft_xlsx to generate the requested file structure. "
     "For any requested values or cells that cannot be found in the sources, leave the cell value empty "
@@ -228,7 +233,7 @@ def _tools_for_request(request: str) -> list[dict]:
     Drafting requests (spreadsheet / Word) get exactly the two tools they
     can use; everything else gets the full curated chat set.
     """
-    from backend.orchestrator.action_resolver import is_spreadsheet_request
+    from backend.orchestrator.action_resolver import is_spreadsheet_request, is_pdf_request
     from backend.tools import catalog  # noqa: F401  (registers everything)
     from backend.tools.registry import get_tool_schemas
 
@@ -239,6 +244,8 @@ def _tools_for_request(request: str) -> list[dict]:
 
     if is_spreadsheet_request(request):
         return offer("search_documents", "draft_xlsx")
+    if is_pdf_request(request):
+        return offer("search_documents", "generate_pdf")
     if _DOCX_SIGNAL.search(request):
         return offer("search_documents", "draft_docx")
 

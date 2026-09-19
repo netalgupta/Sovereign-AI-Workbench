@@ -10,6 +10,7 @@ statement's own graded scenario end to end:
 from backend.orchestrator.action_resolver import (
     _title_for,
     is_spreadsheet_request,
+    is_pdf_request,
     resolve,
 )
 from backend.orchestrator.graph import classify_action_request
@@ -234,6 +235,65 @@ def test_a_word_draft_still_resolves_to_draft_docx(tmp_path, monkeypatch):
     assert action.arguments["sections"]
 
 
+def test_pdf_requests_are_detected_as_such():
+    """A PDF export or drafting request must be recognized so it resolves to generate_pdf."""
+    for request in (
+        "Draft a PDF report on the Hassan incident and save it",
+        "Export the inspection findings to PDF",
+        "Create a .pdf summary document",
+        "Generate a PDF report for HQ",
+    ):
+        assert is_pdf_request(request) is True, request
+    for request in (
+        "Draft an Excel comparison of batch MFI values",
+        "Write a Word memo about the CCR1 findings",
+    ):
+        assert is_pdf_request(request) is False, request
+
+
+def test_a_pdf_draft_resolves_to_generate_pdf(tmp_path, monkeypatch):
+    """An intercepted PDF request must resolve to generate_pdf with proper sections."""
+    import backend.orchestrator.action_resolver as resolver
+
+    class FakeStored:
+        text = "The inspection found a catalyst changeout was due."
+        source_document = "Inspection_Report.pdf"
+        page_number = 2
+
+    class FakeStore:
+        def all_chunk_texts(self):
+            return [(0, "inspection findings")]
+
+        def dense_search(self, embedding, top_k):
+            from backend.retrieval.grounded_retrieval import confidence_threshold
+
+            return [(0, confidence_threshold() + 0.10)]
+
+        def get_by_faiss_id(self, faiss_id):
+            return FakeStored()
+
+    monkeypatch.setattr(
+        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
+    )
+    import backend.api.state
+
+    monkeypatch.setattr(
+        backend.api.state,
+        "get_state",
+        lambda: type("S", (), {"ensure_corpus": lambda self: (FakeStore(), None)})(),
+    )
+
+    action = resolver.resolve(
+        "Draft a PDF report on the inspection findings and save it", "file write"
+    )
+
+    assert action.executable is True
+    assert action.tool_name == "generate_pdf", action.tool_name
+    assert action.arguments["output_path"].endswith(".pdf")
+    assert action.arguments["sections"]
+    assert action.preview and not any("{" in line for line in action.preview)
+
+
 # ---------------------------------------------------------------------
 # A drafted document is held to a stricter standard than a chat answer.
 # ---------------------------------------------------------------------
@@ -372,15 +432,25 @@ def test_the_streaming_approval_payload_describes_the_pending_action():
     assert action["reason"]
 
 
-def test_both_paths_describe_the_same_request_the_same_way():
+def test_both_paths_describe_the_same_request_the_same_way(monkeypatch):
     """Two implementations of one decision is how they drift. The
     non-streaming path resolves through action_resolver; so must this
     one."""
     import os
 
     os.environ["WORKBENCH_TRACE"] = "off"
+    from backend.orchestrator import action_resolver as resolver
     from backend.orchestrator.agent_loop import run_turn
     from backend.orchestrator.graph import run_agent_turn
+
+    class FakeStored:
+        text = "CCR1 inspection findings show catalyst regeneration is nominal."
+        source_document = "CCR1_Inspection.pdf"
+        page_number = 1
+
+    monkeypatch.setattr(
+        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
+    )
 
     request = "Draft an approval note on the CCR1 inspection findings and save it"
 
