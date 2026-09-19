@@ -75,6 +75,10 @@ def schedule(chunks: list, reason: str = "source added") -> bool:
     a failure: the checkpoint means the next run picks up whatever this
     one would have done.
     """
+    import os
+    if os.environ.get("WORKBENCH_AUTO_EXTRACT_GRAPH", "1").lower() in ("0", "false", "no", "off"):
+        logger.info("Automatic background graph extraction is disabled by WORKBENCH_AUTO_EXTRACT_GRAPH.")
+        return False
     if not chunks:
         return False
     if _running.is_set():

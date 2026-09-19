@@ -61,6 +61,12 @@ METRICS_PATHS = {
 }
 
 
+def _path_key(path) -> str:
+    import os
+
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
 def _empty_index(dim: int):
     """A fresh empty FAISS index of the same type the store uses.
 
@@ -84,15 +90,33 @@ class PipelineState:
     def __init__(self, corpus_dir: str = DEFAULT_CORPUS_DIR):
         self.corpus_dir = corpus_dir
         self._lock = Lock()
+        # ONE INGEST AT A TIME, across every entry point. Two overlapping
+        # ingests of the same folder each saw the file as "not indexed
+        # yet" and both added it: MEASURED 6,797 chunks for 3,523
+        # distinct passages after adding one 195-file folder, so every
+        # search result arrived twice. Held for a whole ingest, never by
+        # a read, so it cannot stall a page load.
+        self._ingest_lock = Lock()
+        # filename -> the paths indexed under it. The store records only
+        # the bare filename, and skipping on that alone skipped a
+        # DIFFERENT file that happened to share a name with an indexed one.
+        # Persisted with the corpus cache.
+        self._indexed_paths: dict[str, set[str]] = {}
         self._store = None
         self._chunks = None
         self._snapshot = None
+        self._cached_chunks = None
+        # The background job indexing files the cache has not seen, if
+        # one is running. Exposed so the UI can show it rather than a
+        # corpus that silently lacks a folder.
+        self.catch_up_job_id: str | None = None
 
     def reset(self):
         with self._lock:
             self._store = None
             self._chunks = None
             self._snapshot = None
+            self._cached_chunks = None
 
     # ---- stores that are cheap to open -------------------------------
 
@@ -170,6 +194,7 @@ class PipelineState:
                 # re-ingested for 68 seconds. Under `uvicorn --reload`
                 # that is every file save.
                 "scanned_files": sorted(self._configured_file_names()),
+                "indexed_paths": {n: sorted(p) for n, p in self._indexed_paths.items()},
                 "chunks": [
                     {
                         "text": c.text,
@@ -178,6 +203,9 @@ class PipelineState:
                         "page_number": c.metadata.page_number,
                         "chunk_index": c.metadata.chunk_index,
                         "ingestion_date": c.metadata.ingestion_date,
+                        # Preserve image references so a cached chunk can
+                        # still hand back the pictures from its page.
+                        "image_ids": list(c.metadata.image_ids or []),
                     }
                     for c in chunks
                 ],
@@ -259,14 +287,28 @@ class PipelineState:
             return False
 
     def _configured_file_names(self) -> set[str]:
-        """Every filename under every enabled source folder."""
+        """Every filename under every enabled source folder, plus any
+        individual file sources.
+
+        configured_sources.json may contain both directory entries and
+        single-file entries. Previously this method called rglob("*") on
+        every entry unconditionally — when the entry is a file (not a
+        directory) rglob returns nothing, the file name never appeared in
+        scanned_files, and the staleness check returned True on every boot,
+        triggering a full re-ingest every server start.
+        """
         names: set[str] = set()
-        for folder in self._configured_folders() or []:
-            if not folder.exists():
+        for entry in self._configured_folders() or []:
+            if not entry.exists():
                 continue
-            for path in folder.rglob("*"):
-                if path.is_file() and not path.name.startswith("."):
-                    names.add(path.name)
+            if entry.is_file():
+                # Single-file source entry — include it directly
+                if not entry.name.startswith("."):
+                    names.add(entry.name)
+            elif entry.is_dir():
+                for path in entry.rglob("*"):
+                    if path.is_file() and not path.name.startswith("."):
+                        names.add(path.name)
         return names
 
     def corpus_snapshot_is_current(self) -> bool:
@@ -381,11 +423,23 @@ class PipelineState:
                 # corpus of scans on every boot is minutes of silence.
                 # It is now CHECKED against what is actually configured
                 # first, and discarded the moment those disagree.
+                #
+                # A STALE CACHE IS STILL LOADED, then caught up in the
+                # background. Its chunks are real and still searchable;
+                # only the files it has never seen are missing, and those
+                # are indexed by a tracked job (see _schedule_catch_up)
+                # rather than inside this lock. Ingesting them HERE held
+                # the lock for the whole ingest, so every page that
+                # touched the corpus hung behind it -- and the files were
+                # then ingested a second time by the request that added
+                # them.
+                #
+                # The committed inspector snapshot is only trusted while
+                # it matches; it describes one machine's 13 documents.
                 hydrate_from = None
-                if CORPUS_CACHE_PATH.exists() and self._cache_matches_sources(
-                    CORPUS_CACHE_PATH
-                ):
+                if CORPUS_CACHE_PATH.exists():
                     hydrate_from = CORPUS_CACHE_PATH
+                    self._cache_matches_sources(CORPUS_CACHE_PATH)
                 elif SNAPSHOT_PATH.exists() and self._snapshot_matches_sources():
                     hydrate_from = SNAPSHOT_PATH
 
@@ -393,6 +447,9 @@ class PipelineState:
                     try:
                         data = json.loads(hydrate_from.read_text(encoding="utf-8"))
                         raw_chunks = data.get("chunks", [])
+                        self._indexed_paths = {
+                            n: set(p) for n, p in (data.get("indexed_paths") or {}).items()
+                        }
                         for rc in raw_chunks:
                             meta = ChunkMetadata(
                                 source_document=rc.get("source_document", "unknown"),
@@ -400,16 +457,11 @@ class PipelineState:
                                 page_number=rc.get("page_number", 1),
                                 chunk_index=rc.get("chunk_index", 0),
                                 ingestion_date=rc.get("ingestion_date", "2026-09-12"),
-                                image_ids=[],
+                                # Restore image_ids persisted by _write_corpus_cache.
+                                image_ids=list(rc.get("image_ids") or []),
                             )
                             self._chunks.append(IngestedChunk(text=rc.get("text", ""), metadata=meta))
                         if self._chunks:
-                            # THE SAVED INDEX FIRST. Re-embedding 231
-                            # unchanged chunks cost 24.8 seconds on every
-                            # boot -- GPU work to rebuild something that
-                            # had not changed. add_chunks() still runs so
-                            # the SQLite side is populated; the vectors
-                            # are then swapped for the cached ones.
                             vecs = None
                             if self._load_index(len(self._chunks)):
                                 import numpy as np
@@ -425,8 +477,16 @@ class PipelineState:
                                 vecs = embed_texts([c.text for c in self._chunks])
                                 self._store.add_chunks(self._chunks, vecs)
                                 self._write_index()
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception(
+                            "Could not hydrate the corpus from %s; files will be "
+                            "re-indexed in the background.", hydrate_from,
+                        )
+                    missing = list(getattr(self, "_last_staleness", None) or [])
+                    if missing:
+                        # Scheduled after the lock is released: see the
+                        # thread body, which re-enters ensure_corpus.
+                        self._pending_catch_up = missing
                 else:
                     # EVERY CONFIGURED FOLDER, not just the built-in
                     # corpus directory. Ingesting only self.corpus_dir
@@ -479,7 +539,63 @@ class PipelineState:
                         # problem for another: a stale corpus becomes an
                         # 88-second startup, every time, forever.
                         self._write_corpus_cache(collected)
+        pending = getattr(self, "_pending_catch_up", None)
+        if pending:
+            self._pending_catch_up = None
+            self._schedule_catch_up(pending)
         return self._store, self._chunks
+
+    def _schedule_catch_up(self, missing_names: list[str]) -> str | None:
+        """Index configured files the cache has never seen, in the
+        background, as a tracked job.
+
+        Tracked, not silent: the UI polls /api/ingestion like any other
+        add, so a folder that is still being indexed says so instead of
+        looking like a corpus that is missing it.
+        """
+        import threading
+
+        from backend.ingestion.ingestion_progress import get_tracker
+
+        # Files an ingest in flight has already claimed are its job, not
+        # this one's; taking them would show the user's add stuck at 0
+        # while a second job does its work.
+        wanted = set(missing_names) - set(getattr(self, "_ingesting_names", None) or ())
+        files: list[Path] = []
+        seen: set[str] = set()
+        for entry in self._configured_folders() or []:
+            if not entry.exists():
+                continue
+            candidates = [entry] if entry.is_file() else entry.rglob("*")
+            for cand in candidates:
+                if (
+                    cand.is_file()
+                    and cand.name in wanted
+                    and cand.name not in seen
+                    and not cand.name.startswith(".")
+                ):
+                    seen.add(cand.name)
+                    files.append(cand)
+        if not files:
+            return None
+
+        tracker = get_tracker()
+        job = tracker.create("configured sources (catch-up)", files)
+        self.catch_up_job_id = job.job_id
+        logging.getLogger(__name__).info(
+            "Indexing %d file(s) the corpus cache has not seen, in the background "
+            "(job %s).", len(files), job.job_id,
+        )
+
+        def _run():
+            try:
+                self.ingest_files(files, job_id=job.job_id)
+                tracker.finish(job.job_id)
+            except Exception as exc:  # noqa: BLE001 - recorded on the job
+                tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_run, name=f"corpus-catch-up-{job.job_id}", daemon=True).start()
+        return job.job_id
 
     def ingest_path(
         self, target_path: str | Path, job_id: str | None = None
@@ -495,6 +611,64 @@ class PipelineState:
         when everything is finished, which on a folder of scans is
         minutes of silence.
         """
+        p = Path(target_path).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
+
+        files: list[Path] = []
+        if p.is_file():
+            files = [p]
+        elif p.is_dir():
+            ignored_dirs = {
+                ".git", ".venv", "venv", "node_modules", "__pycache__",
+                ".idea", ".vscode", "dist", "build", ".next", ".cache"
+            }
+
+            def _is_safe_doc(candidate: Path) -> bool:
+                if not candidate.is_file() or candidate.name.startswith("."):
+                    return False
+                try:
+                    rel_parts = candidate.relative_to(p).parts[:-1]
+                    for part in rel_parts:
+                        if part.startswith(".") or part.lower() in ignored_dirs:
+                            return False
+                except Exception:
+                    pass
+                return True
+
+            files = sorted(f for f in p.rglob("*") if _is_safe_doc(f))
+
+        return self.ingest_files(files, job_id=job_id, label=Path(target_path).name)
+
+    @staticmethod
+    def _already_indexed(f: Path, indexed_names: set, indexed_paths: dict) -> bool:
+        """Is THIS file already in the index?
+
+        By path where the path is known. A name indexed only from an older
+        cache that did not record paths is treated as this file: skipping
+        a same-named file is recoverable, and a duplicated corpus is the
+        bug this exists to prevent.
+        """
+        if f.name not in indexed_names:
+            return False
+        known = indexed_paths.get(f.name)
+        return not known or _path_key(f) in known
+
+    def ingest_files(
+        self, files: list[Path], job_id: str | None = None, label: str = "files"
+    ) -> tuple[int, list[dict]]:
+        """Index these files. THE ONE PLACE INGESTION HAPPENS.
+
+        Every route that adds sources, and the background catch-up,
+        comes through here, so two rules hold for all of them:
+
+          * one ingest at a time (self._ingest_lock), and
+          * a file already in the index is SKIPPED, not appended again.
+
+        Identity is the bare filename because that is what the store
+        records as source_document; the store cannot tell two same-named
+        files apart either, so a stricter check here would not help.
+        """
         from backend.ingestion.ingestion_progress import DocumentStage, get_tracker
 
         tracker = get_tracker() if job_id else None
@@ -502,9 +676,11 @@ class PipelineState:
         def _stage(file_path, stage, **kw):
             if tracker:
                 tracker.set_stage(job_id, str(file_path), stage, **kw)
+
         from backend.ingestion.document_ingestion import ingest_document
         from backend.ingestion.document_types import detect_document_type
         from backend.ingestion.embeddings import embed_texts
+
         def _ocr_fn(img_path: str) -> str:
             try:
                 from backend.tools.vision.ocr_printed import extract_printed_text
@@ -515,107 +691,138 @@ class PipelineState:
 
         newly_ingested: list = []
 
-        p = Path(target_path).resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Path does not exist on disk: {target_path}")
-
-        files: list[Path] = []
-        if p.is_file():
-            files = [p]
-        elif p.is_dir():
-            files = sorted(
-                f for f in p.rglob("*")
-                if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
-            )
-
-        store, existing_chunks = self.ensure_corpus()
-        total_chunks = 0
-        details = []
-
-        for f in files:
-            _stage(f, DocumentStage.EXTRACTING)
+        with self._ingest_lock:
+            # Claimed BEFORE ensure_corpus, so a stale-cache catch-up it
+            # schedules leaves these files to this call instead of racing
+            # it for them.
+            self._ingesting_names = {f.name for f in files}
             try:
-                type_info = detect_document_type(str(f))
-                chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
-            except Exception as exc:
-                # Reported as a terminal FAILED state with the reason, not
-                # skipped quietly. A folder ingest that silently drops
-                # three unreadable PDFs and reports success is what makes
-                # people distrust the corpus later, when an answer is
-                # missing and nobody knows why.
-                _stage(f, DocumentStage.FAILED, detail=f"{type(exc).__name__}: {exc}")
-                details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
-                continue
-            _stage(f, DocumentStage.CHUNKING, chunks=len(chunks))
-
-            if not chunks:
-                from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
-                import datetime
-                fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
-                chunks = [
-                    IngestedChunk(
-                        text=fallback_text,
-                        metadata=ChunkMetadata(
-                            source_document=f.name,
-                            document_type=getattr(type_info, "detected_type", "txt"),
-                            page_number=1,
-                            chunk_index=0,
-                            ingestion_date=datetime.date.today().isoformat(),
-                            image_ids=[],
-                        ),
-                    )
-                ]
-
-            if chunks:
-                _stage(f, DocumentStage.EMBEDDING, chunks=len(chunks))
-                vectors = embed_texts([c.text for c in chunks])
-                _stage(f, DocumentStage.INDEXING)
-                store.add_chunks(chunks, vectors)
+                store, existing_chunks = self.ensure_corpus()
                 with self._lock:
-                    self._chunks.extend(chunks)
-                    # Invalidate cached static snapshot so live chunks are served
-                    self._snapshot = None
-                try:
-                    self.registry.register(str(f), type_info.detected_type)
-                except Exception:
-                    pass
-                total_chunks += len(chunks)
-                details.append({
-                    "filename": f.name,
-                    "path": str(f),
-                    "chunks": len(chunks),
-                    "document_type": type_info.detected_type,
-                })
-                _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
-                newly_ingested.extend(chunks)
+                    indexed_names = {c.metadata.source_document for c in (self._chunks or [])}
+                indexed_paths = self._indexed_paths
 
-        # THE GRAPH FOLLOWS THE CORPUS NOW.
-        #
-        # Adding a source used to update the chunk index and leave the
-        # graph exactly as it was, because entity extraction only ever
-        # ran by hand. With 63 documents loaded the graph still described
-        # the 13 somebody extracted weeks earlier -- real data, correctly
-        # stored, silently covering a fraction of what every other tab
-        # showed.
-        #
-        # Scheduled rather than awaited: extraction is one model call per
-        # chunk (10-25s each), so doing it inline would hold this request
-        # open for the better part of an hour. Ingestion returns as soon
-        # as the documents are SEARCHABLE, which is what the user is
-        # waiting for, and the graph catches up behind it.
-        #
-        # Cannot fail this call: see backend/graph/auto_extract.py.
-        if newly_ingested:
-            try:
-                from backend.graph import auto_extract
+                total_chunks = 0
+                details = []
 
-                auto_extract.schedule(
-                    newly_ingested, reason=f"ingest of {Path(target_path).name}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
+                for f in files:
+                    if self._already_indexed(f, indexed_names, indexed_paths):
+                        # Already searchable. Indexing it again does not refresh
+                        # it, it DUPLICATES it: the store appends, so every
+                        # passage would come back twice in every search.
+                        _stage(f, DocumentStage.SKIPPED, detail="already indexed")
+                        details.append({"filename": f.name, "path": str(f), "chunks": 0, "skipped": "already indexed"})
+                        continue
+                    _stage(f, DocumentStage.EXTRACTING)
+                    try:
+                        type_info = detect_document_type(str(f))
+                        chunks = ingest_document(str(f), ocr_fn=_ocr_fn)
+                    except Exception as exc:
+                        # Reported as a terminal FAILED state with the reason, not
+                        # skipped quietly. A folder ingest that silently drops
+                        # three unreadable PDFs and reports success is what makes
+                        # people distrust the corpus later, when an answer is
+                        # missing and nobody knows why.
+                        _stage(f, DocumentStage.FAILED, detail=f"{type(exc).__name__}: {exc}")
+                        details.append({"filename": f.name, "path": str(f), "error": str(exc), "chunks": 0})
+                        continue
+                    _stage(f, DocumentStage.CHUNKING, chunks=len(chunks))
 
-        return total_chunks, details
+                    if not chunks:
+                        from backend.ingestion.document_ingestion import IngestedChunk, ChunkMetadata
+                        import datetime
+                        fallback_text = f"Source Document: {f.name}\nPath: {str(f)}"
+                        chunks = [
+                            IngestedChunk(
+                                text=fallback_text,
+                                metadata=ChunkMetadata(
+                                    source_document=f.name,
+                                    document_type=getattr(type_info, "detected_type", "txt"),
+                                    page_number=1,
+                                    chunk_index=0,
+                                    ingestion_date=datetime.date.today().isoformat(),
+                                    image_ids=[],
+                                ),
+                            )
+                        ]
+
+                    if chunks:
+                        _stage(f, DocumentStage.EMBEDDING, chunks=len(chunks))
+                        vectors = embed_texts([c.text for c in chunks])
+                        _stage(f, DocumentStage.INDEXING)
+                        store.add_chunks(chunks, vectors)
+                        with self._lock:
+                            self._chunks.extend(chunks)
+                            # Invalidate cached static snapshot so live chunks are served
+                            self._snapshot = None
+                            self._cached_chunks = None
+                            indexed_names.add(f.name)
+                            indexed_paths.setdefault(f.name, set()).add(_path_key(f))
+                        # register() only takes file_path — the second arg (document_type)
+                        # was causing a silent TypeError on every successful ingest, meaning
+                        # nothing was ever recorded in the registry.
+                        try:
+                            self.registry.register(str(f))
+                        except Exception:
+                            pass
+                        total_chunks += len(chunks)
+                        details.append({
+                            "filename": f.name,
+                            "path": str(f),
+                            "chunks": len(chunks),
+                            "document_type": type_info.detected_type,
+                        })
+                        _stage(f, DocumentStage.INDEXED, chunks=len(chunks))
+                        newly_ingested.extend(chunks)
+
+                # THE GRAPH FOLLOWS THE CORPUS NOW.
+                #
+                # Adding a source used to update the chunk index and leave the
+                # graph exactly as it was, because entity extraction only ever
+                # ran by hand. With 63 documents loaded the graph still described
+                # the 13 somebody extracted weeks earlier -- real data, correctly
+                # stored, silently covering a fraction of what every other tab
+                # showed.
+                #
+                # Scheduled rather than awaited: extraction is one model call per
+                # chunk (10-25s each), so doing it inline would hold this request
+                # open for the better part of an hour. Ingestion returns as soon
+                # as the documents are SEARCHABLE, which is what the user is
+                # waiting for, and the graph catches up behind it.
+                #
+                # Cannot fail this call: see backend/graph/auto_extract.py.
+                if newly_ingested:
+                    try:
+                        from backend.graph import auto_extract
+
+                        auto_extract.schedule(newly_ingested, reason=f"ingest of {label}")
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # PERSIST the updated store so the next boot loads from cache.
+                #
+                # ingest_path() extended self._chunks and added vectors to
+                # self._store, but _write_corpus_cache() was never called here --
+                # so a server restart (uvicorn --reload on any file save) would
+                # re-check the cache, find newly added documents missing from
+                # scanned_files, declare it stale, and trigger a full re-ingest.
+                # Writing the cache immediately after each successful ingest
+                # means the next boot is always fast.
+                if newly_ingested and self._chunks:
+                    # Snapshot the chunk list UNDER the lock so a concurrent ingest
+                    # that extends self._chunks between the lock release and the disk
+                    # write does not produce a partially-modified cache file.
+                    with self._lock:
+                        chunks_snapshot = list(self._chunks)
+                    try:
+                        self._write_corpus_cache(chunks_snapshot)
+                    except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness
+                        pass
+
+                return total_chunks, details
+            finally:
+                self._ingesting_names = set()
+
 
     def delete_source(self, target_path: str) -> dict:
         """Remove a file or folder from the active corpus, VectorStore, and registry."""
@@ -626,30 +833,55 @@ class PipelineState:
         # 1. Stop watching if it's a watched directory
         self.watcher.remove_source(target_path)
 
-        # 2. Remove matching chunks from in-memory chunks list
+        # 2 + 3. Remove the chunks AND their vectors, and persist that.
+        #
+        # This filtered the in-memory list and deleted SQLite rows with
+        # LIKE '%name%', which went wrong three ways:
+        #   * on a backend that had not loaded the corpus yet it removed
+        #     nothing, so the "deleted" document came back from the disk
+        #     cache on the next start;
+        #   * FAISS kept every vector, so the index and the chunk list no
+        #     longer lined up by position -- and positions are the only
+        #     link between a vector and its text;
+        #   * LIKE '%notes.txt%' also deleted old_notes.txt's rows.
+        # The store is rebuilt from the kept chunks and their EXISTING
+        # vectors (no re-embedding), under the ingest lock so an ingest
+        # cannot interleave, and the cache is rewritten.
         removed_count = 0
-        with self._lock:
-            if self._chunks:
-                original_len = len(self._chunks)
-                self._chunks = [
-                    c for c in self._chunks
-                    if c.metadata.source_document.lower() != doc_name.lower()
-                    and c.metadata.source_document.lower() != target_path.lower()
-                    and not norm_path in str(Path(c.metadata.source_document).resolve()).lower()
-                ]
-                removed_count = original_len - len(self._chunks)
-            self._snapshot = None
+        with self._ingest_lock:
+            self.ensure_corpus()
 
-        # 3. Remove from VectorStore SQLite metadata table
-        if self._store and getattr(self._store, "_conn", None):
-            try:
-                self._store._conn.execute(
-                    "DELETE FROM chunks WHERE LOWER(source_document) = LOWER(?) OR LOWER(source_document) LIKE LOWER(?)",
-                    (doc_name, f"%{doc_name}%")
-                )
-                self._store._conn.commit()
-            except Exception:
-                pass
+            def _matches(c) -> bool:
+                name = c.metadata.source_document.lower()
+                return name == doc_name.lower() or name == target_path.lower()
+
+            with self._lock:
+                old_chunks = list(self._chunks or [])
+                keep = [i for i, c in enumerate(old_chunks) if not _matches(c)]
+                removed_count = len(old_chunks) - len(keep)
+
+            if removed_count:
+                from backend.ingestion.embeddings import embed_texts
+                from backend.retrieval.vector_store import VectorStore
+
+                kept_chunks = [old_chunks[i] for i in keep]
+                vectors = self._store.vectors(len(old_chunks)) if len(self._store) == len(old_chunks) else None
+                new_store = VectorStore(dim=1024)
+                if kept_chunks:
+                    kept_vecs = (
+                        vectors[keep] if vectors is not None
+                        else embed_texts([c.text for c in kept_chunks])
+                    )
+                    new_store.add_chunks(kept_chunks, kept_vecs)
+                with self._lock:
+                    self._store = new_store
+                    self._chunks = kept_chunks
+                self._indexed_paths.pop(doc_name, None)
+                self._write_corpus_cache(kept_chunks)
+
+            with self._lock:
+                self._snapshot = None
+                self._cached_chunks = None
 
         # 4. Only delete from disk if the file was physically an app-managed upload in 07_User_Uploads.
         # User original documents elsewhere on disk must NEVER be deleted.
@@ -707,15 +939,37 @@ class PipelineState:
         Neo4j and the graph appears within twenty seconds, without a
         restart.
         """
+        import threading
         import time as _time
+
+        from backend.evaluation.export_inspection_data import export_graph
 
         cached = getattr(self, "_graph_failure", None)
         if cached is not None:
             result, failed_at = cached
             if (_time.time() - failed_at) < self._GRAPH_FAILURE_TTL_SECONDS:
                 return result
+            # EXPIRED: answer with the known failure NOW and re-probe
+            # behind it. Re-probing inline still cost one poller 4.1s
+            # every twenty seconds -- MEASURED as a /api/health stall
+            # recurring on exactly that period while Neo4j was down.
+            # Recovery is noticed on the next call after the probe lands.
+            if not getattr(self, "_graph_probe_running", False):
+                self._graph_probe_running = True
 
-        from backend.evaluation.export_inspection_data import export_graph
+                def _probe():
+                    try:
+                        fresh = export_graph(uri, user, password)
+                        self._graph_failure = (
+                            None if fresh.get("available") else (fresh, _time.time())
+                        )
+                    except Exception:  # noqa: BLE001 - keep the old failure
+                        self._graph_failure = (result, _time.time())
+                    finally:
+                        self._graph_probe_running = False
+
+                threading.Thread(target=_probe, name="graph-probe", daemon=True).start()
+            return result
 
         result = export_graph(uri, user, password)
 

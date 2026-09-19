@@ -97,6 +97,12 @@ class IngestionJob(BaseModel):
              and d.stage is not DocumentStage.QUEUED),
             None,
         )
+        # Never leave current_document null while a job is running with unfinished docs
+        if current is None and self.state == JobState.RUNNING:
+            current = next(
+                (d for d in self.documents if d.stage not in TERMINAL_STAGES),
+                None,
+            )
         elapsed = (self.finished_at or time.time()) - self.started_at
 
         # An ETA from the documents that have ACTUALLY FINISHED, not from
@@ -159,9 +165,10 @@ class ProgressTracker:
         self._order: list[str] = []
         self._lock = threading.Lock()
 
-    def create(self, root_path: str, files: list[Path]) -> IngestionJob:
+    def create(self, root_path: str, files: list[Path], job_id: str | None = None) -> IngestionJob:
+        jid = job_id or f"job-{uuid.uuid4().hex[:10]}"
         job = IngestionJob(
-            job_id=f"job-{uuid.uuid4().hex[:10]}",
+            job_id=jid,
             root_path=str(root_path),
             documents=[
                 DocumentProgress(
@@ -173,6 +180,9 @@ class ProgressTracker:
                 for f in files
             ],
         )
+        if job.documents:
+            job.documents[0].stage = DocumentStage.EXTRACTING
+            job.documents[0].started_at = time.time()
         with self._lock:
             self._jobs[job.job_id] = job
             self._order.append(job.job_id)
@@ -208,8 +218,19 @@ class ProgressTracker:
             job = self._jobs.get(job_id)
             if job is None:
                 return
+            # Exact match first, then the same path spelled differently
+            # (case, separators, relative vs absolute) -- string
+            # normalisation, NOT Path.resolve(). Resolving every document
+            # on every stage change is a filesystem call per document per
+            # transition, O(n²) for a folder, all while holding the lock
+            # the 450ms progress poll needs.
+            #
+            # Never by bare filename: two README.md files in different
+            # folders are different documents, and matching on the name
+            # marked the wrong one done.
+            target_norm = _norm(path)
             for doc in job.documents:
-                if doc.path != path:
+                if doc.path != path and _norm(doc.path) != target_norm:
                     continue
                 if doc.started_at is None and stage is not DocumentStage.QUEUED:
                     doc.started_at = time.time()
@@ -240,6 +261,12 @@ class ProgressTracker:
                     doc.stage = DocumentStage.FAILED
                     doc.detail = doc.detail or "Ingestion stopped before this document finished."
                     doc.finished_at = time.time()
+
+
+def _norm(path: str | None) -> str:
+    import os
+
+    return os.path.normcase(os.path.abspath(path)) if path else ""
 
 
 _tracker: ProgressTracker | None = None

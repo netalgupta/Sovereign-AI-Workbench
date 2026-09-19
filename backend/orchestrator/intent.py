@@ -212,9 +212,9 @@ def capability_reply() -> str:
     ]
 
     try:
-        from backend.api.routes import get_corpus
+        from backend.api.routes import _get_corpus_data
 
-        corpus = get_corpus()
+        corpus = _get_corpus_data()
         sources = corpus.get("sources") or []
         if sources:
             lines.append(

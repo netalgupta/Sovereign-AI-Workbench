@@ -136,15 +136,17 @@ def register_all() -> None:
 
         tool(
             name="detect_defects",
+            # THE DESCRIPTION IS WHAT THE MODEL BELIEVES. It said "Detect
+            # defect/anomaly regions", so asked to find defects in a photo the
+            # agent would report pump nameplates as defects. It does not
+            # detect defects: it returns where the printed text is.
             description=(
-                "NOT a defect/anomaly detector — defect detection is not "
-                "available. Returns overlay-ready bounding boxes for where "
-                "PRINTED TEXT sits on an image: each OCR text line becomes a "
-                "box labeled by the recognized text, confidence is OCR "
-                "transcription confidence, severity is always \"low\", and "
-                "every region carries kind \"text_region\". Use only to "
-                "annotate where text is on a photo or scan. Never report these "
-                "boxes as defect or anomaly findings. Fully offline."
+                "Return the regions of PRINTED TEXT on an inspection image, as "
+                "overlay-ready boxes with the text and its OCR confidence. THIS IS "
+                "NOT A DEFECT DETECTOR: no model here recognises corrosion, cracks or "
+                "leaks yet. Never describe these regions as defects or anomalies; if "
+                "asked to find defects, say that defect detection is not available. "
+                "Fully offline."
             ),
             category="vision",
             priority="🟡",
@@ -263,6 +265,25 @@ def register_all() -> None:
         priority="🔴",
         tools_md_row=34,
     )(run_in_sandbox)
+
+    # ---- presentation generation (PPTX_AGENT_SPEC.md, TOOLS.md row 40) ----
+    from backend.orchestrator.slide_agent import generate_deck
+
+    tool(
+        name="generate_deck",
+        description=(
+            "Render an approved deck spec (from prepare_deck) to a PowerPoint (.pptx) "
+            "file, designed by the deck design system. WRITES A FILE, so it requires human "
+            "approval before it runs, like draft_docx."
+        ),
+        category="documents",
+        priority="🔴",
+        # Hard constraint #4. Decks were exempted as "safe deliverables";
+        # a presentation that leaves the building carrying refinery figures
+        # is exactly the kind of file the gate exists for.
+        requires_approval=True,
+        tools_md_row=40,
+    )(generate_deck)
 
 
 register_all()

@@ -11,6 +11,8 @@ build/
 .env
 *.log
 
+.DS_Store
+
 # Model weights and portable-drive artifacts never belong in git — these
 # are fetched once via backend/ingestion/fetch_models.py (see model_cache.py)
 # and shipped on the portable drive per DEPENDENCIES.md §10, never checked in.
@@ -24,6 +26,7 @@ build/
 /models/ocr/
 /models/vision/
 /models/audio/
+/models/image/
 *.zip
 
 # Automated UI test & screenshot capture profiles
@@ -86,3 +89,11 @@ frontend/public/pipeline/*.json
 # corpus export is what made one person's 13 documents hydrate every
 # teammate's backend and hide folders they had just added.
 .workbench/
+
+# Synthetic MRPL archive corpus (backend/evaluation/generate_archive.py).
+# Regeneratable in ~1hr from the checked-in generator; would otherwise
+# bloat the repo with tens of MB of synthetic spreadsheets and images.
+MRPL_Archive_Corpus/
+MRPL_RAG_Test_Corpus/07_User_Uploads/*
+!MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
+/*.png

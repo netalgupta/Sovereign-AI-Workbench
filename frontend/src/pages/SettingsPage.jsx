@@ -1062,10 +1062,11 @@ export function SettingsPage() {
                 {systemInfo.storage.breakdown.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center gap-2 p-2 rounded-lg border text-left"
+                    className="flex items-center gap-2 p-2.5 rounded-lg border text-left card-hover-lift"
                     style={{
                       background: 'var(--color-surface)',
                       borderColor: 'var(--color-border)',
+                      boxShadow: 'var(--shadow-xs)',
                     }}
                   >
                     <div className="w-2 h-2 rounded-xs flex-shrink-0" style={{ background: item.color }} />
@@ -1084,10 +1085,11 @@ export function SettingsPage() {
 
             {/* Hardware Isolation Checklist */}
             <div
-              className="p-3.5 rounded-xl border flex flex-col gap-2"
+              className="p-4 rounded-xl border flex flex-col gap-2.5"
               style={{
                 background: 'var(--color-surface)',
                 borderColor: 'var(--color-border)',
+                boxShadow: 'var(--shadow-xs)',
               }}
             >
               <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-text-faint)' }}>

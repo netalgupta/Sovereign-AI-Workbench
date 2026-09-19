@@ -52,6 +52,15 @@ def _ocr_device_status() -> str:
         return "unavailable"
 
 
+def _embedding_device_status() -> str:
+    try:
+        from backend.ingestion.embeddings import active_device
+
+        return active_device()
+    except Exception as exc:  # noqa: BLE001
+        return f"unknown ({type(exc).__name__})"
+
+
 def _embedding_backend_status() -> tuple[str, str | None]:
     """(backend name, degradation reason or None) without forcing a load."""
     try:
@@ -92,6 +101,12 @@ def health() -> dict:
         # guessing. Measured difference on this box: 21.08s vs 0.61s.
         "ocr_device": _ocr_device_status(),
         "embedding_backend": _embedding_status[0],
+        # WHERE embeddings run. "The CPU is stuck at 100%" during an
+        # ingest is expected on a CPU-only torch build and a bug on a
+        # CUDA one; without this field the two look identical.
+        "embedding_device": _embedding_device_status(),
+        # A background job indexing files the corpus cache had not seen.
+        "catch_up_job_id": state.catch_up_job_id,
         "embeddings_degraded": _embedding_status[1] is not None,
         "embeddings_degraded_reason": _embedding_status[1],
         "graph_available": graph.get("available", False),
@@ -148,6 +163,12 @@ def get_graph() -> dict:
 def get_chunks(live: bool = Query(False, description="Force a live ingestion")) -> dict:
     """Every chunk with metadata, plus the chunk-to-chunk similarity matrix."""
     state = get_state()
+
+    # 1. Fast in-memory cache hit
+    if not live and getattr(state, "_cached_chunks", None) is not None:
+        return state._cached_chunks
+
+    # 2. Instant snapshot fallback
     snapshot = state.snapshot()
     # The snapshot is preferred over a live read so a request cannot
     # trigger a multi-minute ingest -- but ONLY while it still describes
@@ -158,10 +179,12 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
     if (
         not live
         and snapshot
+        and "chunks" in snapshot
+        and "similarity" in snapshot
         and not state.corpus_is_loaded
-        and state.corpus_snapshot_is_current()
+        and (not hasattr(state, "corpus_snapshot_is_current") or state.corpus_snapshot_is_current())
     ):
-        return {
+        result = {
             "source": "snapshot",
             "written_at": state.snapshot_age(),
             "chunking": snapshot["chunking"],
@@ -170,6 +193,8 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
             "chunks": snapshot["chunks"],
             "similarity": snapshot["similarity"],
         }
+        state._cached_chunks = result
+        return result
 
     from backend.ingestion.chunking import (
         CHUNK_OVERLAP_TOKENS,
@@ -179,9 +204,16 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
     from backend.evaluation.export_inspection_data import _pca_2d
     from backend.ingestion.embeddings import embed_texts
 
-    _store, chunks = state.ensure_corpus()
+    store, live_chunks = state.ensure_corpus()
+    # A COPY, taken under the lock. The live list grows while an ingest
+    # runs; iterating it after computing vectors for a shorter prefix
+    # raised "IndexError: index 3510 is out of bounds for axis 0 with
+    # size 3510" -- MEASURED, mid-ingest, after the request had already
+    # spent five minutes.
+    with state._lock:
+        chunks = list(live_chunks or [])
     if not chunks:
-        return {
+        result = {
             "source": "live",
             "written_at": None,
             "chunking": {
@@ -194,13 +226,36 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
             "chunks": [],
             "similarity": [],
         }
+        state._cached_chunks = result
+        return result
 
-    vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
+    vectors = _stored_vectors(store, len(chunks))
+    if vectors is None:
+        vectors = np.asarray(embed_texts([c.text for c in chunks]), dtype=np.float32)
     coords, explained = _pca_2d(vectors) if len(chunks) > 1 else (np.zeros((len(chunks), 2)), [1.0, 0.0])
-    similarity = (vectors @ vectors.T).tolist()
+    neighbours = _nearest_neighbours(vectors, k=CHUNK_NEIGHBOURS)
 
+    # The full matrix is N² numbers. At 236 chunks that is 56k and fine;
+    # at the 6,797 chunks one archive folder produced it is 46 MILLION,
+    # hundreds of MB of JSON the browser cannot parse. Above the limit
+    # the heatmap is omitted AND SAYS WHY, and the per-chunk nearest
+    # neighbours -- the part of the matrix the page actually reads -- are
+    # still served for every chunk.
+    if len(chunks) <= SIMILARITY_MATRIX_MAX_CHUNKS:
+        similarity = [[round(float(v), 4) for v in row] for row in (vectors @ vectors.T)]
+        similarity_omitted = None
+    else:
+        similarity = []
+        similarity_omitted = {
+            "chunk_count": len(chunks),
+            "limit": SIMILARITY_MATRIX_MAX_CHUNKS,
+            "reason": (
+                f"A {len(chunks):,} x {len(chunks):,} similarity matrix is too large to "
+                f"send; nearest neighbours are provided per chunk instead."
+            ),
+        }
 
-    return {
+    result = {
         "source": "live",
         "written_at": None,
         "chunking": {
@@ -222,11 +277,63 @@ def get_chunks(live: bool = Query(False, description="Force a live ingestion")) 
                 "image_ids": c.metadata.image_ids,
                 "x": float(coords[i][0]),
                 "y": float(coords[i][1]),
+                "neighbours": neighbours[i],
             }
             for i, c in enumerate(chunks)
         ],
-        "similarity": [[round(v, 4) for v in row] for row in similarity],
+        "similarity": similarity,
+        "similarity_omitted": similarity_omitted,
     }
+    state._cached_chunks = result
+    return result
+
+
+# Above this many chunks the full similarity matrix is not sent. 600² is
+# 360k cells (a few MB of JSON); the heatmap is unreadable well before
+# that anyway, at one pixel per cell.
+SIMILARITY_MATRIX_MAX_CHUNKS = 600
+CHUNK_NEIGHBOURS = 5
+
+
+def _stored_vectors(store, n: int):
+    """The vectors already in the index, or None.
+
+    /api/chunks re-embedded every chunk on each cache miss -- 11.5s for
+    236 chunks, MEASURED, and a cache miss follows every document of an
+    ingest -- to recompute vectors sitting in the FAISS index. Positions
+    line up because chunks and vectors are appended together, one ingest
+    at a time (PipelineState._ingest_lock).
+    """
+    # Through the store, which holds its lock: reading the FAISS index
+    # directly while an ingest added to it segfaulted the API (exit 139).
+    # EXACT count only. More vectors than chunks means an ingest is
+    # mid-append; re-embedding is slower but cannot pair a passage with
+    # another passage's vector.
+    try:
+        return store.vectors(n) if len(store) == n else None
+    except Exception:  # noqa: BLE001 - an index type without reconstruct
+        return None
+
+
+def _nearest_neighbours(vectors, k: int) -> list[list[list[float]]]:
+    """For each chunk, its k most similar other chunks as [index, score].
+
+    Computed in blocks so memory stays at block x N rather than N².
+    """
+    n = len(vectors)
+    if n < 2:
+        return [[] for _ in range(n)]
+    k = min(k, n - 1)
+    out: list[list[list[float]]] = []
+    block = 512
+    for start in range(0, n, block):
+        sims = vectors[start:start + block] @ vectors.T
+        for row_i, row in enumerate(sims):
+            row[start + row_i] = -np.inf  # a chunk is not its own neighbour
+            top = np.argpartition(-row, k)[:k]
+            top = top[np.argsort(-row[top])]
+            out.append([[int(j), round(float(row[j]), 4)] for j in top])
+    return out
 
 
 # ---------------------------------------------------------------- images
@@ -435,6 +542,7 @@ class AddSourceRequest(BaseModel):
     path: str
     recursive: bool = True
     include_globs: list[str] = []
+    job_id: str | None = None
 
 
 class IngestPathRequest(BaseModel):
@@ -450,6 +558,47 @@ class UploadFileItem(BaseModel):
 
 class UploadSourcesRequest(BaseModel):
     files: list[UploadFileItem]
+    job_id: str | None = None
+
+
+def _untombstone_source(*identifiers: str) -> None:
+    """Remove paths, IDs, or tokens from deleted_sources.json so re-adding unblocks them."""
+    import json
+    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+    if not deleted_file.exists():
+        return
+    try:
+        current = json.loads(deleted_file.read_text(encoding="utf-8"))
+        if not isinstance(current, list):
+            current = []
+    except Exception:
+        current = []
+
+    to_remove = {str(i).strip().lower() for i in identifiers if i and str(i).strip()}
+    for i in list(to_remove):
+        try:
+            p = Path(i).resolve()
+            to_remove.add(str(p).lower())
+        except Exception:
+            pass
+
+    updated = []
+    for item in current:
+        item_lower = str(item).strip().lower()
+        if item_lower in to_remove:
+            continue
+        matched_parent = False
+        for r in to_remove:
+            if item_lower.startswith(r + "\\") or item_lower.startswith(r + "/"):
+                matched_parent = True
+                break
+        if not matched_parent:
+            updated.append(item)
+
+    try:
+        deleted_file.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 @router.post("/sources/upload")
@@ -472,7 +621,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
         try:
             raw_bytes = base64.b64decode(f.contentBase64)
             dest.write_bytes(raw_bytes)
-            saved_files.append(dest)
+            saved_files.append(dest.resolve())
             parts = clean_rel.split("/")
             if len(parts) > 1 and parts[0]:
                 top_folders.add(parts[0])
@@ -493,6 +642,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
             norm_lower = str(folder_path.resolve()).lower()
             folder_hash = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
             folder_id = f"dir_{folder_hash}"
+            _untombstone_source(str(folder_path.resolve()), norm_lower, folder_id)
             if not any(str(Path(d.get("path", "")).resolve()).lower() == norm_lower for d in dirs):
                 dirs.append({
                     "id": folder_id,
@@ -507,32 +657,100 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
         except Exception:
             pass
 
-    total_chunks = 0
-    all_details = []
-    for sf in saved_files:
+    from backend.ingestion.ingestion_progress import get_tracker
+    import threading
+
+    tracker = get_tracker()
+    job = tracker.create(str(target_base_dir), saved_files, job_id=body.job_id)
+
+    def _run():
+        for sf in saved_files:
+            try:
+                _untombstone_source(str(sf), str(sf.resolve()).lower(), "user_uploads_corpus")
+                state.ingest_path(sf, job_id=job.job_id)
+            except Exception as exc:
+                from backend.ingestion.ingestion_progress import DocumentStage
+                tracker.set_stage(job.job_id, str(sf), DocumentStage.FAILED,
+                                  detail=f"{type(exc).__name__}: {exc}")
+        tracker.finish(job.job_id)
+        # Ensure configured_sources.json reflects the uploaded folder after ingestion
+        import json as _json
+        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _dirs = []
+        if _cfg.exists():
+            try:
+                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        # top_folders already registered above — just make sure enabled=True
+        for folder in top_folders:
+            folder_path = target_base_dir / folder
+            norm = str(folder_path.resolve()).lower()
+            for d in _dirs:
+                if str(Path(d.get("path", "")).resolve()).lower() == norm:
+                    d["enabled"] = True
+                    break
         try:
-            chunks_cnt, details = state.ingest_path(sf)
-            total_chunks += chunks_cnt
-            all_details.extend(details)
-        except Exception as exc:
-            all_details.append({"filename": sf.name, "path": str(sf), "error": str(exc), "chunks": 0})
+            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name=f"upload-ingest-{job.job_id}", daemon=True).start()
 
     return {
         "success": True,
+        "job_id": job.job_id,
+        "state": "running",
         "count": len(saved_files),
-        "total_chunks": total_chunks,
-        "details": all_details,
         "saved": [{"path": str(sf), "name": sf.name} for sf in saved_files],
         "added": {"path": str(saved_files[0]), "name": saved_files[0].name} if saved_files else None,
-        "message": f"Uploaded and ingested {len(saved_files)} file(s): {total_chunks} chunks created, embedded, and indexed into FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Uploaded {len(saved_files)} file(s) — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
+    }
+
+
+@router.post("/sources/dialog/pick-folder")
+def pick_folder_endpoint() -> dict:
+    """Open native OS directory dialog to choose a folder on disk and return selected path immediately."""
+    from backend.api.native_picker import pick_folder_gui
+
+    picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
+    if not picked_path:
+        return {"cancelled": True, "path": None, "message": "Folder selection cancelled"}
+
+    target = Path(picked_path).resolve()
+    if not target.exists():
+        raise HTTPException(404, detail="Selected directory does not exist")
+
+    return {
+        "cancelled": False,
+        "path": str(target),
+        "name": target.name or "Custom_Corpus",
+    }
+
+
+@router.post("/sources/dialog/pick-files")
+def pick_files_endpoint() -> dict:
+    """Open native OS file dialog to choose documents on disk and return selected paths immediately."""
+    from backend.api.native_picker import pick_files_gui
+
+    picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
+    if not picked_paths:
+        return {"cancelled": True, "paths": [], "message": "File selection cancelled"}
+
+    return {
+        "cancelled": False,
+        "paths": picked_paths,
+        "count": len(picked_paths),
     }
 
 
 @router.post("/sources/dialog/folder")
 def browse_and_add_folder() -> dict:
-    """Open native OS directory dialog to choose a folder on disk, ingest and register it."""
+    """Open native OS directory dialog to choose a folder on disk, register and ingest in background."""
     import hashlib
     import json
+    import threading
     from backend.api.native_picker import pick_folder_gui
 
     picked_path = pick_folder_gui("Select Folder to Add to Sovereign Workbench")
@@ -549,11 +767,6 @@ def browse_and_add_folder() -> dict:
     except Exception:
         source = None
 
-    try:
-        total_chunks, details = state.ingest_path(target)
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Failed to chunk and embed source folder: {exc}") from exc
-
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
     dirs = []
     if config_file.exists():
@@ -567,6 +780,8 @@ def browse_and_add_folder() -> dict:
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
     dir_id = f"dir_{hasher}"
 
+    # Un-tombstone and register BEFORE thread starts so sidebar sees it immediately
+    _untombstone_source(norm_path, norm_lower, dir_id)
     found = False
     for d in dirs:
         if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
@@ -586,24 +801,59 @@ def browse_and_add_folder() -> dict:
     except Exception:
         pass
 
+    # Enumerate files for progress tracker
+    target_files = sorted(
+        f for f in target.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    ) if target.is_dir() else [target]
+
+    from backend.ingestion.ingestion_progress import get_tracker
+    tracker = get_tracker()
+    job = tracker.create(norm_path, target_files or [target])
+
+    def _run():
+        try:
+            state.ingest_path(target, job_id=job.job_id)
+            tracker.finish(job.job_id)
+        except Exception as exc:
+            tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+        # Re-sync configured_sources after completion
+        _dirs2 = []
+        try:
+            _dirs2 = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        for d in _dirs2:
+            if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
+                d["enabled"] = True
+                break
+        try:
+            config_file.write_text(json.dumps(_dirs2, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name=f"dialog-folder-ingest-{job.job_id}", daemon=True).start()
+
     return {
         "success": True,
+        "job_id": job.job_id,
+        "state": "running",
         "path": norm_path,
         "name": target.name,
-        "total_chunks": total_chunks,
-        "documents": details,
         "directories": dirs,
         "added": {"path": norm_path, "name": target.name, "id": dir_id},
         "source": source.model_dump() if source else {"path": norm_path},
-        "message": f"Folder '{target.name}' registered: {total_chunks} chunks indexed in FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Folder '{target.name}' registered — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
     }
 
 
 @router.post("/sources/dialog/files")
 def browse_and_add_files() -> dict:
-    """Open native OS file dialog to choose documents on disk, ingest and register them."""
+    """Open native OS file dialog to choose documents on disk, register and ingest them in background."""
     import hashlib
     import json
+    import threading
     from backend.api.native_picker import pick_files_gui
 
     picked_paths = pick_files_gui("Select Documents to Add to Sovereign Workbench")
@@ -611,8 +861,6 @@ def browse_and_add_files() -> dict:
         return {"cancelled": True, "message": "File selection cancelled"}
 
     state = get_state()
-    total_chunks = 0
-    all_details = []
     saved_items = []
 
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
@@ -623,45 +871,60 @@ def browse_and_add_files() -> dict:
         except Exception:
             pass
 
+    target_files: list[Path] = []
     for p_str in picked_paths:
         target = Path(p_str).resolve()
-        try:
-            cnt, details = state.ingest_path(target)
-            total_chunks += cnt
-            all_details.extend(details)
-            saved_items.append({"path": str(target), "name": target.name})
+        file_norm = str(target)
+        file_lower = file_norm.lower()
+        file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
+        file_id = f"file_{file_hasher}"
 
-            # Store the REAL on-disk file path — never copy, never pull unrelated parent files
-            file_norm = str(target)
-            file_lower = file_norm.lower()
-            file_hasher = hashlib.sha256(file_lower.encode("utf-8")).hexdigest()[:10]
-            file_id = f"file_{file_hasher}"
-            if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
-                dirs.append({
-                    "id": file_id,
-                    "name": target.name,
-                    "path": file_norm,
-                    "isFile": True,
-                    "isPreset": False,
-                    "enabled": True,
-                })
-        except Exception as exc:
-            all_details.append({"filename": target.name, "path": str(target), "error": str(exc), "chunks": 0})
+        _untombstone_source(file_norm, file_lower, file_id)
+        target_files.append(target)
+        saved_items.append({"path": file_norm, "name": target.name})
+
+        if not any(str(Path(d.get("path", "")).resolve()).lower() == file_lower for d in dirs):
+            dirs.append({
+                "id": file_id,
+                "name": target.name,
+                "path": file_norm,
+                "isFile": True,
+                "isPreset": False,
+                "enabled": True,
+            })
 
     try:
         config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
     except Exception:
         pass
 
+    # Create progress job and ingest in background
+    from backend.ingestion.ingestion_progress import get_tracker
+    tracker = get_tracker()
+    job = tracker.create(picked_paths[0] if len(picked_paths) == 1 else "multi-file", target_files)
+
+    def _run():
+        for target in target_files:
+            try:
+                state.ingest_path(target, job_id=job.job_id)
+            except Exception as exc:
+                from backend.ingestion.ingestion_progress import DocumentStage
+                tracker.set_stage(job.job_id, str(target), DocumentStage.FAILED,
+                                  detail=f"{type(exc).__name__}: {exc}")
+        tracker.finish(job.job_id)
+
+    threading.Thread(target=_run, name=f"dialog-files-ingest-{job.job_id}", daemon=True).start()
+
     return {
         "success": True,
+        "job_id": job.job_id,
+        "state": "running",
         "count": len(picked_paths),
-        "total_chunks": total_chunks,
-        "documents": all_details,
         "saved": saved_items,
         "added": saved_items[0] if saved_items else None,
         "directories": dirs,
-        "message": f"Successfully ingested {len(picked_paths)} document(s) in-place: {total_chunks} chunks indexed into FAISS.",
+        "poll": f"/api/ingestion/{job.job_id}",
+        "message": f"Registered {len(picked_paths)} document(s) — ingestion running in background. Poll /api/ingestion/{job.job_id} for live progress.",
     }
 
 
@@ -859,9 +1122,13 @@ def categorise_source(extension: str) -> tuple[str, str]:
     return _CATEGORY_BY_EXTENSION.get(extension.lower(), ("documents", "other"))
 
 
-@router.get("/corpus")
-def get_corpus() -> dict:
-    """Native corpus endpoint matching configured sources and directory tree."""
+def _get_corpus_data() -> dict:
+    """Compute and return corpus data — shared by the HTTP route and internal callers.
+
+    Extracted from get_corpus() so orchestrator/retrieval_tools can call it
+    without a FastAPI Response argument (which caused a TypeError in callers
+    that imported the route function directly).
+    """
     import json
     config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
     deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
@@ -888,7 +1155,6 @@ def get_corpus() -> dict:
         if (
             d.get("id", "").lower() in deleted_records
             or p_res in deleted_records
-            or p.name.lower() in deleted_records
         ):
             dirs_pruned = True
             continue
@@ -905,6 +1171,8 @@ def get_corpus() -> dict:
 
     # Always ensure preset baseline corpora are preserved alongside user-added sources
     preset_ids = {d.get("id") for d in dirs}
+    # Also index by resolved path so we can detect user-added entries that shadow a preset
+    existing_paths = {str(Path(d.get("path", "")).resolve()).lower() for d in dirs if d.get("path")}
     for preset in [
         {
             "id": "mrpl_rag_corpus",
@@ -921,8 +1189,10 @@ def get_corpus() -> dict:
             "enabled": True,
         },
     ]:
+        preset_path_lower = str(Path(preset["path"]).resolve()).lower()
         if (
             preset["id"] not in preset_ids
+            and preset_path_lower not in existing_paths  # skip if user already added same path
             and Path(preset["path"]).exists()
             and preset["id"].lower() not in deleted_records
         ):
@@ -961,7 +1231,6 @@ def get_corpus() -> dict:
         if (
             dir_cfg.get("id", "").lower() in deleted_records
             or p_resolved_lower in deleted_records
-            or p.name.lower() in deleted_records
         ):
             continue
 
@@ -973,7 +1242,6 @@ def get_corpus() -> dict:
             clean_id = raw_id if str(raw_id).startswith("file_") else f"file_{raw_id}"
             if (
                 clean_id.lower() in deleted_records
-                or p.name.lower() in deleted_records
                 or p_resolved_lower in deleted_records
             ):
                 continue
@@ -1029,7 +1297,6 @@ def get_corpus() -> dict:
                     if (
                         dir_clean_id.lower() in deleted_records
                         or dir_res in deleted_records
-                        or entry.name.lower() in deleted_records
                     ):
                         continue
                     sub = {
@@ -1052,7 +1319,6 @@ def get_corpus() -> dict:
                     p_res = str(entry.resolve()).lower()
                     if (
                         entry_clean_id.lower() in deleted_records
-                        or entry.name.lower() in deleted_records
                         or p_res in deleted_records
                     ):
                         continue
@@ -1108,15 +1374,40 @@ def get_corpus() -> dict:
         tree.insert(0, files_node)
 
     total_bytes = sum(i["sizeBytes"] for i in all_items)
+    # THE REAL COUNT OR NONE. This fell back to `files x 8` -- a number
+    # nobody measured, shown as "chunks indexed". Unknown is reported as
+    # null and rendered as unknown (Review Rule 4).
+    #
+    # Not read from the cache file either: at one archive folder that is
+    # a 15 MB JSON parse on every sidebar refresh.
+    # No lock: a first-boot corpus build holds it for minutes, and the
+    # sidebar must not wait on that to list folders. len() of a list
+    # reference is safe to read without it.
+    chunk_count = None
+    loaded = getattr(get_state(), "_chunks", None)
+    if loaded is not None:
+        chunk_count = len(loaded)
+
     return {
         "directories": dirs,
         "tree": tree,
         "sources": all_items,
         "count": len(all_items),
         "corpusCount": len(all_items),
+        "chunkCount": chunk_count,
         "totalSizeBytes": total_bytes,
-        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 2)} MB",
+        "totalSizeDisplay": f"{round(total_bytes / (1024 * 1024), 1)} MB",
     }
+
+
+@router.get("/corpus")
+def get_corpus(response: Response) -> dict:
+    """Native corpus endpoint — sets no-cache headers and returns corpus data."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return _get_corpus_data()
+
 
 
 @router.post("/sources")
@@ -1132,71 +1423,128 @@ def add_source(body: AddSourceRequest) -> dict:
         if not target.exists():
             raise HTTPException(400, detail=f"Path does not exist on disk: {body.path}")
 
-    watch_path = str(target if target.is_dir() else target.parent)
-    try:
-        source = state.watcher.add_source(
-            watch_path, recursive=body.recursive, include_globs=body.include_globs
-        )
-    except Exception:
-        source = None
+    # Only register a watcher for directories. For a single file, pointing
+    # the watcher at its parent directory would silently ingest every other
+    # file in that folder — the opposite of what "add this one file" means.
+    # Single files are tracked through configured_sources.json directly.
+    source = None
+    if target.is_dir():
+        try:
+            source = state.watcher.add_source(
+                str(target), recursive=body.recursive, include_globs=body.include_globs
+            )
+        except Exception:
+            source = None
 
     # Ingest the target (file or directory) in-place without copying
-    try:
-        total_chunks, details = state.ingest_path(target)
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Failed to chunk and embed source: {exc}") from exc
+    from backend.ingestion.ingestion_progress import get_tracker
 
-    # Synchronize with configured_sources.json
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
-    dirs = []
-    if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    target_files = [target] if target.is_file() else sorted(
+        f for f in target.rglob("*")
+        if f.is_file() and not f.name.startswith(".") and f.name.lower() != "readme.md"
+    )
+    tracker = get_tracker()
+    job = tracker.create(str(target), target_files or [target], job_id=body.job_id)
+
+    import hashlib
+    import json
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
+    dir_id = f"dir_{hasher}"
+    file_id = f"file_{hasher}"
 
+    # Write to configured_sources.json NOW — before the thread starts — so
+    # that GET /api/corpus immediately after this response sees the new entry.
+    # The ingestion thread also re-writes on completion (to update enabled
+    # state), but the entry must exist for the sidebar to appear without a
+    # page reload.
+    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    existing_dirs = []
+    if config_file.exists():
+        try:
+            existing_dirs = json.loads(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    _untombstone_source(norm_path, norm_lower, file_id if target.is_file() else dir_id)
     found = False
-    for d in dirs:
+    for d in existing_dirs:
         if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
             d["enabled"] = True
             found = True
             break
-    if not found and target.is_dir():
-        dir_id = f"dir_{hasher}"
-        dirs.append({
-            "id": dir_id,
-            "name": target.name or "Custom_Corpus",
-            "path": norm_path,
-            "isFile": False,
-            "isPreset": False,
-            "enabled": True,
-        })
-    elif not found and target.is_file():
-        file_id = f"file_{hasher}"
-        dirs.append({
-            "id": file_id,
-            "name": target.name,
-            "path": norm_path,
-            "isFile": True,
-            "isPreset": False,
-            "enabled": True,
-        })
+    if not found:
+        if target.is_dir():
+            existing_dirs.append({"id": dir_id, "name": target.name or "Custom_Corpus",
+                                   "path": norm_path, "isFile": False, "isPreset": False, "enabled": True})
+        else:
+            existing_dirs.append({"id": file_id, "name": target.name,
+                                   "path": norm_path, "isFile": True, "isPreset": False, "enabled": True})
     try:
-        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
+        config_file.write_text(json.dumps(existing_dirs, indent=2), encoding="utf-8")
     except Exception:
         pass
 
+    def _run():
+        try:
+            state.ingest_path(target, job_id=job.job_id)
+            tracker.finish(job.job_id)
+        except Exception as exc:  # noqa: BLE001 — recorded on the job, not propagated
+            tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+        # Re-sync configured_sources.json after ingestion (ensures enabled flag
+        # is current and any state changes from ingest_path are persisted).
+        import hashlib as _hl
+        import json as _json
+        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _dirs = []
+        if _cfg.exists():
+            try:
+                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        _norm = str(target.resolve())
+        _norm_lo = _norm.lower()
+        _hasher = _hl.sha256(_norm_lo.encode("utf-8")).hexdigest()[:10]
+        _did = f"dir_{_hasher}"
+        _fid = f"file_{_hasher}"
+        _found = False
+        for _d in _dirs:
+            if str(Path(_d.get("path", "")).resolve()).lower() == _norm_lo:
+                _d["enabled"] = True
+                _found = True
+                break
+        if not _found and target.is_dir():
+            _dirs.append({"id": _did, "name": target.name or "Custom_Corpus",
+                          "path": _norm, "isFile": False, "isPreset": False, "enabled": True})
+        elif not _found and target.is_file():
+            _dirs.append({"id": _fid, "name": target.name,
+                          "path": _norm, "isFile": True, "isPreset": False, "enabled": True})
+        try:
+            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    import threading
+    threading.Thread(target=_run, name=f"ingest-{job.job_id}", daemon=True).start()
+
     return {
         "success": True,
-        "total_chunks": total_chunks,
-        "documents": details,
-        "directories": dirs,
-        "added": {"path": norm_path, "name": target.name, "id": f"file_{hasher}" if target.is_file() else f"dir_{hasher}"},
+        "job_id": job.job_id,
+        "state": "running",
+        "total_documents": len(target_files or [target]),
+        "poll": f"/api/ingestion/{job.job_id}",
+        "added": {
+            "path": norm_path,
+            "name": target.name,
+            "id": file_id if target.is_file() else dir_id,
+        },
         "source": source.model_dump() if source else {"path": str(target)},
-        "message": f"Source '{target.name}' indexed in-place: {total_chunks} chunks created, embedded, and indexed in FAISS.",
+        "message": (
+            f"Source '{target.name}' queued for indexing: "
+            f"{len(target_files or [target])} document(s). "
+            f"Poll /api/ingestion/{job.job_id} for live per-document progress."
+        ),
     }
 
 
@@ -1219,21 +1567,20 @@ def remove_source(
         except Exception:
             deleted_records = set()
 
-    # Collect all possible identifier representations
-    identifiers = {path.strip().lower()}
-    if id:
+    # Collect only specific identifiers: exact IDs and exact resolved full paths.
+    # NEVER store generic base names like "docs" or Path(name).name.lower()!
+    identifiers = set()
+    if path and path.strip():
+        identifiers.add(path.strip().lower())
+        try:
+            resolved_p = Path(path).resolve()
+            identifiers.add(str(resolved_p).lower())
+        except Exception:
+            pass
+    if id and id.strip():
         identifiers.add(id.strip().lower())
         if id.startswith("file_file_"):
             identifiers.add(id[5:].strip().lower())
-    if name:
-        identifiers.add(name.strip().lower())
-        identifiers.add(Path(name).name.lower())
-    try:
-        resolved_p = Path(path).resolve()
-        identifiers.add(str(resolved_p).lower())
-        identifiers.add(resolved_p.name.lower())
-    except Exception:
-        pass
 
     # Read config_file to see if it matches any registered entry
     real_path_to_delete = path
@@ -1243,18 +1590,16 @@ def remove_source(
             remaining_dirs = []
             for d in dirs:
                 d_id = d.get("id", "").lower()
-                d_name = d.get("name", "").lower()
                 d_path_res = str(Path(d.get("path", "")).resolve()).lower()
-                d_path_name = Path(d.get("path", "")).name.lower()
                 if (
                     d_id in identifiers
-                    or d_name in identifiers
                     or d_path_res in identifiers
-                    or d_path_name in identifiers
+                    or (id and d_id == id.strip().lower())
+                    or (path and d_path_res == str(Path(path).resolve()).lower())
                 ):
                     real_path_to_delete = d.get("path", path)
-                    identifiers.add(d_id)
-                    identifiers.add(d_name)
+                    if d_id:
+                        identifiers.add(d_id)
                     identifiers.add(d_path_res)
                 else:
                     remaining_dirs.append(d)
@@ -1317,6 +1662,67 @@ def list_tools(category: str | None = Query(None)) -> dict:
             if category is None or t.category == category
         ]
     }
+
+
+class TranscribeRequest(BaseModel):
+    audioBase64: str
+    mimeType: str = "audio/webm"
+
+
+# Recorded dictation is short. A cap keeps a stuck recorder from posting
+# minutes of audio into a synchronous request.
+_MAX_DICTATION_BYTES = 25 * 1024 * 1024
+_AUDIO_SUFFIX = {
+    "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav",
+    "audio/mp4": ".m4a", "audio/mpeg": ".mp3",
+}
+
+
+@router.post("/transcribe")
+def transcribe_dictation(body: TranscribeRequest) -> dict:
+    """Speech-to-text for composer dictation, ON THIS MACHINE.
+
+    HARD CONSTRAINT #1. Dictation used the browser's Web Speech API, and
+    Chromium implements that by streaming microphone audio to Google's
+    speech servers -- the code said as much ("requires Google cloud
+    endpoint"). On any networked machine it worked, which means the
+    operator's voice left the building on every dictation. Audio now comes
+    here and is transcribed by the local faster-whisper model
+    (transcribe_voice_note), in a temporary file deleted afterwards. The
+    recording is not added to the corpus.
+    """
+    import base64
+    import binascii
+    import os
+    import tempfile
+
+    try:
+        data = base64.b64decode(body.audioBase64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(400, detail=f"audio is not valid base64: {exc}") from exc
+    if not data:
+        raise HTTPException(400, detail="no audio received")
+    if len(data) > _MAX_DICTATION_BYTES:
+        raise HTTPException(413, detail="recording too long to transcribe in one request")
+
+    suffix = _AUDIO_SUFFIX.get(body.mimeType.split(";")[0].strip().lower(), ".webm")
+    handle, path = tempfile.mkstemp(suffix=suffix, prefix="dictation-")
+    try:
+        with os.fdopen(handle, "wb") as f:
+            f.write(data)
+        from backend.tools.audio.voice_transcription import transcribe_voice_note
+
+        result = transcribe_voice_note(path)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reported, never guessed around
+        raise HTTPException(500, detail=f"local transcription failed: {type(exc).__name__}: {exc}") from exc
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return {"text": result.full_text.strip(), "language": result.language, "engine": "faster-whisper (local)"}
 
 
 class ToolCallRequest(BaseModel):
@@ -1688,6 +2094,7 @@ _ACTION_TYPES = {
 # that is what will actually run.
 _TOOL_ACTION_TYPES = {
     "draft_docx": "FILE_WRITE",
+    "generate_deck": "FILE_WRITE",
     "run_in_sandbox": "CODE_EXECUTION",
 }
 
@@ -1775,7 +2182,17 @@ def chat(body: ChatRequestBody) -> dict:
             # know are ABSENT rather than filled with plausible
             # placeholders -- an empty field reads as unknown, a
             # plausible one reads as measured.
-            category = req.arguments.get("category") or "operator action"
+            # RESOLVED vs NOT. An unresolved action carries only the
+            # operator's command and a category. A resolved one carries the
+            # real tool's arguments -- for draft_docx and generate_deck an
+            # exact output_path -- and the card said "has NOT resolved a
+            # file path" directly above a preview naming that file.
+            resolved = "category" not in req.arguments
+            output_path = req.arguments.get("output_path") if resolved else None
+            category = (
+                "file write" if output_path
+                else req.arguments.get("category") or "operator action"
+            )
             command = req.arguments.get("command") or req.effect
 
             approval_action = {
@@ -1794,13 +2211,14 @@ def chat(body: ChatRequestBody) -> dict:
                 # The operator's own words. The system has not resolved a
                 # device, a file path or a magnitude, and says so rather
                 # than guessing one.
-                "target": None,
+                "target": output_path,
                 "description": req.effect,
                 "detail": command,
                 "requested_by_operator": command,
-                "resolved_parameters": False,
+                "resolved_parameters": resolved,
                 "risk_level": "REQUIRES_REVIEW",
                 "warning": (
+                    None if resolved else
                     "The workbench has NOT resolved a target device, file "
                     "path or value for this instruction. Approving records "
                     "your authorisation for the action exactly as worded "
@@ -1894,7 +2312,20 @@ def list_models() -> dict:
         if pulled is not None:
             entry = pulled.get(tag) or pulled.get(f"{tag}:latest")
 
-        if pulled is None:
+        if cfg.backend == "diffusers":
+            # On disk, loaded in-process -- not an Ollama tag.
+            from backend.models.registry import diffusers_weights_dir, is_locally_available
+
+            entry = None
+            if is_locally_available(cfg, None):
+                status, detail = "available", None
+            else:
+                status, detail = (
+                    "not_pulled",
+                    f"Weights not found at {diffusers_weights_dir(cfg)}. "
+                    f"Run once, online: python -m backend.ingestion.fetch_models --model sd-turbo",
+                )
+        elif pulled is None:
             status, detail = "unknown", f"Ollama unreachable ({ollama_error})"
         elif entry is not None:
             status, detail = "available", None

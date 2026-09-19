@@ -50,14 +50,15 @@ def test_missing_file_raises_exact_message():
 @pytest.mark.skipif(not os.path.exists(CORPUS_IMAGE), reason="test corpus image not present")
 def test_detections_contract_shape_on_the_scanned_checklist():
     """The overlay's contract (contract.js): every detection has id, label,
-    confidence, box{xmin,ymin,xmax,ymax}, severity, kind — and the OCR
-    regions are real pixel boxes on the deliberately noisy scanned
-    checklist."""
+    confidence, box{xmin,ymin,xmax,ymax}, severity — the result carries
+    kind='text_region' — and the OCR regions are real pixel boxes on the
+    deliberately noisy scanned checklist."""
     from backend.tools.vision.defect_detection import detect_defects
 
     result = detect_defects(CORPUS_IMAGE)
 
     assert result.source == "ocr-printed"
+    assert result.kind == "text_region"
     assert len(result.detections) > 0
 
     for det in result.detections:
@@ -65,7 +66,6 @@ def test_detections_contract_shape_on_the_scanned_checklist():
         assert det.label
         assert 0.0 <= det.confidence <= 1.0
         assert det.severity == "low"
-        assert det.kind == "text_region"
         box = det.box
         assert box.xmin <= box.xmax
         assert box.ymin <= box.ymax
@@ -75,30 +75,6 @@ def test_detections_contract_shape_on_the_scanned_checklist():
         assert 0 <= box.xmin <= 2000
 
     assert result.image_url.startswith("/api/inspection/image?path=")
-
-
-@_skip_without_models
-@pytest.mark.skipif(not os.path.exists(CORPUS_IMAGE), reason="test corpus image not present")
-def test_ocr_regions_are_not_presented_as_defects():
-    """The descope, held as a regression: a photo that contains no defect
-    must never yield a defect-style finding. Detections name text regions
-    (kind='text_region', severity='low'); no output may carry defect
-    vocabulary like 'critical' severity or a severity band above 'low'."""
-    from backend.tools.vision.defect_detection import detect_defects
-
-    result = detect_defects(CORPUS_IMAGE)
-    assert result.detections
-
-    for det in result.detections:
-        assert det.kind == "text_region", (
-            f"detection {det.id} presented as kind={det.kind!r}; "
-            "OCR boxes must never be classified as anything but text regions"
-        )
-        assert det.severity == "low", (
-            f"detection {det.id} has severity {det.severity!r}; "
-            "OCR transcription confidence is not a defect severity"
-        )
-        assert "defect" not in (det.label or "").lower()
 
 
 @_skip_without_models
@@ -145,3 +121,21 @@ def test_inspection_image_route_rejects_path_escape():
         params={"path": os.path.join("..", "requirements.txt")},
     )
     assert resp.status_code in (400, 404)
+
+
+def test_ocr_regions_are_not_presented_as_defects():
+    """Low OCR confidence was mapped to HIGH severity, so a blurry label
+    rendered as a high-severity defect; and the tool told the model it
+    detected defects."""
+    from backend.tools import catalog  # noqa: F401
+    from backend.tools.registry import get_tool
+    from backend.tools.vision.defect_detection import (
+        DefectDetectionResult,
+        _severity_for,
+    )
+
+    assert {_severity_for(c) for c in (0.1, 0.5, 0.8, 0.99)} == {"low"}
+    assert DefectDetectionResult(image_url="", source="ocr-printed", detections=[]).kind == "text_region"
+    desc = get_tool("detect_defects").description
+    assert "NOT A DEFECT DETECTOR" in desc
+    assert "defect detection is not available" in desc

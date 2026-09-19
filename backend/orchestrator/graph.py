@@ -178,6 +178,10 @@ def classify_action_request(msg: str) -> str | None:
         re.I,
     ):
         return None
+    # NO PRESENTATION EXEMPTION. Decks were returned None here as "safe
+    # deliverables", which let a .pptx be written without approval --
+    # hard constraint #4. They are gated like any document now, and the
+    # approval shows the actual slides (action_resolver._resolve_deck).
     for pattern, label in _COMPILED_WRITE_ACTIONS:
         if pattern.search(text):
             return label

@@ -10,7 +10,7 @@ def pick_folder_gui(title: str = "Select Folder to Add to Sovereign Workbench") 
     py_code = """
 import sys
 import ctypes
-# Enable Per-Monitor High DPI awareness on Windows to prevent blurry dialogs
+
 if sys.platform == 'win32':
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -22,16 +22,24 @@ if sys.platform == 'win32':
 
 import tkinter as tk
 from tkinter import filedialog
+
 root = tk.Tk()
 root.withdraw()
-try:
-    root.wm_attributes('-topmost', 1)
-except Exception:
-    pass
-path = filedialog.askdirectory(title='Select Folder to Add to Sovereign Workbench')
+root.attributes('-topmost', True)
+root.lift()
+root.focus_force()
+
+if sys.platform == 'win32':
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        root.after(10, lambda: root.focus_force())
+    except Exception:
+        pass
+
+path = filedialog.askdirectory(parent=root, title='Select Folder to Add to Sovereign Workbench')
 root.destroy()
 if path:
-    print(path.strip())
+    print(path.strip(), flush=True)
 """
     try:
         proc = subprocess.run(
@@ -53,7 +61,7 @@ def pick_files_gui(title: str = "Select Files to Add to Sovereign Workbench") ->
     py_code = """
 import sys
 import ctypes
-# Enable Per-Monitor High DPI awareness on Windows to prevent blurry dialogs
+
 if sys.platform == 'win32':
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -65,12 +73,20 @@ if sys.platform == 'win32':
 
 import tkinter as tk
 from tkinter import filedialog
+
 root = tk.Tk()
 root.withdraw()
-try:
-    root.wm_attributes('-topmost', 1)
-except Exception:
-    pass
+root.attributes('-topmost', True)
+root.lift()
+root.focus_force()
+
+if sys.platform == 'win32':
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        root.after(10, lambda: root.focus_force())
+    except Exception:
+        pass
+
 filetypes = [
     ("All Supported Documents", "*.pdf *.docx *.xlsx *.xls *.png *.jpg *.jpeg *.txt *.json *.csv *.md *.yaml *.yml *.py *.sql"),
     ("PDF Documents", "*.pdf"),
@@ -79,11 +95,11 @@ filetypes = [
     ("Text & Code", "*.txt *.json *.md *.yaml *.yml *.py *.sql"),
     ("All Files", "*.*"),
 ]
-paths = filedialog.askopenfilenames(title='Select Files to Add to Sovereign Workbench', filetypes=filetypes)
+paths = filedialog.askopenfilenames(parent=root, title='Select Files to Add to Sovereign Workbench', filetypes=filetypes)
 root.destroy()
 if paths:
     for p in paths:
-        print(p.strip())
+        print(p.strip(), flush=True)
 """
     try:
         proc = subprocess.run(

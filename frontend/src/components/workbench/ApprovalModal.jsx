@@ -1,4 +1,5 @@
 import { AlertTriangle, ArrowRight, ShieldAlert, Check } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useChatStore } from '../../store/chatStore'
 
 /**
@@ -28,43 +29,6 @@ export function ApprovalModal({
   const isOpen = propIsOpen !== undefined ? propIsOpen : storeIsOpen
   const action = propAction || storeAction
 
-  if (!isOpen) return null
-  if (!action) {
-    // Guard: modal is open but no action data was provided. Surface this
-    // honestly rather than rendering fabricated action parameters.
-    return (
-      <div
-        id="approval-gate-modal-backdrop"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        style={{ background: 'rgba(5, 5, 8, 0.72)', backdropFilter: 'blur(8px)' }}
-        role="dialog"
-        aria-modal="true"
-      >
-        <div
-          className="w-full max-w-[490px] rounded-2xl p-6 flex flex-col items-center gap-4"
-          style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)' }}
-        >
-          <ShieldAlert size={28} style={{ color: 'var(--color-accent)' }} />
-          <p className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-            No action data available
-          </p>
-          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            The approval gate was triggered but no action payload arrived from the backend.
-            Close this modal and retry the operation.
-          </p>
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="px-4 py-2 rounded-lg text-xs font-semibold border cursor-pointer"
-            style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   const handleCancel = async () => {
     if (propOnClose) {
       propOnClose()
@@ -82,29 +46,68 @@ export function ApprovalModal({
   }
 
   return (
-    <div
-      id="approval-gate-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in select-none"
-      style={{
-        background: 'rgba(5, 5, 8, 0.72)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="approval-modal-title"
-    >
-      {/* Modal Card — Deliberately weightier than regular cards */}
-      <div
-        id="approval-gate-modal-card"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[490px] rounded-2xl p-6 relative flex flex-col animate-fade-in shadow-2xl"
-        style={{
-          background: 'var(--color-card-bg)',
-          border: '1px solid var(--color-card-border)',
-          boxShadow: 'var(--shadow-lg)',
-        }}
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="approval-gate-modal-backdrop"
+          id="approval-gate-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 select-none"
+          style={{
+            background: 'rgba(5, 5, 8, 0.72)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="approval-modal-title"
+        >
+          {!action ? (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 6 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 6 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-[490px] rounded-2xl p-6 flex flex-col items-center gap-4 shadow-2xl"
+              style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)' }}
+            >
+              <ShieldAlert size={28} style={{ color: 'var(--color-accent)' }} />
+              <p className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
+                No action data available
+              </p>
+              <p className="text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
+                The approval gate was triggered but no action payload arrived from the backend.
+                Close this modal and retry the operation.
+              </p>
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="px-4 py-2 rounded-lg text-xs font-semibold border cursor-pointer hover:bg-[var(--color-surface-hover)]"
+                style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+              >
+                Close
+              </button>
+            </motion.div>
+          ) : (
+            /* Modal Card — Deliberately weightier than regular cards */
+            <motion.div
+              key="approval-gate-modal-card"
+              id="approval-gate-modal-card"
+              onClick={(e) => e.stopPropagation()}
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-[490px] rounded-2xl p-6 relative flex flex-col shadow-2xl"
+              style={{
+                background: 'var(--color-card-bg)',
+                border: '1px solid var(--color-card-border)',
+                boxShadow: 'var(--shadow-lg)',
+              }}
+            >
         {/* Top Badges: Safety Level + System Tag */}
         <div className="flex items-center justify-between gap-2 mb-3.5">
           <div
@@ -351,7 +354,10 @@ export function ApprovalModal({
             <span>{isResolving ? 'Authorizing…' : 'Authorize & Dispatch'}</span>
           </button>
         </div>
-      </div>
-    </div>
+            </motion.div>
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }

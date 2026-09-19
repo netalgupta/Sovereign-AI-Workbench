@@ -26,6 +26,7 @@ python-magic>=0.4; sys_platform != 'win32'        # same library, Linux/Mac whee
 pdfplumber>=0.11
 python-docx>=1.2
 openpyxl>=3.1
+fpdf2>=2.8            # PDF authoring for the synthetic archive corpus generator (backend/evaluation/generate_archive.py) -- pure Python, no network
 xlrd>=2.0                # legacy .xls reading (openpyxl is XLSX-only)
 tiktoken>=0.8
 langchain-text-splitters>=0.3
@@ -44,6 +45,12 @@ responses>=0.25
 # sandbox, it took every tool test down with it.
 docker==7.2.0
 psutil==7.0.0
+
+# Presentation generation (TOOLS.md row 40 / PPTX_AGENT_SPEC.md). This
+# landed via the merge WITHOUT its dependency, so the tool catalog import
+# failed and took every tool test down with it -- same class of bug as the
+# sandbox/psutil entry above.
+python-pptx>=1.0
 
 # ---------------------------------------------------------------- GPU
 #

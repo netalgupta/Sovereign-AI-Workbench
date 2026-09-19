@@ -42,10 +42,10 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def client():
-    from backend.graph.neo4j_client import GraphClient
+    from backend.tests.conftest import wipeable_neo4j_client
 
-    c = GraphClient(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
-    c.run_cypher("MATCH (n) DETACH DELETE n")
+    # Skips rather than wiping a graph it did not create; see conftest.py.
+    c = wipeable_neo4j_client(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     yield c
     c.run_cypher("MATCH (n) DETACH DELETE n")
     c.close()

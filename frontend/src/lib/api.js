@@ -241,6 +241,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
     onMemory,
     onToolCall,
     onToolResult,
+    onThought,
     onTextDelta,
     onApprovalRequired,
     onDone,
@@ -315,6 +316,9 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                     break
                   case 'tool_result':
                     onToolResult?.(event)
+                    break
+                  case 'thought':
+                    onThought?.(event)
                     break
                   case 'text_delta':
                     onTextDelta?.(event.text || '')

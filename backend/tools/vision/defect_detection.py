@@ -11,9 +11,9 @@ DECISION (2026-09-19, Option A): row 7's status is `not started (OCR
 text-region overlay only)`. What exists here is the overlay half — a
 real, offline, registered tool that boxes recognized text — and real
 defect/anomaly detection is not started. The tool's output is honest
-about what it is: every region carries `kind: "text_region"` and
-severity is always `"low"`, because OCR confidence is a
-transcription-confidence signal, not a defect classification. If a real
+about what it is: the result carries `kind: "text_region"` and every box
+has severity `"low"`, because OCR confidence is a transcription-
+confidence signal, not a defect classification. If a real
 detector is ever built, it swaps in behind this same output contract
 (same box shape, same overlay), and the constraints below govern that
 upgrade.
@@ -65,7 +65,6 @@ class Detection(BaseModel):
     confidence: float
     box: DetectionBox
     severity: str = Field(default="low", pattern="^(low|medium|high|critical)$")
-    kind: str = "text_region"
 
 
 class DefectDetectionResult(BaseModel):
@@ -74,6 +73,22 @@ class DefectDetectionResult(BaseModel):
     image_height: int | None = None
     detections: list[Detection]
     source: str  # "ocr-printed" today; a real detector's name later
+    # What the regions ARE. "text_region" until a real defect model lands;
+    # a consumer must not describe these as defects.
+    kind: str = "text_region"
+
+
+def _severity_for(confidence: float) -> str:
+    """Always "low". There is no severity to report.
+
+    This mapped LOW OCR confidence to HIGH severity, so a blurry nameplate
+    rendered on the overlay as a high-severity defect and a crisp one as
+    low -- a defect judgement made from how legible the text was. The
+    overlay contract requires a severity; the honest one for a region that
+    is not a defect is the neutral band. OCR confidence is still reported
+    in `confidence`, where it means what it says.
+    """
+    return "low"
 
 
 def _image_url_for(image_path: str) -> str:
@@ -97,7 +112,7 @@ def detect_defects(image_path: str) -> DefectDetectionResult:
     only)`). This returns where PRINTED TEXT is on the image: every OCR
     text line becomes a box labeled by the recognized text, confidence
     is OCR transcription confidence, severity is always ``"low"``, and
-    every region carries ``kind: "text_region"``. Presenting these boxes
+    the result carries ``kind: "text_region"``. Presenting these boxes
     as defect findings would be presenting text locations as defects,
     which is exactly what the descope forbids.
 
@@ -125,8 +140,7 @@ def detect_defects(image_path: str) -> DefectDetectionResult:
                 label=line.text,
                 confidence=round(line.confidence, 4),
                 box=DetectionBox(xmin=x_min, ymin=y_min, xmax=x_max, ymax=y_max),
-                severity="low",
-                kind="text_region",
+                severity=_severity_for(line.confidence),
             )
         )
 
