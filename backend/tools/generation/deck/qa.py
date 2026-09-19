@@ -79,6 +79,10 @@ class DeckQuality:
     pages: list[PageQuality]
     reviewed_by: str | None = None
     note: str = ""
+    # Layout is measured on every page whatever else happens; this is the
+    # count of pages with at least one measured defect.
+    layout_defect_pages: int = 0
+    pages_reviewed: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -295,11 +299,23 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
 
         local_vision.release()
 
-    deck_score = round(sum(p.score for p in out) / len(out), 1) if out else None
+    # The deck score and grade are a DESIGN judgement, so they exist only
+    # where the reviewer looked, and cover only the pages it looked at. A
+    # layout-only 10/10 would read as "excellent" when it means "no measured
+    # defects"; a failed review counted as 10-minus-penalties would inflate
+    # the average with pages nobody judged.
+    reviewed = [p for p in out if p.vision_score is not None]
+    deck_score = round(sum(p.score for p in reviewed) / len(reviewed), 1) if reviewed else None
+    defect_pages = sum(1 for p in out if p.defects)
     method = "layout+vision" if reviewed_any else "layout"
-    note = "" if reviewed_any else (
-        "Layout was measured on every page; the vision model did not review any page, so the "
-        "score reflects measured defects only.")
+    if not reviewed_any:
+        note = (f"Layout was measured on all {len(out)} pages ({defect_pages} with defects). The design "
+                "reviewer did not look at any page, so no design score or grade is given.")
+    elif len(reviewed) < len(out):
+        note = (f"The design reviewer scored {len(reviewed)} of {len(out)} pages; the deck score "
+                "covers those pages only.")
+    else:
+        note = ""
     from backend.models.registry import resolve_model_name
 
     try:
@@ -307,4 +323,5 @@ def assess(pptx: str | Path, *, vision: bool = True, pages: list[int] | None = N
     except Exception:  # noqa: BLE001
         reviewer = None
     return DeckQuality(score=deck_score, grade=grade_for(deck_score), method=method, pages=out,
-                       reviewed_by=reviewer, note=note)
+                       reviewed_by=reviewer, note=note, layout_defect_pages=defect_pages,
+                       pages_reviewed=len(reviewed))

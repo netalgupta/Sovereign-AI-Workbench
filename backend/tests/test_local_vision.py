@@ -178,3 +178,27 @@ def test_assess_releases_the_reviewer_after_the_pass(monkeypatch, tmp_path):
     assert result.method == "layout+vision"
     assert [p.score for p in result.pages] == [8.0, 6.0]  # overflow costs 2 points
     assert result.score == 7.0 and result.grade == "B"
+
+
+def _measured(n_pages: int, defects: dict | None = None):
+    return lambda *a, **k: {"pngs": [f"p{i}.png" for i in range(1, n_pages + 1)],
+                            "defects": defects or {}, "titles": {}, "words": {}}
+
+
+def test_layout_alone_gives_no_design_grade(monkeypatch):
+    """A layout-only 10/10 'A' would read as excellent when it means 'no measured defects'."""
+    monkeypatch.setattr(qa, "render_and_measure", _measured(3, {2: ["overflow"]}))
+    result = qa.assess("d.pptx", vision=False)
+    assert result.method == "layout" and result.score is None and result.grade == "unrated"
+    assert result.layout_defect_pages == 1 and result.pages_reviewed == 0
+    assert "no design score" in result.note
+
+
+def test_the_deck_score_covers_only_the_pages_the_reviewer_scored(monkeypatch):
+    monkeypatch.setattr(qa, "render_and_measure", _measured(3))
+    reviews = iter([{"score": 6.0, "issues": []}, None, {"score": 8.0, "issues": []}])
+    monkeypatch.setattr(qa, "review_page", lambda png: next(reviews))
+    monkeypatch.setattr(LV, "release", lambda: None)
+    result = qa.assess("d.pptx")
+    assert result.score == 7.0, "the unreviewed page must not count as 10"
+    assert result.pages_reviewed == 2 and "2 of 3" in result.note
