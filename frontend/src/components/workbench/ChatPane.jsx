@@ -33,6 +33,7 @@ import {
   X,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { usePreviewStore } from '../../store/previewStore'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
@@ -95,6 +96,7 @@ export function ChatPane() {
 
   // Files queued in the composer tray (§3.13). Each item's status/progress
   // is driven ONLY by the real upload/OCR steps below.
+  const openPreview = usePreviewStore((s) => s.openPreview)
   const [attachments, setAttachments] = useState([])
 
   // Top tabs: Chat / Notebooks / Artifacts
@@ -1495,13 +1497,19 @@ export function ChatPane() {
                 {attachments.map((att) => (
                   <div
                     key={att.id}
-                    className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md text-[11px] border"
+                    onClick={() => att.status !== 'error' && openPreview({
+                      id: att.id,
+                      name: att.name,
+                      filename: att.name,
+                      attachmentId: att.attachmentId || att.attachment_id || att.id,
+                    })}
+                    className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md text-[11px] border cursor-pointer hover:border-[var(--color-accent)]"
                     style={{
                       background: 'var(--color-surface)',
                       borderColor: att.status === 'error' ? 'var(--color-danger, #C8413B)' : 'var(--color-border)',
                       color: 'var(--color-text)',
                     }}
-                    title={att.status === 'error' ? 'Upload or analysis failed' : `Status: ${att.status}`}
+                    title={att.status === 'error' ? 'Upload or analysis failed' : 'Click to open a preview'}
                   >
                     {att.previewUrl ? (
                       <img
@@ -1517,7 +1525,8 @@ export function ChatPane() {
                     <span className="text-[9px] text-[var(--color-text-muted)]">{att.status}</span>
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation()
                         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
                         setAttachments((prev) => prev.filter((x) => x.id !== att.id))
                       }}

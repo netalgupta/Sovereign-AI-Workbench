@@ -13,6 +13,8 @@ import { OutputCards } from './integrations/output-cards'
 import { AuditLog } from './integrations/audit-log'
 import { NetworkMonitor } from './integrations/network-monitor'
 
+import { GlobalSourcePreviewModal } from './components/workbench/GlobalSourcePreviewModal'
+
 /**
  * PageTransition helper for smooth, professional 160ms ease-out page route animations.
  */
@@ -52,6 +54,9 @@ export default function App() {
           <Route path="/monitor" element={<PageTransition><NetworkMonitor mode="full" /></PageTransition>} />
         </Routes>
       </AnimatePresence>
+      {/* Source preview, mounted once so a citation, a source row or an
+          attachment chip can open a document from anywhere in the app. */}
+      <GlobalSourcePreviewModal />
     </AppShell>
   )
 }
