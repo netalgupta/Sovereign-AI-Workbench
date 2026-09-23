@@ -1341,7 +1341,15 @@ def _get_corpus_data() -> dict:
                         continue
                     stat = entry.stat()
                     ext = entry.suffix.lstrip(".").lower()
-                    rel_workspace = str(entry.resolve().relative_to(Path.cwd().resolve())).replace("\\", "/")
+                    # A watched source folder may sit outside the repo (the
+                    # operator points the workbench at their own drive):
+                    # relative_to RAISES there, which took down /api/corpus
+                    # and /api/sources entirely. Absolute path in that case.
+                    resolved_entry = entry.resolve()
+                    try:
+                        rel_workspace = str(resolved_entry.relative_to(Path.cwd().resolve())).replace("\\", "/")
+                    except ValueError:
+                        rel_workspace = str(resolved_entry).replace("\\", "/")
                     file_item = {
                         "id": entry_clean_id,
                         "name": entry.name,
@@ -2383,11 +2391,19 @@ def chat(body: ChatRequestBody) -> dict:
                 title_val = req.arguments.get("title") or kind_name
                 output_path_val = output_path or "storage/outputs/"
                 title = f"Confirm {kind_name} Draft ({title_val})"
-                detail = f'Draft {kind_name} "{title_val}" to {output_path_val}'
-                warning = (
-                    f"Drafting an {kind_name} will generate a file on disk at the path shown. "
-                    "Review the tables, formulas, and citations in the description before authorizing."
-                )
+                # `detail` is the OPERATOR'S OWN WORDS, and stays that way: it
+                # was overwritten with 'Draft Word Document "<title>" to <path>',
+                # a phrase the system composed. What will be written is already
+                # in `description`, `target` and the preview; the one field that
+                # records what the person actually asked for cannot be a
+                # paraphrase, or the audit trail no longer holds their request.
+                detail = command
+                # No warning on a RESOLVED action. `warning` means "the
+                # system could not resolve the specifics of this" -- a
+                # generic "review before authorizing" on every draft makes
+                # that signal meaningless, and the preview already lists
+                # the file, its sections and their sources.
+                warning = None
             else:
                 title = f"Confirm {category}"
                 detail = command

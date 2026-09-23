@@ -145,7 +145,12 @@ def _describe_parameters(func: Callable) -> dict:
     their arguments there already, so the schema the model sees is the
     same prose a developer reads — one description, not two that drift.
     """
-    signature = inspect.signature(func)
+    # RESOLVED hints, not raw annotations. `from __future__ import
+    # annotations` (added across the backend in a later merge) makes every
+    # annotation a STRING, and a string is not list[float] or a Literal:
+    # every list parameter derived as "string" and every Literal lost its
+    # enum, so a model would be told to send 5 where the tool takes [5].
+    signature = inspect.signature(func, eval_str=True)
     doc = inspect.getdoc(func) or ""
     arg_docs: dict[str, str] = {}
 

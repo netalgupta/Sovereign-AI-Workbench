@@ -231,10 +231,17 @@ finally:
             f.write(wrapper_code)
 
         # Minimal sanitized environment
+        # PYTHONPATH carries the parent's package directories. Without it the
+        # child cannot import python-docx, reportlab or PyMuPDF: those live in
+        # the USER site-packages directory, which CPython locates from APPDATA,
+        # and a sanitized environment has no APPDATA. Office document preview
+        # rendering failed on every file with "No module named 'docx'".
+        # Passing the paths explicitly is narrower than restoring APPDATA.
         clean_env = {
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", "C:\\Windows"),
             "PATH": os.environ.get("PATH", ""),
             "PYTHONUNBUFFERED": "1",
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if "site-packages" in p),
             "TEMP": scratch_dir,
             "TMP": scratch_dir,
         }

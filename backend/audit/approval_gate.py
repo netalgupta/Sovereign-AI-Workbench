@@ -125,6 +125,11 @@ def _redact_content(arguments: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+# Tool names the interceptor uses for an instruction it could not resolve
+# to a real, registered tool (no SAP, DCS or send connector exists here).
+_UNWIRED_TOOLS = {"operator_requested_action", "unsupported_action"}
+
+
 class ApprovalGate:
     """Manages human approval requests, single-use tokens, and audited execution."""
 
@@ -314,42 +319,26 @@ class ApprovalGate:
         self._write_all(all_reqs)
 
         try:
-            if req.tool_name == "operator_requested_action":
-                cmd = str(req.arguments.get("command", "")).lower()
-                cat = str(req.arguments.get("category", "")).lower()
-                if cat == "file write" or any(w in cmd for w in ("draft", "report", "document", "docx")):
-                    from backend.tools.documents.draft_docx import draft_docx
-                    out_path = "storage/outputs/Hydrocracker_Unit_Inspection_Report.docx"
-                    result = draft_docx(
-                        title="Hydrocracker Unit Inspection Report",
-                        subtitle="Q3 2026 Safety & Mechanical Integrity Audit",
-                        output_path=out_path,
-                        sections=[
-                            {
-                                "heading": "1. Executive Summary & Operating Scope",
-                                "body": "This report details the operational review for Hydrocracker Unit 2 (HCU-2), covering reactor skin temperatures, catalyst bed exotherms, and emergency isolation valve response times.",
-                                "sources": ["SOP-114-Rev3_Hydrocracker_Catalyst_Changeout.docx", "Inspection_Report_CCR1_Regeneration_Cycle.pdf"],
-                                "contains_estimate": False,
-                            },
-                            {
-                                "heading": "2. Reactor Exotherm & Temperature Limits",
-                                "body": "Delta-T projections across Beds 1-3 indicate thermal stability under nominal feed rate (1,450 m³/h). Sustained ramp above 110% requires pre-activation of quench valve QFC-18.",
-                                "sources": ["Catalyst_Bed_Exotherm_Simulation.xlsx"],
-                                "contains_estimate": True,
-                            },
-                            {
-                                "heading": "3. Unverified Emergency Isolation Timings",
-                                "body": "Manual override response times for emergency depressurization valve BDV-201 require operational verification prior to restart.",
-                                "sources": [],
-                                "contains_estimate": False,
-                            },
-                        ],
-                    )
-                else:
-                    result = {
-                        "executed_action": req.effect,
-                        "status": "completed",
-                    }
+            if req.tool_name not in ("generate_deck",) and req.tool_name in _UNWIRED_TOOLS:
+                # An action with no connector in this build. Approving it
+                # RECORDS the operator's authorisation; it cannot cause the
+                # action, and must not claim it did.
+                #
+                # THIS REPLACED A FABRICATED DOCUMENT. The merged branch
+                # wrote a fixed "Hydrocracker Unit Inspection Report" here
+                # -- invented feed rate (1,450 m3/h), invented valve tags
+                # (QFC-18, BDV-201), invented sources -- for ANY approved
+                # instruction containing "draft", "report" or "document".
+                # A refinery report nobody measured, written to disk, over
+                # a signed approval record. Review rule 4: fields the
+                # system cannot know are absent, never plausible.
+                result = {
+                    "executed": False,
+                    "authorisation_recorded": True,
+                    "effect": req.effect,
+                    "reason": ("No connector in this build can carry this out. Your authorisation "
+                               "is recorded in the audit log; nothing was performed."),
+                }
             else:
                 result = call_tool(req.tool_name, args_to_use, approved=True)
         except Exception as exc:
