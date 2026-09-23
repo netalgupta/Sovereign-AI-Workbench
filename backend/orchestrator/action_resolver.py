@@ -104,9 +104,7 @@ def resolve(request: str, category: str, *, session_id: str = "default") -> Reso
             ),
         )
 
-    if is_deck_request(request):
-        return _resolve_deck(request, session_id=session_id)
-    return _resolve_document_draft(request, session_id=session_id)
+    return _resolve_output(request, session_id=session_id)
 
 
 _DECK_RE = re.compile(r"\b(pptx|powerpoint|presentation|slide\s*deck|slides)\b", re.I)
@@ -160,49 +158,78 @@ def is_deck_request(request: str) -> bool:
     return bool(_DECK_RE.search(request or ""))
 
 
-def _resolve_deck(request: str, *, session_id: str) -> ResolvedAction:
-    """Start the deck as a background job; the approval comes when it is reviewed.
+def output_kind_for(request: str) -> str:
+    """Which deliverable this request asks for: deck, xlsx, pdf or docx.
 
-    Writing, artwork, and a page-by-page review with fixes take minutes, so
-    the approval is filed by the job (deck_jobs.request_approval) once the
-    deck is finished and reviewed -- the operator approves the real slides
-    AND sees their quality report. Nothing is written until then.
+    One place, so the interceptor, the job and agent_loop's tool narrowing
+    cannot disagree about whether "build a comparison table" is a
+    spreadsheet or a Word document.
     """
-    from backend.orchestrator import deck_jobs
+    if is_deck_request(request):
+        return "deck"
+    if is_spreadsheet_request(request):
+        return "xlsx"
+    if is_pdf_request(request):
+        return "pdf"
+    return "docx"
 
-    job = deck_jobs.start(request, session_id=session_id)
+
+def _resolve_output(request: str, *, session_id: str) -> ResolvedAction:
+    """Start the deliverable as a background job; approval comes when it is ready.
+
+    Writing takes minutes on local models (and a deck is also illustrated
+    and reviewed page by page), so the approval is filed by the job once
+    the work is done -- the operator approves the real sections, sheets or
+    slides AND sees what was checked. Nothing is written until then.
+    """
+    from backend.orchestrator import output_jobs
+
+    kind = output_kind_for(request)
+    label = output_jobs.KINDS[kind][0]
+    job = output_jobs.start(request, session_id=session_id, kind=kind)
     return ResolvedAction(
         category="file write",
         executable=False,
-        effect=f'Create a presentation for: "{request.strip()}"',
-        reason="Building in the background; approval is requested when the deck has been reviewed.",
+        effect=f'Create a {label} for: "{request.strip()}"',
+        reason="Building in the background; approval is requested when it is finished and checked.",
         job_id=job.job_id,
     )
 
 
 def deck_job_reply(resolved: ResolvedAction) -> str:
-    """What chat says when a deck job starts. Shared by both chat paths."""
+    """What chat says when an output job starts. Shared by both chat paths."""
+    from backend.orchestrator import output_jobs
+
+    job = output_jobs.get(resolved.job_id or "")
+    kind = job.kind if job else "deck"
+    label = output_jobs.KINDS.get(kind, ("deliverable",))[0]
+    stages = (
+        "writing the slides from the source documents → local artwork → rendering every "
+        "page, measuring its layout and reviewing its design, fixing weak pages → your approval"
+        if kind == "deck" else
+        "finding the documents this rests on → writing it section by section → checking every "
+        "figure against those documents → your approval"
+    )
     return "\n".join([
-        "**Building your presentation in the background.**",
+        f"**Building your {label} in the background.**",
         "",
-        "Stages: writing the slides from the source documents → local artwork → "
-        "rendering every page, measuring its layout and reviewing its design, fixing weak "
-        "pages → your approval.",
+        f"Stages: {stages}.",
         "",
-        f"Job `{resolved.job_id}`. Nothing is written until you approve the finished deck.",
+        f"Job `{resolved.job_id}`. Nothing is written until you approve the finished file.",
     ])
 
 
 def deck_preview(output_path: Path, titles: list[str], citations: list[str], omitted: list[str],
-                 *, quality: dict | None = None) -> list[str]:
-    """The approval card's lines for a deck: file, slides, sources, quality."""
+                 *, quality: dict | None = None, unit: str = "slide",
+                 report: dict | None = None) -> list[str]:
+    """The approval card's lines: file, what is in it, sources, what was checked."""
     # One title per line, and only the first few. Joined into a single
     # line, a 15-slide deck produced an unreadable wall of text on the
     # one screen where a person is meant to check what they are approving.
     shown = titles[:8]
     preview = [
         f"Creates the file {output_path.name}",
-        f"{len(titles)} slide(s):",
+        f"{len(titles)} {unit}(s):",
         *[f"   {i}. {t}" for i, t in enumerate(shown, 1)],
     ]
     if len(titles) > len(shown):
@@ -211,11 +238,29 @@ def deck_preview(output_path: Path, titles: list[str], citations: list[str], omi
     if omitted:
         preview.append("Left out for lack of a source: " + "; ".join(omitted[:3]))
     if quality is not None:
-        from backend.orchestrator.deck_jobs import quality_line
+        from backend.orchestrator.output_jobs import quality_line
 
         preview.append(quality_line(quality))
+    if report:
+        preview.append(_report_line(report))
     preview.append(f"Written to {output_path.parent}")
     return preview
+
+
+def _report_line(report: dict) -> str:
+    """What was checked on a document or spreadsheet, in one line."""
+    parts = []
+    if "sections" in report:
+        parts.append(f"{report['sections']} section(s) written, every figure checked against the sources")
+        if report.get("estimates"):
+            parts.append(f"{report['estimates']} marked as containing an estimate")
+    if "sheets" in report:
+        parts.append(f"{report['sheets']} sheet(s), {report.get('rows', 0)} row(s)")
+        if report.get("emptied_cells"):
+            parts.append(f"{report['emptied_cells']} cell(s) left EMPTY: no source gives that value")
+    if report.get("dropped"):
+        parts.append(f"{len(report['dropped'])} dropped for lack of a source")
+    return "Checked: " + "; ".join(parts) if parts else "Checked: nothing to report"
 
 
 def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:

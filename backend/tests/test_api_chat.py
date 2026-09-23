@@ -199,22 +199,40 @@ def test_the_approval_modal_describes_the_action_that_was_requested():
     nobody approved -- worse than no gate at all, because the gate is
     what makes the record trustworthy.
     """
-    response = client.post(
-        "/api/chat",
-        json={
-            "message": "Draft a DOCX report on the Hassan incident and save it",
-            "session_id": "test-approval-shape",
-        },
-    )
+    from backend.orchestrator import output_jobs
+
+    request = "Draft a DOCX report on the Hassan incident and save it"
+    response = client.post("/api/chat", json={"message": request, "session_id": "test-approval-shape"})
     assert response.status_code == 200
     data = response.json()
 
-    assert data["awaiting_human_approval"] is True
-    action = data["approval_action"]
-    assert action, "a gated request must carry an approval_action"
+    # The document is written first, so chat hands back a JOB and no approval
+    # yet: an approval before the sections exist is consent for something
+    # unwritten. The approval arrives when the job has something to show.
+    job_payload = data["deck_job"]
+    assert job_payload and job_payload["kind"] == "docx"
+    assert data["awaiting_human_approval"] is False
+    assert data["approval_action"] is None
+
+    job = output_jobs.get(job_payload["job_id"])
+    job.slide_titles = ["What happened on the Hassan segment"]
+    job.citations = ["Pipeline_Incident_Report_Hassan_Segment.pdf"]
+    job._filename = "MRPL_Hassan.docx"
+    job.report = {"sections": 1, "sources": job.citations, "dropped": [], "estimates": 0}
+    job._spec = {"title": "Hassan segment incident", "subtitle": "",
+                 "sections": [{"heading": "What happened on the Hassan segment",
+                               "body": "A gasket failed at the P-HS-02 discharge flange.",
+                               "sources": job.citations, "contains_estimate": False}]}
+    output_jobs.request_approval(job)
+
+    approval_id = job.approval["id"]
+    pending = client.get("/api/approvals").json()["pending"]
+    gated = next((a for a in pending if a["request_id"] == approval_id), None)
+    assert gated, "the finished job's approval must be pending a human decision"
+    action = {**job.approval, "target": gated["arguments"]["output_path"]}
 
     # It is a FILE WRITE, and must not be labelled as a setpoint change.
-    assert action["action_type"] == "FILE_WRITE"
+    assert action["action_type"] == "file write"
     assert "setpoint" not in (action["title"] or "").lower()
 
     # The operator's own words, not a paraphrase or a substitute.
@@ -235,9 +253,6 @@ def test_the_approval_modal_describes_the_action_that_was_requested():
     # resolves to a real draft_docx call with an exact output file, and
     # the card then said "has NOT resolved a file path" directly above a
     # preview naming it. Accuracy in both directions.
-    if action["resolved_parameters"]:
-        assert action["target"] and action["target"].endswith(".docx")
-        assert action["warning"] is None
-    else:
-        assert action["target"] is None
-        assert "NOT resolved" in action["warning"]
+    assert action["executable"] is True
+    assert action["target"] and action["target"].endswith(".docx")
+    assert action["tool_name"] == "draft_docx"

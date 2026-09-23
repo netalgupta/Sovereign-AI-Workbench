@@ -1891,7 +1891,7 @@ def build_plan(body: PlanRequestBody) -> dict:
 
 # ------------------------------------------------------------------ decks
 #
-# Presentations are background jobs (orchestrator/deck_jobs.py): write,
+# Presentations are background jobs (orchestrator/output_jobs.py): write,
 # artwork, render + measure + review + fix, then an approval request
 # carrying the quality report. Chat starts them; these routes follow them.
 
@@ -1899,55 +1899,63 @@ def build_plan(body: PlanRequestBody) -> dict:
 class DeckJobRequest(BaseModel):
     request: str
     session_id: str = "default"
+    # deck | docx | pdf | xlsx. Omitted, it is read from the request's own
+    # wording, the same way chat decides.
+    kind: str | None = None
 
 
 def _deck_job_payload(job_id: str | None) -> dict | None:
     if not job_id:
         return None
-    from backend.orchestrator import deck_jobs
+    from backend.orchestrator import output_jobs
 
-    job = deck_jobs.get(job_id)
+    job = output_jobs.get(job_id)
     return job.public() if job else {"job_id": job_id, "status": "unknown"}
 
 
 @router.post("/decks")
 def start_deck(body: DeckJobRequest) -> dict:
-    """Queue a presentation. Returns at once; poll GET /api/decks/{job_id}."""
-    from backend.orchestrator import deck_jobs
+    """Queue a deliverable. Returns at once; poll GET /api/decks/{job_id}."""
+    from backend.orchestrator import output_jobs
+    from backend.orchestrator.action_resolver import output_kind_for
 
     if not body.request.strip():
         raise HTTPException(status_code=400, detail="request is empty")
-    return deck_jobs.start(body.request, session_id=body.session_id).public()
+    kind = body.kind or output_kind_for(body.request)
+    if kind not in output_jobs.KINDS:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown kind {kind!r}; expected one of {', '.join(sorted(output_jobs.KINDS))}")
+    return output_jobs.start(body.request, session_id=body.session_id, kind=kind).public()
 
 
 @router.get("/decks")
 def list_decks() -> dict:
-    from backend.orchestrator import deck_jobs
+    from backend.orchestrator import output_jobs
 
-    return {"jobs": [j.public() for j in deck_jobs.all_jobs()]}
+    return {"jobs": [j.public() for j in output_jobs.all_jobs()]}
 
 
 @router.get("/decks/{job_id}")
 def get_deck(job_id: str) -> dict:
-    from backend.orchestrator import deck_jobs
+    from backend.orchestrator import output_jobs
 
-    job = deck_jobs.get(job_id)
+    job = output_jobs.get(job_id)
     if job is None:
         # Jobs live in memory; a restart forgets them. Said, not hidden.
-        raise HTTPException(status_code=404, detail=f"No deck job {job_id} (jobs do not survive a restart).")
+        raise HTTPException(status_code=404, detail=f"No job {job_id} (jobs do not survive a restart).")
     return job.public()
 
 
 @router.post("/decks/{job_id}/approval")
 def rerequest_deck_approval(job_id: str) -> dict:
     """Ask again for a finished deck whose approval expired, without redoing it."""
-    from backend.orchestrator import deck_jobs
+    from backend.orchestrator import output_jobs
 
-    job = deck_jobs.get(job_id)
+    job = output_jobs.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"No deck job {job_id}.")
+        raise HTTPException(status_code=404, detail=f"No job {job_id}.")
     try:
-        return deck_jobs.request_approval(job)
+        return output_jobs.request_approval(job)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

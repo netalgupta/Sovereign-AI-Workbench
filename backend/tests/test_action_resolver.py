@@ -146,95 +146,6 @@ def test_spreadsheet_requests_are_detected_as_such():
         assert is_spreadsheet_request(request) is False, request
 
 
-def test_a_spreadsheet_draft_resolves_to_draft_xlsx(tmp_path, monkeypatch):
-    """The missing half: an xlsx request must resolve to the xlsx tool
-    with a real sheet structure -- not silently downgraded to a Word
-    document."""
-    import backend.orchestrator.action_resolver as resolver
-
-    class FakeStored:
-        text = "The MFI of H030SG is 3.4 g/10min."
-        source_document = "Novolen_Batch_QA_Report.pdf"
-        page_number = 5
-
-    class FakeStore:
-        def all_chunk_texts(self):
-            return [(0, "batch mfi comparison")]
-
-        def dense_search(self, embedding, top_k):
-            from backend.retrieval.grounded_retrieval import confidence_threshold
-
-            return [(0, confidence_threshold() + 0.10)]
-
-        def get_by_faiss_id(self, faiss_id):
-            return FakeStored()
-
-    monkeypatch.setattr(
-        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
-    )
-    import backend.api.state
-
-    monkeypatch.setattr(
-        backend.api.state,
-        "get_state",
-        lambda: type("S", (), {"ensure_corpus": lambda self: (FakeStore(), None)})(),
-    )
-
-    action = resolver.resolve("Draft an Excel comparison of batch MFI values", "file write")
-
-    assert action.executable is True
-    assert action.tool_name == "draft_xlsx", action.tool_name
-    assert action.arguments["output_path"].endswith(".xlsx")
-    sheet = action.arguments["sheets"][0]
-    assert "Sourced From" in sheet["headers"]
-    assert sheet["rows"], "a spreadsheet with no rows"
-    for row in sheet["rows"]:
-        assert row["cells"], "a row with no cells"
-    assert action.preview and not any("{" in line for line in action.preview)
-
-
-def test_a_word_draft_still_resolves_to_draft_docx(tmp_path, monkeypatch):
-    """The docx path must not have moved while gaining an xlsx sibling."""
-    import backend.orchestrator.action_resolver as resolver
-
-    class FakeStored:
-        text = "The inspection found a catalyst changeout was due."
-        source_document = "Inspection_Report.pdf"
-        page_number = 2
-
-    class FakeStore:
-        def all_chunk_texts(self):
-            return [(0, "inspection findings")]
-
-        def dense_search(self, embedding, top_k):
-            from backend.retrieval.grounded_retrieval import confidence_threshold
-
-            return [(0, confidence_threshold() + 0.10)]
-
-        def get_by_faiss_id(self, faiss_id):
-            return FakeStored()
-
-    monkeypatch.setattr(
-        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
-    )
-    import backend.api.state
-
-    monkeypatch.setattr(
-        backend.api.state,
-        "get_state",
-        lambda: type("S", (), {"ensure_corpus": lambda self: (FakeStore(), None)})(),
-    )
-
-    action = resolver.resolve(
-        "Draft an approval note on the inspection findings and save it", "file write"
-    )
-
-    assert action.executable is True
-    assert action.tool_name == "draft_docx", action.tool_name
-    assert action.arguments["output_path"].endswith(".docx")
-    assert action.arguments["sections"]
-
-
 def test_pdf_requests_are_detected_as_such():
     """A PDF export or drafting request must be recognized so it resolves to generate_pdf."""
     for request in (
@@ -249,54 +160,6 @@ def test_pdf_requests_are_detected_as_such():
         "Write a Word memo about the CCR1 findings",
     ):
         assert is_pdf_request(request) is False, request
-
-
-def test_a_pdf_draft_resolves_to_generate_pdf(tmp_path, monkeypatch):
-    """An intercepted PDF request must resolve to generate_pdf with proper sections."""
-    import backend.orchestrator.action_resolver as resolver
-
-    class FakeStored:
-        text = "The inspection found a catalyst changeout was due."
-        source_document = "Inspection_Report.pdf"
-        page_number = 2
-
-    class FakeStore:
-        def all_chunk_texts(self):
-            return [(0, "inspection findings")]
-
-        def dense_search(self, embedding, top_k):
-            from backend.retrieval.grounded_retrieval import confidence_threshold
-
-            return [(0, confidence_threshold() + 0.10)]
-
-        def get_by_faiss_id(self, faiss_id):
-            return FakeStored()
-
-    monkeypatch.setattr(
-        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
-    )
-    import backend.api.state
-
-    monkeypatch.setattr(
-        backend.api.state,
-        "get_state",
-        lambda: type("S", (), {"ensure_corpus": lambda self: (FakeStore(), None)})(),
-    )
-
-    action = resolver.resolve(
-        "Draft a PDF report on the inspection findings and save it", "file write"
-    )
-
-    assert action.executable is True
-    assert action.tool_name == "generate_pdf", action.tool_name
-    assert action.arguments["output_path"].endswith(".pdf")
-    assert action.arguments["sections"]
-    assert action.preview and not any("{" in line for line in action.preview)
-
-
-# ---------------------------------------------------------------------
-# A drafted document is held to a stricter standard than a chat answer.
-# ---------------------------------------------------------------------
 
 
 def test_a_drafted_section_must_earn_its_place_individually():
@@ -432,40 +295,41 @@ def test_the_streaming_approval_payload_describes_the_pending_action():
     assert action["reason"]
 
 
-def test_both_paths_describe_the_same_request_the_same_way(monkeypatch):
-    """Two implementations of one decision is how they drift. The
-    non-streaming path resolves through action_resolver; so must this
-    one."""
+def test_both_paths_start_the_same_job_for_the_same_request(monkeypatch):
+    """Two implementations of one decision is how they drift. Both chat
+    paths resolve through action_resolver, so a drafting request must
+    start ONE job of the same kind on either -- and neither may file an
+    approval before the work exists."""
     import os
 
     os.environ["WORKBENCH_TRACE"] = "off"
-    from backend.orchestrator import action_resolver as resolver
+    from backend.orchestrator import output_jobs
     from backend.orchestrator.agent_loop import run_turn
     from backend.orchestrator.graph import run_agent_turn
 
-    class FakeStored:
-        text = "CCR1 inspection findings show catalyst regeneration is nominal."
-        source_document = "CCR1_Inspection.pdf"
-        page_number = 1
+    started = []
 
-    monkeypatch.setattr(
-        resolver, "_individually_relevant_chunks", lambda store, req: [FakeStored()]
-    )
+    def fake_start(request, session_id="default", kind="deck"):
+        started.append(kind)
+        job = output_jobs.OutputJob(job_id=f"{kind}-{len(started)}", request=request,
+                                    session_id=session_id, kind=kind)
+        output_jobs._jobs[job.job_id] = job
+        return job
 
+    monkeypatch.setattr(output_jobs, "start", fake_start)
     request = "Draft an approval note on the CCR1 inspection findings and save it"
 
     events = list(run_turn(request, session_id="t-both-a"))
-    streamed = [e for e in events if e["type"] == "approval_required"][0]["action"]
+    streamed = [e for e in events if e["type"] == "deck_job"][0]["job"]
+    assert not [e for e in events if e["type"] == "approval_required"], (
+        "an approval before the document exists is consent for something unwritten")
 
     state = run_agent_turn(request, "t-both-b")
-    assert state.awaiting_human_approval
 
-    from backend.audit.approval_gate import ApprovalGate
-
-    graph_req = ApprovalGate().get(state.final_output_path)
-
-    assert streamed["tool_name"] == graph_req.tool_name == "draft_docx"
-    assert streamed["executable"] is True
+    assert started == ["docx", "docx"]
+    assert streamed["kind"] == "docx"
+    assert state.deck_job_id == "docx-2"
+    assert state.awaiting_human_approval is False
 
 
 # ---------------------------------------------------------------------

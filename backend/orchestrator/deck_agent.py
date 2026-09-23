@@ -395,7 +395,7 @@ Reply with ONLY this JSON object:
     }}
   ]
 }}"""
-    data = _ask_json(prompt, model_id=writer)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer))
     if not isinstance(data, dict) or not isinstance(data.get("sections"), list):
         return None
     # A model that names a type in its own words (or copies one out of a
@@ -449,7 +449,7 @@ Rules, and they are strict:
 
 Reply with ONLY this JSON object:
 {{"slides": [{{"type": ..., "title": ..., "sources": ["S1"], ...type fields...}}]}}"""
-    data = _ask_json(prompt, model_id=writer)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer))
     if not isinstance(data, dict):
         return None
     slides = data.get("slides")
@@ -750,6 +750,18 @@ def _chart_from_list(slide: dict) -> dict:
 DECK_LARGE_SOURCE_CHARS = 9000
 WRITER_SMALL = "reasoning-model"
 WRITER_LARGE = "deck-writer-large"
+
+# How long one call to each writer may take before it is abandoned.
+# MEASURED on the 8 GB dev card: the 7b runs entirely on the GPU and
+# answers a section in well under a minute, but the 14b is 9 GB, so Ollama
+# splits it across GPU and CPU and a single planning call at num_ctx 12288
+# ran past the 300 s default -- which killed a whole deck job at its first
+# step. A background deck can wait; a wrong answer or a dead job cannot.
+WRITER_TIMEOUTS = {WRITER_SMALL: 300, WRITER_LARGE: 1800}
+
+
+def writer_timeout(writer: str) -> int:
+    return WRITER_TIMEOUTS.get(writer, 300)
 
 
 def source_chars(docs: list[dict]) -> int:

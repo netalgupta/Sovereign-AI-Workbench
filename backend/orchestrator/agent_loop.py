@@ -978,7 +978,7 @@ def _answer(
         action_kind = classify_action_request(request) or "operator action"
         resolved = resolve_action(request, action_kind, session_id=session_id)
         if resolved.job_id:
-            from backend.orchestrator import deck_jobs
+            from backend.orchestrator import output_jobs as deck_jobs
             from backend.orchestrator.action_resolver import deck_job_reply
 
             reply = deck_job_reply(resolved)

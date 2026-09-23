@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.orchestrator import deck_jobs as J
+from backend.orchestrator import output_jobs as J
 from backend.tools.generation.deck import improve as I
 from backend.tools.generation.deck import qa
 
@@ -73,7 +73,7 @@ def stubs(tmp_path, monkeypatch):
 
 
 def test_a_job_writes_nothing_and_asks_for_the_reviewed_deck(stubs, tmp_path):
-    job = J.run(J.DeckJob(job_id="deck-t1", request="Make a presentation on CCR-1 cycle 18",
+    job = J.run(J.OutputJob(job_id="deck-t1", request="Make a presentation on CCR-1 cycle 18",
                           session_id="s"))
     assert job.status == "awaiting_approval", job.error
     assert not (tmp_path / "outputs").exists(), "nothing is written before approval"
@@ -93,20 +93,20 @@ def test_a_job_writes_nothing_and_asks_for_the_reviewed_deck(stubs, tmp_path):
 def test_the_approved_call_renders_exactly_the_reviewed_deck(stubs, tmp_path):
     from backend.orchestrator.slide_agent import generate_deck
 
-    job = J.run(J.DeckJob(job_id="deck-t2", request="Make a presentation on CCR-1", session_id="s"))
+    job = J.run(J.OutputJob(job_id="deck-t2", request="Make a presentation on CCR-1", session_id="s"))
     req = stubs["gate"]().get(job.approval["id"])
     out = generate_deck(**req.arguments)
     assert Path(out["deck_path"]).exists() and out["slide_count"] >= 2
 
 
 def test_a_topic_the_corpus_does_not_cover_is_refused_with_no_approval(stubs):
-    job = J.run(J.DeckJob(job_id="deck-t3", request="Make a presentation on Diwali recipes", session_id="s"))
+    job = J.run(J.OutputJob(job_id="deck-t3", request="Make a presentation on Diwali recipes", session_id="s"))
     assert job.status == "refused" and "do not cover" in job.error
     assert job.approval is None
 
 
 def test_an_expired_approval_can_be_asked_for_again_without_redoing_the_job(stubs):
-    job = J.run(J.DeckJob(job_id="deck-t4", request="Make a presentation on CCR-1", session_id="s"))
+    job = J.run(J.OutputJob(job_id="deck-t4", request="Make a presentation on CCR-1", session_id="s"))
     first = job.approval["id"]
     again = J.request_approval(job)
     assert again["id"] != first
@@ -146,11 +146,12 @@ def test_a_deck_request_in_chat_starts_a_job_and_files_no_approval_yet(monkeypat
     from backend.orchestrator import action_resolver
 
     started = []
-    monkeypatch.setattr(J, "start", lambda request, session_id="default": started.append(request)
-                        or J.DeckJob(job_id="deck-chat", request=request, session_id=session_id))
+    monkeypatch.setattr(J, "start", lambda request, session_id="default", kind="deck":
+                        started.append((request, kind))
+                        or J.OutputJob(job_id="deck-chat", request=request, session_id=session_id, kind=kind))
     resolved = action_resolver.resolve("Create a presentation on the Hassan incident", "file write")
     assert resolved.job_id == "deck-chat" and resolved.executable is False
-    assert started == ["Create a presentation on the Hassan incident"]
+    assert started == [("Create a presentation on the Hassan incident", "deck")]
     assert "deck-chat" in action_resolver.deck_job_reply(resolved)
 
 
@@ -159,8 +160,8 @@ def test_the_decks_api(monkeypatch):
 
     from backend.main import app
 
-    monkeypatch.setattr(J, "start", lambda request, session_id="default": J._jobs.setdefault(
-        "deck-api", J.DeckJob(job_id="deck-api", request=request, session_id=session_id)))
+    monkeypatch.setattr(J, "start", lambda request, session_id="default", kind="deck": J._jobs.setdefault(
+        "deck-api", J.OutputJob(job_id="deck-api", request=request, session_id=session_id, kind=kind)))
     client = TestClient(app)
     started = client.post("/api/decks", json={"request": "Make a presentation on CCR-1"}).json()
     assert started["job_id"] == "deck-api" and started["status"] == "queued"
@@ -255,3 +256,110 @@ def test_a_quantized_reviewer_that_does_not_fit_is_refused_not_returned_broken(t
     with pytest.raises(LV.LocalVisionUnavailable, match="cannot run from system RAM"):
         LV.load("v")
     assert LV.placement_report() is None, "nothing broken is left loaded"
+
+
+# ── documents and spreadsheets go through the same pipeline ─────────────────
+
+
+DOC_SPEC = {
+    "title": "CCR-1 regeneration cycle 18",
+    "subtitle": "Findings and actions",
+    "sections": [{"heading": "Cycle 18 ran six hours long", "body": "Cycle 18 took 34 hours "
+                  "against a target of 28 hours, six hours beyond plan.", "sources": ["S1"],
+                  "contains_estimate": False}],
+    "documents": ["Inspection_Report_CCR1.pdf"],
+    "dropped_sections": ["Costs: these figures are in no source document: 4200"],
+    "writer": "reasoning-model",
+    "topic": "ccr-1 regeneration cycle 18",
+}
+SHEET_SPEC = {
+    "title": "Batch QA",
+    "sheets": [{"sheet_name": "Batches", "headers": ["Grade", "MFI"],
+                "rows": [{"cells": ["H030SG", "3.4"], "sources": ["S1"], "is_unsourced": False},
+                         {"cells": ["H110F", ""], "sources": ["S1"], "is_unsourced": False}],
+                "emptied_cells": 1}],
+    "documents": ["Novolen_Batch_QA_Report.pdf"],
+    "dropped_sheets": [],
+    "writer": "reasoning-model",
+    "emptied_cells": 1,
+}
+
+
+@pytest.fixture
+def doc_stubs(tmp_path, monkeypatch):
+    from backend.audit import approval_gate
+    from backend.orchestrator import action_resolver, document_agent
+
+    J.reset_for_tests()
+    monkeypatch.setattr(document_agent, "build_document_spec", lambda *a, **k: DOC_SPEC)
+    monkeypatch.setattr(document_agent, "build_spreadsheet_spec", lambda *a, **k: SHEET_SPEC)
+
+    class Gate(approval_gate.ApprovalGate):
+        def __init__(self, *a, **k):
+            super().__init__(requests_file=tmp_path / "requests.jsonl")
+
+    monkeypatch.setattr(approval_gate, "ApprovalGate", Gate)
+    monkeypatch.setattr(action_resolver, "OUTPUT_DIR", tmp_path / "outputs")
+    import backend.api.state as state
+
+    monkeypatch.setattr(state, "get_state", lambda: type("S", (), {
+        "ensure_corpus": lambda self: (object(), [])})())
+    return Gate
+
+
+@pytest.mark.parametrize("kind, tool, suffix", [
+    ("docx", "draft_docx", ".docx"),
+    ("pdf", "generate_pdf", ".pdf"),
+])
+def test_a_document_job_asks_for_approval_of_what_it_wrote(doc_stubs, kind, tool, suffix):
+    job = J.run(J.OutputJob(job_id=f"{kind}-t", request="Draft a report on CCR-1 cycle 18",
+                            session_id="s", kind=kind))
+    assert job.status == "awaiting_approval", job.error
+    req = doc_stubs().get(job.approval["id"])
+    assert req.tool_name == tool
+    assert req.arguments["output_path"].endswith(suffix)
+    section = req.arguments["sections"][0]
+    # Source IDS are for the model; the file prints DOCUMENT NAMES.
+    assert section["sources"] == ["Inspection_Report_CCR1.pdf"]
+    assert "34 hours" in section["body"]
+    assert any("1 section(s) written" in line for line in job.approval["preview"])
+    assert any("1 dropped for lack of a source" in line for line in job.approval["preview"])
+
+
+def test_a_spreadsheet_job_keeps_unsourced_cells_empty(doc_stubs):
+    job = J.run(J.OutputJob(job_id="xlsx-t", request="Build an Excel comparison of batch MFI",
+                            session_id="s", kind="xlsx"))
+    assert job.status == "awaiting_approval", job.error
+    req = doc_stubs().get(job.approval["id"])
+    assert req.tool_name == "draft_xlsx"
+    assert req.arguments["output_path"].endswith(".xlsx")
+    rows = req.arguments["sheets"][0]["rows"]
+    assert [r["cells"] for r in rows] == [["H030SG", "3.4"], ["H110F", ""]]
+    assert any("1 cell(s) left EMPTY" in line for line in job.approval["preview"])
+
+
+def test_the_approved_document_call_writes_the_file(doc_stubs, tmp_path):
+    from backend.tools.documents.draft_docx import draft_docx
+
+    job = J.run(J.OutputJob(job_id="docx-w", request="Draft a report on CCR-1", session_id="s", kind="docx"))
+    args = doc_stubs().get(job.approval["id"]).arguments
+    result = draft_docx(**args)
+    assert Path(result.file_path).exists()
+
+
+@pytest.mark.parametrize("request_text, kind", [
+    ("Create a presentation on the CCR-1 findings", "deck"),
+    ("Build an Excel comparison table of batch MFI values", "xlsx"),
+    ("Draft a PDF report on the Hassan incident", "pdf"),
+    ("Draft an approval note on the inspection findings and save it", "docx"),
+])
+def test_the_request_decides_the_deliverable(request_text, kind, monkeypatch):
+    from backend.orchestrator import action_resolver
+
+    assert action_resolver.output_kind_for(request_text) == kind
+    started = []
+    monkeypatch.setattr(J, "start", lambda request, session_id="default", kind="deck":
+                        started.append(kind)
+                        or J.OutputJob(job_id=f"{kind}-x", request=request, session_id=session_id, kind=kind))
+    resolved = action_resolver.resolve(request_text, "file write")
+    assert started == [kind] and resolved.job_id == f"{kind}-x"
