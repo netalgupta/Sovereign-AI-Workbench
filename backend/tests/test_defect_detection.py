@@ -1,4 +1,9 @@
-"""Tests for row 7's defect/anomaly detection (OCR-box based today).
+"""Tests for row 7's OCR text-region overlay (DESCOPED — not defect detection).
+
+Today `detect_defects` returns where PRINTED TEXT is on an image, never
+defect/anomaly findings. These tests exist to hold the descope in
+place: every region is `kind="text_region"`, severity is always "low",
+and nothing about the output may read as a defect classification.
 
 Skips honestly when the local model copies aren't present (same pattern
 as test_ocr_printed.py) rather than mocking OCR output — the point of
@@ -45,20 +50,22 @@ def test_missing_file_raises_exact_message():
 @pytest.mark.skipif(not os.path.exists(CORPUS_IMAGE), reason="test corpus image not present")
 def test_detections_contract_shape_on_the_scanned_checklist():
     """The overlay's contract (contract.js): every detection has id, label,
-    confidence, box{xmin,ymin,xmax,ymax}, severity — and the OCR boxes are
-    real pixel regions on the deliberately noisy scanned checklist."""
+    confidence, box{xmin,ymin,xmax,ymax}, severity — the result carries
+    kind='text_region' — and the OCR regions are real pixel boxes on the
+    deliberately noisy scanned checklist."""
     from backend.tools.vision.defect_detection import detect_defects
 
     result = detect_defects(CORPUS_IMAGE)
 
     assert result.source == "ocr-printed"
+    assert result.kind == "text_region"
     assert len(result.detections) > 0
 
     for det in result.detections:
         assert det.id.startswith("det-ocr-")
         assert det.label
         assert 0.0 <= det.confidence <= 1.0
-        assert det.severity in ("low", "medium", "high", "critical")
+        assert det.severity == "low"
         box = det.box
         assert box.xmin <= box.xmax
         assert box.ymin <= box.ymax
@@ -122,8 +129,13 @@ def test_ocr_regions_are_not_presented_as_defects():
     detected defects."""
     from backend.tools import catalog  # noqa: F401
     from backend.tools.registry import get_tool
-    from backend.tools.vision.defect_detection import _severity_for
+    from backend.tools.vision.defect_detection import (
+        DefectDetectionResult,
+        _severity_for,
+    )
 
     assert {_severity_for(c) for c in (0.1, 0.5, 0.8, 0.99)} == {"low"}
+    assert DefectDetectionResult(image_url="", source="ocr-printed", detections=[]).kind == "text_region"
     desc = get_tool("detect_defects").description
     assert "NOT A DEFECT DETECTOR" in desc
+    assert "defect detection is not available" in desc

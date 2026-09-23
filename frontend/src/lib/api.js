@@ -172,10 +172,11 @@ export async function getToolsMetadata() {
 }
 
 /**
- * Route an uploaded attachment through the OCR/defect pipeline.
- * Images -> detect_defects (row 7: overlay-ready boxes labeled from OCR,
- * fully offline). Audio -> transcribe_voice_note. Other types (PDF/DOCX/
- * XLSX) are handled solely by corpus ingestion, so no tool call is needed.
+ * Route an uploaded attachment through the OCR/transcription pipeline.
+ * Images -> detect_defects (row 7, DESCOPED: OCR text-region overlay
+ * boxes only — never defect findings; fully offline). Audio ->
+ * transcribe_voice_note. Other types (PDF/DOCX/XLSX) are handled solely
+ * by corpus ingestion, so no tool call is needed.
  *
  * @param {{ name: string }} item
  * @param {string} savedPath - server-side path returned by the upload

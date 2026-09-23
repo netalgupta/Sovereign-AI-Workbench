@@ -254,6 +254,8 @@ export function SettingsPage() {
   const [models, setModels] = useState(INITIAL_MODELS)
   const [systemInfo, setSystemInfo] = useState(INITIAL_SYSTEM_INFO)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [rbacTiers, setRbacTiers] = useState(RBAC_TIERS)
+  const [rbacCategories, setRbacCategories] = useState(RBAC_CATEGORIES)
 
   // Add Model Form State
   const [formData, setFormData] = useState({
@@ -311,6 +313,20 @@ export function SettingsPage() {
         }
       }
     } catch {}
+
+    try {
+      // 3. Fetch live RBAC matrix from backend
+      const rbacRes = await fetch('/api/rbac/tiers')
+      if (rbacRes.ok) {
+        const rbacData = await rbacRes.json()
+        if (Array.isArray(rbacData.tiers)) {
+          setRbacTiers(rbacData.tiers)
+        }
+        if (Array.isArray(rbacData.categories)) {
+          setRbacCategories(rbacData.categories)
+        }
+      }
+    } catch {}
     setIsRefreshing(false)
   }
 
@@ -354,10 +370,25 @@ export function SettingsPage() {
         const modelsRes = await fetch('/api/models')
         if (modelsRes.ok && active) {
           const modelsData = await modelsRes.json()
-          if (modelsData.registry && modelsData.auxiliary) {
+          if (Array.isArray(modelsData.models)) {
+            setModels(modelsData.models)
+          } else if (modelsData.registry && modelsData.auxiliary) {
             setModels([...modelsData.registry, ...modelsData.auxiliary])
           } else if (Array.isArray(modelsData)) {
             setModels(modelsData)
+          }
+        }
+      } catch {}
+
+      try {
+        const rbacRes = await fetch('/api/rbac/tiers')
+        if (rbacRes.ok && active) {
+          const rbacData = await rbacRes.json()
+          if (Array.isArray(rbacData.tiers)) {
+            setRbacTiers(rbacData.tiers)
+          }
+          if (Array.isArray(rbacData.categories)) {
+            setRbacCategories(rbacData.categories)
           }
         }
       } catch {}
@@ -635,7 +666,22 @@ export function SettingsPage() {
                           </span>
                         </td>
                         <td className="py-3 px-4 font-mono font-medium" style={{ color: 'var(--color-text)' }}>
-                          {m.model}
+                          <div>{m.model}</div>
+                          {m.provenance && (
+                            <div className="text-[10px] font-sans font-normal mt-0.5 flex items-center gap-1.5 flex-wrap" style={{ color: 'var(--color-text-muted)' }}>
+                              <span
+                                className="px-1.5 py-0.2 rounded text-[9px] font-semibold tracking-wide"
+                                style={{
+                                  background: 'var(--color-overlay)',
+                                  border: '1px solid var(--color-border)',
+                                  color: 'var(--color-text)',
+                                }}
+                              >
+                                {m.provenance.license}
+                              </span>
+                              <span>{m.provenance.organization}</span>
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex flex-wrap gap-1">
@@ -652,6 +698,16 @@ export function SettingsPage() {
                               </span>
                             ))}
                           </div>
+                          {m.provenance?.air_gap_attestation && (
+                            <div
+                              className="text-[9px] font-sans font-medium mt-1 inline-flex items-center gap-1"
+                              style={{ color: 'var(--color-success)' }}
+                              title={m.provenance.air_gap_attestation}
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-success)' }} />
+                              Air-Gapped Sovereign
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-center font-mono text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
                           {m.vram_usage}
@@ -866,7 +922,7 @@ export function SettingsPage() {
                     }}
                   >
                     <th className="py-2.5 px-4 w-64">Role Tier &amp; Scope</th>
-                    {RBAC_CATEGORIES.map((cat) => (
+                    {rbacCategories.map((cat) => (
                       <th key={cat.id} className="py-2.5 px-3 text-center">
                         {cat.label}
                       </th>
@@ -874,9 +930,9 @@ export function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
-                  {RBAC_TIERS.map((tier) => (
+                  {rbacTiers.map((tier) => (
                     <tr
-                      key={tier.role}
+                      key={tier.role || tier.role_id}
                       className="transition-fast hover:bg-[var(--color-surface-hover)]"
                     >
                       <td className="py-3 px-4">
@@ -887,8 +943,8 @@ export function SettingsPage() {
                           {tier.description}
                         </div>
                       </td>
-                      {RBAC_CATEGORIES.map((cat) => {
-                        const hasAccess = tier.permissions[cat.id]
+                      {rbacCategories.map((cat) => {
+                        const hasAccess = tier.permissions?.[cat.id]
                         return (
                           <td key={cat.id} className="py-3 px-3 text-center">
                             {hasAccess ? (

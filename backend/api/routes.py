@@ -1401,12 +1401,27 @@ def _get_corpus_data() -> dict:
 
 
 @router.get("/corpus")
-def get_corpus(response: Response) -> dict:
+def get_corpus(response: Response, role: str | None = Query(None, description="Role tier to filter visibility")) -> dict:
     """Native corpus endpoint — sets no-cache headers and returns corpus data."""
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    return _get_corpus_data()
+    data = _get_corpus_data()
+    if role:
+        from backend.auth.rbac import filter_corpus_tree
+        filtered_tree, filtered_dirs, filtered_sources = filter_corpus_tree(
+            role, data["tree"], data["directories"], data["sources"]
+        )
+        data = {
+            **data,
+            "tree": filtered_tree,
+            "directories": filtered_dirs,
+            "sources": filtered_sources,
+            "count": len(filtered_sources),
+            "corpusCount": len(filtered_sources),
+            "role": role,
+        }
+    return data
 
 
 
@@ -2054,6 +2069,7 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+    role: str | None = None
 
 
 @router.post("/search")
@@ -2065,14 +2081,26 @@ def search(body: SearchRequest) -> dict:
     before that gate was fixed it refused 0 of 16 questions including
     ones about Pride and Prejudice.
     """
+    from backend.auth.rbac import filter_chunks_by_role
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
     state = get_state()
     store, _chunks = state.ensure_corpus()
     result = retrieve_with_grounding_check(store, body.query, top_k=body.top_k)
+
+    chunks = result.chunks
+    if body.role:
+        chunks = filter_chunks_by_role(body.role, chunks)
+        if not chunks and result.chunks:
+            return {
+                "found": False,
+                "reason": f"Access restricted: retrieved passages belong to categories not permitted for role '{body.role}'.",
+                "chunks": [],
+            }
+
     return {
-        "found": result.found,
-        "reason": result.reason,
+        "found": result.found and len(chunks) > 0,
+        "reason": result.reason if chunks else "No accessible passages found",
         "chunks": [
             {
                 "text": c.text,
@@ -2080,7 +2108,7 @@ def search(body: SearchRequest) -> dict:
                 "page_number": c.page_number,
                 "score": c.score,
             }
-            for c in result.chunks
+            for c in chunks
         ],
     }
 
@@ -2396,6 +2424,8 @@ def list_models() -> dict:
         else:
             status, detail = "not_pulled", f"Run: ollama pull {tag}"
 
+        from backend.models.provenance import get_model_provenance
+
         models.append({
             "id": model_id,
             "backend": cfg.backend,
@@ -2411,6 +2441,7 @@ def list_models() -> dict:
             ),
             "parameter_size": (entry.get("details") or {}).get("parameter_size") if entry else None,
             "quantization": (entry.get("details") or {}).get("quantization_level") if entry else None,
+            "provenance": get_model_provenance(model_id),
         })
 
     return {
@@ -2421,6 +2452,22 @@ def list_models() -> dict:
         "available_count": sum(1 for m in models if m["status"] == "available"),
         "missing": [m["model"] for m in models if m["status"] == "not_pulled"],
     }
+
+
+@router.get("/models/provenance")
+def get_model_provenance_ledger() -> dict:
+    """Full chain-of-custody model provenance ledger (TOOLS.md row 47)."""
+    from backend.models.provenance import get_all_provenance
+
+    return {"ledger": get_all_provenance()}
+
+
+@router.get("/rbac/tiers")
+def get_rbac_matrix() -> dict:
+    """Role-Based Access Control matrix and categories (TOOLS.md row 46)."""
+    from backend.auth.rbac import get_rbac_manifest
+
+    return get_rbac_manifest()
 
 
 @router.get("/system-info")

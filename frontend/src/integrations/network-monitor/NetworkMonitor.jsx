@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Shield, ShieldAlert, Cpu, HardDrive, Wifi, WifiOff, ArrowUpRight } from 'lucide-react'
+import {
+  SECURE,
+  DANGER,
+  UNKNOWN,
+  deriveSecurityState,
+} from './security-state.js'
 
 // Poll interval matches the documented backend contract (backend/main.py):
 // "The frontend polls /api/network/status about once a second." There is no
@@ -35,9 +41,7 @@ function fmtElapsed(totalSeconds) {
 // the ALARM is driven ONLY by `externalCount`, which is this application's
 // process tree. `hostExternalCount` is the whole machine (browser, IDE, OS)
 // and is shown as clearly-labelled context — it must never drive the alarm.
-const SECURE = '#10b981'
-const DANGER = '#ef4444'
-const UNKNOWN = '#f59e0b'
+// SECURE/DANGER/UNKNOWN + deriveSecurityState come from security-state.js.
 
 /**
  * Real NetworkMonitor — bar (chat footer) and full (/monitor) variants.
@@ -90,22 +94,15 @@ export default function NetworkMonitor({
     }
   }, [])
 
-  const live = Boolean(data) && data.scope === 'application'
-  const extApp = live && typeof data.externalCount === 'number' ? data.externalCount : null
-  const hostExt = live && typeof data.hostExternalCount === 'number' ? data.hostExternalCount : null
-  const hostNote = live ? data.hostNote || '' : ''
+  // Alarm semantics per CARD 07 (see also backend/audit/network_monitor.py):
+  // the ALARM is driven ONLY by `externalCount`, which is this application's
+  // process tree. `hostExternalCount` is the whole machine (browser, IDE, OS)
+  // and is shown as clearly-labelled context — it must never drive the alarm.
+  // The derivation lives in security-state.js — the exact pure module the
+  // offline `node --test` proves, since the frontend has no DOM test runner.
+  const { extApp, hostExt, hostNote, security, isSecure, dotColor, headline, statusPillColor } =
+    deriveSecurityState({ data, error })
 
-  // Order matters: an errored poll means we can no longer attest to the
-  // last successful reading, so the stale data is NOT shown as green.
-  const security = error
-    ? 'unreachable'
-    : !live || extApp === null
-    ? 'checking'
-    : extApp > 0
-    ? 'external_detected'
-    : 'secure'
-
-  const isSecure = security === 'secure'
   const conns = (error ? [] : data?.connections || propConnections).map(normalizeConn)
   const metrics = error ? null : data?.metrics || propMetrics || null
   const elapsedText =
@@ -115,20 +112,6 @@ export default function NetworkMonitor({
     if (onViewFullMonitor) onViewFullMonitor()
     else navigate('/monitor')
   }
-
-  const dotColor = isSecure
-    ? SECURE
-    : security === 'external_detected'
-    ? DANGER
-    : UNKNOWN
-  const headline =
-    security === 'external_detected'
-      ? `ALERT: External Traffic — ${extApp} external connection${extApp === 1 ? '' : 's'}`
-      : isSecure
-      ? 'Air-Gap Secure — 0 external connections'
-      : security === 'unreachable'
-      ? 'Monitor not connected — backend not running'
-      : 'Checking connection…'
 
   // ── BAR (persistent chat footer) ─────────────────────────────────────────
   if (mode === 'bar') {
@@ -189,11 +172,6 @@ export default function NetworkMonitor({
   }
 
   // ── FULL (/monitor) ──────────────────────────────────────────────────────
-  const statusPillColor = isSecure
-    ? SECURE
-    : security === 'external_detected'
-    ? DANGER
-    : UNKNOWN
   const externalConns = conns.filter((c) => c.is_external)
 
   return (

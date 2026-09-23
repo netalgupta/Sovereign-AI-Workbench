@@ -12,10 +12,8 @@ export function InlineMiniGraph({
   target = '',
   title = 'Graph Traversal',
 }) {
-  // If no nodes provided, render nothing
-  if (!nodes || nodes.length === 0) return null
-
-  // Layout 2 to 7 nodes in a compact viewbox (width 280, height 100)
+  // If no nodes provided, render nothing (after the hook, so the hook
+  // order is stable across renders either way).
   const layout = useMemo(() => {
     const W = 280
     const H = 100
@@ -88,6 +86,9 @@ export function InlineMiniGraph({
 
     return { nodes: positionedNodes, links }
   }, [nodes, relationships, target])
+
+  // If no nodes were provided, render nothing.
+  if (!nodes || nodes.length === 0) return null
 
   return (
     <div

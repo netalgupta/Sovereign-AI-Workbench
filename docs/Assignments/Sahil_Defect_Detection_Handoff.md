@@ -11,23 +11,51 @@ knowingly rather than discover it three days in.
 
 ---
 
-## What the deliverable is
+## DECISION (2026-09-19) — Option A: DESCOPE
 
-A tool that takes an inspection photograph and returns bounding boxes
-with a class and a confidence, plus the viewer that draws them
-(FRONTEND.md §3.14). Registered in the tool registry like every other
-tool, so the orchestrator can reach it and `/api/tools` lists it.
+**Row 7 status is now `not started (OCR text-region overlay only)`.**
+
+The code never detected a defect: it boxed where the printed text is.
+Presenting those boxes as defect/anomaly findings is exactly what a
+judge would catch ("what's wrong here?" on a corroded flange → nameplate
+text). So the row no longer claims defect detection:
+
+- The registered tool `detect_defects` is NOT a defect detector. It
+  returns OCR text-region overlay boxes — `kind: "text_region"`,
+  severity always `"low"` (OCR confidence is transcription confidence,
+  not a defect severity). Test `test_ocr_regions_are_not_presented_as_defects`
+  holds this in place.
+- The class/registration/overlay copy no longer uses defect vocabulary.
+- The chat, asked to find defects in a photo, says detection is not
+  available.
+- A real YOLOv8 detector is **not started**. If it is ever built, it
+  lands behind this same output contract and the three hazards below
+  still govern that upgrade.
+
+This implements the "argument for NOT building it" at the end of this
+document; it was the right call and is now made, not pending.
+
+---
+
+## What the deliverable is (post-descope)
+
+An **OCR text-region overlay**: a tool that takes an image and returns
+bounding boxes over where printed text is, plus the viewer that draws
+them (FRONTEND.md §3.14). It is registered in the tool registry like any
+other tool, so `/api/tools` lists it, and it is fully offline. It is
+deliberately NOT a defect/anomaly detector — see the DECISION section.
 
 ```python
 # backend/tools/vision/defect_detection.py
-def detect_defects(image_path: str, min_confidence: float = 0.35) -> DefectResult
+def detect_defects(image_path: str) -> DefectDetectionResult
 ```
 
-`DefectResult` should carry, per detection: `label`, `confidence`,
-`bbox` as `(x_min, y_min, x_max, y_max)` in pixels. Match
-`OCRResult`/`OCRLine` in `backend/tools/vision/ocr_printed.py` — same
-shape, same conventions, so the overlay can render OCR boxes and defect
-boxes with one component.
+`DefectDetectionResult` carries, per detection: `label` (the recognized
+text), `confidence` (OCR transcription confidence), `box` as
+`{xmin, ymin, xmax, ymax}` in pixels, `severity` (always `"low"`), and
+`kind` (`"text_region"`). Match `OCRResult`/`OCRLine` in
+`backend/tools/vision/ocr_printed.py` — same shape, same conventions,
+so a future real detector can render through the same overlay component.
 
 ---
 
@@ -142,12 +170,14 @@ CLAUDE.md's demo-day rule says to protect 🔴 first:
   checklist. That gives you a working annotated-image viewer with no
   model risk at all.
 
-**Recommendation: build the overlay against OCR boxes first.** It is the
-part a judge sees, it has no offline or accuracy hazard, and it makes
-the detection model a drop-in later — same shape, same renderer. Then
-decide on YOLOv8 with the network monitor already finished.
+**Decision taken (2026-09-19): build the overlay against OCR boxes and
+STOP there.** It is the part a judge sees, it has no offline or accuracy
+hazard, and it makes a real detection model a drop-in later — same
+shape, same renderer. The overlay half is built; the YOLOv8 detector is
+explicitly **not started** (TOOLS.md row 7).
 
-If you do build the model, the three hazards above are the whole brief.
+If you do eventually build the model, the three hazards above are the
+whole brief.
 
 ---
 

@@ -46,6 +46,12 @@ responses>=0.25
 docker==7.2.0
 psutil==7.0.0
 
+# Presentation generation (TOOLS.md row 40 / PPTX_AGENT_SPEC.md). This
+# landed via the merge WITHOUT its dependency, so the tool catalog import
+# failed and took every tool test down with it -- same class of bug as the
+# sandbox/psutil entry above.
+python-pptx>=1.0
+
 # ---------------------------------------------------------------- GPU
 #
 # PaddleOCR ON THE GPU, WITH NO VIRTUALENV. Measured on an RTX 4060:

@@ -103,11 +103,15 @@ in the file, estimate warnings printed in the document. Copy that shape.
 **Blocked on nobody.** Approval gate, audit log and tool registry are
 all live.
 
-### Sahil — monitor, multimodal, defect overlay
-**0 built · 3 pending · 🔴 0 built / 1 pending**
+### Sahil — monitor, multimodal, OCR text-region overlay
+**0 built · 2 pending · 🔴 0 built / 1 pending**
 
 Pending: network monitor panel (🔴, `/api/network/status` is live and
-correct), multimodal upload + preview, defect/annotation overlay.
+correct), multimodal upload + preview. The OCR text-region overlay
+(row 7) is built and mounted — registered `detect_defects`, offline,
+`kind: "text_region"`, severity `"low"`; real defect/anomaly detection
+is **descoped** (status there is `not started (OCR text-region overlay
+only)`, 2026-09-19).
 
 **Read this before building the monitor panel:** it must report
 `externalCount` (this process tree), never `hostExternalCount` (the

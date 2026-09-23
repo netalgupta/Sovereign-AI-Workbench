@@ -108,33 +108,63 @@ a P&ID or a photo is never *interpreted* — only its text is read.
 - For images, also call the vision model. `describe_chart_image` exists for
   charts; for photos/diagrams coordinate with Aryan on a general
   image-description tool (row 6, P&ID extraction, is Aryan's and not started —
-  that is the demo's Flow 3).
+  that is the demo's Flow 3). **RESOLVED 2026-09-19:** a general image-description
+  tool (`describe_image`, TOOLS.md row 72) is now Sahil's and built —
+  `backend/tools/vision/image_description.py`, `is_estimate=True`. It is a PROSE
+  description (subject, equipment, connections, printed text) and deliberately
+  does NOT step on row 6's structured P&ID symbol/connection *extraction* into
+  the graph layer — that stays Aryan's. Coordination point preserved in the
+  row-72 module docstring and TOOLS.md row 72.
 - Anything a vision model says about quantities is an **estimate** — render it
   with the ESTIMATE badge your MessageBubble already supports (`is_estimate`
-  from `/api/tools`), exactly as for chart reading.
+  from `/api/tools`), exactly as for chart reading. **Done:** the image pipeline
+  now calls `describe_image` alongside `detect_defects`, and `/api/tools`
+  metadata (`is_estimate=True`) makes the trace badge it ESTIMATE automatically.
 
 Acceptance: upload the corpus P&ID (`Hydrocracker_PID_Schematic.png`) → the
 reply describes the equipment and connections, and any number is badged
-ESTIMATE.
+ESTIMATE. **Status:** pipeline + tool + badge are in; full end-to-end needs the
+vision model running at the venue (the dev box cannot test live vision — models
+absent), pending Ollama vision availability.
 
-### Task 4 (🟡): prove the monitor goes red, on camera
+### Task 4 (✅ DONE): prove the monitor goes red, on camera
 
 The judges will scrutinise this panel more than anything else (your
 assignment says so). Today we have only ever seen it green.
 
-- Write a test that makes the backend open one outbound connection (to a
-  local non-loopback address you control, or a mocked `psutil` connection
-  list) and asserts `/api/network/status` reports `externalCount >= 1` and
-  the component renders the ALERT state.
-- Rehearse the demo beat: monitor visible from boot, zero throughout.
+**Status: COMPLETE.** 10 backend tests + 6 frontend tests prove the red path:
 
-### Task 5 (⚪, registry-listed is acceptable): rows 46 and 47
+- `test_own_external_socket_flips_the_status_to_external_detected` — mocked
+  psutil socket with `pid=os.getpid()` on 8.8.8.8:443 → `status:
+  "external_detected"`, `externalCount >= 1`, `is_air_gapped: False`.
+- `test_api_network_status_goes_red_end_to_end` — the red state survives
+  the full HTTP path via `TestClient(app).get("/api/network/status")`.
+- `test_host_wide_figure_survives_the_mock_without_driving_the_alarm` —
+  `hostExternalCount >= 1` alongside the alarm, but the alarm key is app-only.
+- Frontend `security-state.test.js` (6 tests): `externalCount >= 1` →
+  `security: "external_detected"`, `dotColor: DANGER`; host-wide alone never
+  drives the alarm; errored poll never shows green.
+- Remaining action: demo rehearsal (manual, not code).
 
-- Row 46 RBAC on the knowledge base — `not started`.
-- Row 47 Model provenance tracking — `not started`.
+### Task 5 (✅ DONE): rows 46 and 47 (RBAC & Model Provenance)
 
-Both are ⚪/🟡 and may stay registry-listed for the demo. If you start them,
-say so in TOOLS.md first so nobody duplicates work.
+**Status: COMPLETE.** 15 backend tests prove both deliverables end-to-end:
+
+- **Row 46 RBAC on the knowledge base (built):**
+  * `backend/auth/rbac.py` implements the 4 role tiers (Plant Engineer, HSE Specialist, Superintendent, System Administrator) and maps the 6 MRPL corpus folder categories (`01_SOPs_and_Procedures` through `06_Diagrams_and_Scans`).
+  * Backend endpoints enforce access:
+    - `/api/rbac/tiers` returns the authoritative manifest for frontend UI consumption.
+    - `/api/corpus?role=...` filters directories, tree nodes, and sources by role (tested: HSE Specialist cannot see `04_SAP_Mock_Exports` or `05_Correspondence`).
+    - `/api/search` filters retrieved passages by role and returns explicit grounded refusal when all matches belong to unauthorized categories.
+  * `SettingsPage.jsx` dynamically fetches `/api/rbac/tiers` with resilient fallback to static matrix.
+  * 10 tests in `backend/tests/test_rbac.py` passing.
+
+- **Row 47 Model provenance tracking (built):**
+  * `backend/models/provenance.py` tracks complete provenance records (upstream repo, author organization, license, architecture, parameter count, quantization, air-gap attestation, SHA256 integrity) for all 7 registry models plus 3 auxiliary engines (BGE embeddings, faster-whisper, PaddleOCR).
+  * `/api/models` attaches provenance to every listed model artifact.
+  * Dedicated `/api/models/provenance` endpoint returns the sovereign audit ledger.
+  * `SettingsPage.jsx` renders provenance metadata (organization, license, air-gapped sovereign badge).
+  * 5 tests in `backend/tests/test_model_provenance.py` passing.
 
 ---
 

@@ -1,16 +1,24 @@
-"""Defect / anomaly region detection — TOOLS.md row 7.
+"""OCR text-region overlay — TOOLS.md row 7 (DESCOPED).
 
-WHAT THIS IS TODAY vs WHAT IT BECOMES. Row 7 is "Defect/anomaly
-detection (YOLOv8)". That model is NOT wired in yet, deliberately, and
-this module is the honest bridge: it produces overlay-contract
-detections from the offline OCR already proven in this repo
-(extract_printed_text / row 1), giving a working annotated-image
-viewer with ZERO model risk. When a real detector lands, it replaces
-the detection source inside this function while the output shape stays
-exactly the same — the frontend overlay (DefectOverlay.jsx) does not
-know or care where its boxes came from.
+This is deliberately NOT a defect/anomaly detector. Row 7 was marked
+"built" while describing YOLOv8 defect detection; the code never did
+that. It returns the regions where PRINTED TEXT sits on an image (OCR
+text lines from extract_printed_text / row 1), so a judge who uploads
+a photo of a corroded flange and asks what is wrong gets text boxes,
+not findings. That is the exact failure the descope removes.
 
-THREE CONSTRAINTS THAT MUST SURVIVE THE DETECTOR UPGRADE:
+DECISION (2026-09-19, Option A): row 7's status is `not started (OCR
+text-region overlay only)`. What exists here is the overlay half — a
+real, offline, registered tool that boxes recognized text — and real
+defect/anomaly detection is not started. The tool's output is honest
+about what it is: the result carries `kind: "text_region"` and every box
+has severity `"low"`, because OCR confidence is a transcription-
+confidence signal, not a defect classification. If a real
+detector is ever built, it swaps in behind this same output contract
+(same box shape, same overlay), and the constraints below govern that
+upgrade.
+
+THREE CONSTRAINTS THAT MUST SURVIVE ANY FUTURE DETECTOR UPGRADE:
 
 1. Hard constraint #1 (no outbound network). Ultralytics phones home
    FOUR ways: analytics on import, analytics on predict, a weight-file
@@ -43,13 +51,6 @@ from pydantic import BaseModel, Field
 
 from backend.tools.vision.ocr_printed import extract_printed_text
 
-# Severity bands, derived ONLY from OCR confidence. These are
-# transcription-confidence levels, not defect classifications — the
-# overlay colors boxes by them, and calling a sub-threshold OCR reading
-# "critical" would be importing vocabulary the tool does not have yet.
-_HIGH_CONF = 0.90
-_MED_CONF = 0.70
-
 
 class DetectionBox(BaseModel):
     xmin: int
@@ -63,7 +64,7 @@ class Detection(BaseModel):
     label: str
     confidence: float
     box: DetectionBox
-    severity: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
+    severity: str = Field(default="low", pattern="^(low|medium|high|critical)$")
 
 
 class DefectDetectionResult(BaseModel):
@@ -71,7 +72,7 @@ class DefectDetectionResult(BaseModel):
     image_width: int | None = None
     image_height: int | None = None
     detections: list[Detection]
-    source: str  # "ocr-printed" today; the detector's name later
+    source: str  # "ocr-printed" today; a real detector's name later
     # What the regions ARE. "text_region" until a real defect model lands;
     # a consumer must not describe these as defects.
     kind: str = "text_region"
@@ -104,20 +105,23 @@ def _image_url_for(image_path: str) -> str:
 
 
 def detect_defects(image_path: str) -> DefectDetectionResult:
-    """Run defect/anomaly region detection on `image_path`.
+    """Return OCR text-region overlay boxes for `image_path`.
 
-    Today the detection source is local OCR: every text line is emitted
-    as a detection region with its OCR box and confidence, labeled by
-    the recognized text. That is the annotated-image viewer with zero
-    model risk; when the row-7 detector (YOLOv8) is integrated it
-    replaces the source behind this same output contract.
+    NOT a defect/anomaly detector — defect detection is not implemented
+    (TOOLS.md row 7 status: `not started (OCR text-region overlay
+    only)`). This returns where PRINTED TEXT is on the image: every OCR
+    text line becomes a box labeled by the recognized text, confidence
+    is OCR transcription confidence, severity is always ``"low"``, and
+    the result carries ``kind: "text_region"``. Presenting these boxes
+    as defect findings would be presenting text locations as defects,
+    which is exactly what the descope forbids.
 
     Fully offline: constructively built on extract_printed_text, which
     is itself offline-proven (see test_ocr_printed.py).
 
     Args:
-        image_path: path to the inspection image (corpus-relative or
-            absolute; must exist on disk).
+        image_path: path to the image (corpus-relative or absolute; must
+            exist on disk).
 
     Raises:
         FileNotFoundError: if `image_path` doesn't exist.
