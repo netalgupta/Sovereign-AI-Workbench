@@ -151,6 +151,30 @@ MODEL_PROVENANCE_LEDGER: dict[str, dict[str, Any]] = {
             "attested_by": "Sahil (Sovereign Workbench Audit)",
         },
     },
+    "page-reviewer": {
+        "id": "page-reviewer",
+        "model_tag": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "backend": "transformers",
+        "organization": "Alibaba Cloud (Qwen)",
+        "upstream_repository": "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
+        "license": "Apache-2.0",
+        "architecture": "Qwen2_5_VLForConditionalGeneration",
+        "parameter_size": "8.3B",
+        "quantization": "bitsandbytes NF4 (4-bit), prepared once on this machine",
+        "context_window": "125,000 tokens; images capped at 518,400 pixels by models.yaml",
+        "intended_use": "Design review of rendered presentation pages (judgement, never a measurement)",
+        "air_gap_attestation": (
+            "Verified offline via HF_HUB_OFFLINE=1 and local weights in models/vision/. Loaded "
+            "in-process with an explicit GPU/CPU budget rather than by Ollama, which placed it "
+            "entirely on the CPU."
+        ),
+        "chain_of_custody": {
+            "registry_defined_in": "models/models.yaml",
+            "managed_by": "Hugging Face Transformers (offline disk store)",
+            "hash_algorithm": "SHA256",
+            "attested_by": "Aryan (deck quality pipeline)",
+        },
+    },
     "embeddings": {
         "id": "embeddings",
         "model_tag": "BAAI/bge-large-en-v1.5",
