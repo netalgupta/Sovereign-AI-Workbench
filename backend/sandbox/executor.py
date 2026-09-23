@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 backend/sandbox/executor.py
 
@@ -8,8 +10,6 @@ changed, from "spin up a fresh container" to "exec into a warm one from
 the pool". Callers with a live websocket get streamed stdout/stderr as
 it's produced; callers without one just get the final result.
 """
-
-from __future__ import annotations
 
 import asyncio
 import os

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The shared agent state — AGENTS_SPEC.md §2, verbatim shape.
 
 Every node in the graph reads and writes this one object. The shape is
@@ -15,8 +17,7 @@ reconstruction, and reconstructions drift from what actually happened.
 """
 
 from datetime import datetime, timezone
-from typing import Literal
-
+from typing import Literal, Optional, Union, Any
 from pydantic import BaseModel, Field
 
 AgentName = Literal["vision", "code", "reasoning", "math", "retrieval"]
@@ -28,16 +29,13 @@ class PlanStep(BaseModel):
     description: str
     assigned_agent: AgentName
     status: StepStatus = "pending"
-    # step_ids that must reach "done" before this step may run. Empty
-    # means it can start immediately — which is what makes independent
-    # steps parallelisable rather than merely ordered.
     depends_on: list[str] = Field(default_factory=list)
 
 
 class ToolCallEvent(BaseModel):
     tool_name: str
     input_params: dict
-    output: dict | None = None
+    output: Optional[dict] = None
     status: StepStatus = "pending"
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -57,8 +55,8 @@ class AgentState(BaseModel):
     current_step_index: int = 0
     tool_call_log: list[ToolCallEvent] = Field(default_factory=list)
     retrieved_context: list[dict] = Field(default_factory=list)
-    draft_output: str | None = None
-    verification_result: VerificationResult | None = None
+    draft_output: Optional[str] = None
+    verification_result: Optional[VerificationResult] = None
     awaiting_human_approval: bool = False
     final_output_path: str | None = None
     # A presentation continues as a background job (deck_jobs); its id,

@@ -112,6 +112,44 @@ def resolve(request: str, category: str, *, session_id: str = "default") -> Reso
 _DECK_RE = re.compile(r"\b(pptx|powerpoint|presentation|slide\s*deck|slides)\b", re.I)
 
 
+# The same signal agent_loop._tools_for_request uses to narrow a drafting
+# turn to search_documents + draft_xlsx. One spelling, both paths: the
+# interceptor and the schema-narrowing decision must not drift.
+# "comparison table" is a spreadsheet even without the word "Excel";
+# the refinery lexicon ("memo", "report") is deliberately excluded
+# because those are document words, handled by the docx path.
+_XLSX_REQUEST_RE = re.compile(
+    r"(?:\.xlsx|spreadsheet|excel|comparison table|comparison matrix|"
+    r"(?:build|draft|create|make)\b.*(?:table|matrix)\b)",
+    re.I,
+)
+
+
+def is_spreadsheet_request(request: str) -> bool:
+    """Does this file-write request ask for a spreadsheet, not a document?
+
+    Lives here (not in agent_loop) because it is the resolver's decision
+    too: an intercepted Excel request must resolve to draft_xlsx, or the
+    operator approves a .docx where they asked for a .xlsx.
+    """
+    return bool(_XLSX_REQUEST_RE.search(request or ""))
+
+
+_PDF_REQUEST_RE = re.compile(
+    r"(?:\.pdf|pdf report|pdf document|(?:build|draft|create|make|export|write)\b.*(?:pdf))",
+    re.I,
+)
+
+
+def is_pdf_request(request: str) -> bool:
+    """Does this file-write request ask for a PDF document?
+
+    Lives here (alongside is_spreadsheet_request) so the interceptor and
+    agent_loop tool-narrowing decision stay unified.
+    """
+    return bool(_PDF_REQUEST_RE.search(request or ""))
+
+
 def is_deck_request(request: str) -> bool:
     """Does this file-write request ask for a presentation?
 
@@ -181,13 +219,17 @@ def deck_preview(output_path: Path, titles: list[str], citations: list[str], omi
 
 
 def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
-    """Build the actual draft_docx call this request describes."""
+    """Build the actual draft_docx / draft_xlsx / generate_pdf call this request describes."""
     from backend.api.state import get_state
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
+    is_xlsx = is_spreadsheet_request(request)
+    is_pdf = is_pdf_request(request)
     title = _title_for(request)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_path = OUTPUT_DIR / f"{_slug(title)}-{stamp}.docx"
+    kind_slug = "xlsx" if is_xlsx else ("pdf" if is_pdf else "docx")
+    output_path = OUTPUT_DIR / f"{_slug(title)}-{stamp}.{kind_slug}"
+    doc_kind = "spreadsheet" if is_xlsx else ("PDF document" if is_pdf else "Word document")
 
     sections: list[dict] = []
     documents: list[str] = []
@@ -211,12 +253,12 @@ def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
         return ResolvedAction(
             category="file write",
             executable=False,
-            effect=f'Draft a Word document for: "{request.strip()}"',
+            effect=f'Draft a {doc_kind} for: "{request.strip()}"',
             reason=(
-                f"Could not read the corpus to ground this document "
+                f"Could not read the corpus to ground this file "
                 f"({type(exc).__name__}: {exc}). Nothing will be written: a "
-                f"drafted document with invented contents is worse than no "
-                f"document."
+                f"drafted file with invented contents is worse than no "
+                f"file."
             ),
         )
 
@@ -224,15 +266,62 @@ def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
         return ResolvedAction(
             category="file write",
             executable=False,
-            effect=f'Draft a Word document for: "{request.strip()}"',
+            effect=f'Draft a {doc_kind} for: "{request.strip()}"',
             reason=(
                 "Nothing in the loaded corpus clears the grounding threshold "
-                "for this request, so every section would be UNSOURCED. "
+                "for this request, so every row would be UNSOURCED. "
                 "Add the relevant document under Sources, or name the "
                 "document you mean."
             ),
         )
 
+    if is_xlsx:
+        return _resolve_spreadsheet(title, sections, documents, output_path, request)
+    if is_pdf:
+        return _resolve_pdf(title, sections, documents, output_path, request)
+    return _resolve_word(title, sections, documents, output_path, request)
+
+
+def _resolve_pdf(
+    title: str, sections: list[dict], documents: list[str],
+    output_path: Path, request: str,
+) -> ResolvedAction:
+    """The generate_pdf call built from retrieved, individually relevant sections."""
+    preview = [
+        f"Creates the file {output_path.name}",
+        f"{len(sections)} section(s), drawn from "
+        f"{len(documents)} source document(s): {', '.join(documents)}",
+        "Every section names the document its claims came from; a section "
+        "without one is marked [UNSOURCED] in the file itself",
+        f"Written to {OUTPUT_DIR}",
+    ]
+
+    return ResolvedAction(
+        category="file write",
+        executable=True,
+        tool_name="generate_pdf",
+        arguments={
+            "title": title,
+            "subtitle": f"Exported from the loaded corpus on "
+                        f"{datetime.now().strftime('%d %b %Y')}",
+            "sections": sections,
+            "output_path": str(output_path),
+        },
+        effect=(
+            f'Requested: "{request.strip()}"\n'
+            f"Effect: write a PDF document to {output_path.name}, containing "
+            f"{len(sections)} section(s) grounded in "
+            f"{len(documents)} source document(s)."
+        ),
+        preview=preview,
+    )
+
+
+def _resolve_word(
+    title: str, sections: list[dict], documents: list[str],
+    output_path: Path, request: str,
+) -> ResolvedAction:
+    """The draft_docx call built from retrieved, individually relevant sections."""
     preview = [
         f"Creates the file {output_path.name}",
         f"{len(sections)} section(s), drawn from "
@@ -264,6 +353,67 @@ def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
             f'Requested: "{request.strip()}"\n'
             f"Effect: write a Word document to {output_path.name}, containing "
             f"{len(sections)} section(s) grounded in "
+            f"{len(documents)} source document(s)."
+        ),
+        preview=preview,
+    )
+
+
+def _resolve_spreadsheet(
+    title: str, sections: list[dict], documents: list[str],
+    output_path: Path, request: str,
+) -> ResolvedAction:
+    """The draft_xlsx call built from the same retrieved sections.
+
+    The approval shows the real row structure -- column headers, a row
+    per retrieved finding, and the source each row rests on -- because
+    approving that call is what actually runs. A row with no source is
+    marked UNSOURCED in the file by the tool.
+    """
+    headers = ["Finding / Topic", "Details", "Sourced From"]
+    rows = []
+    for s in sections:
+        srcs = list(s.get("sources") or [])
+        rows.append({
+            "cells": [
+                s.get("heading", "") or "",
+                (s.get("body", "") or "").strip(),
+                "; ".join(srcs) if srcs else "UNSOURCED",
+            ],
+            "sources": srcs,
+        })
+    sheets = [{
+        "sheet_name": (title or "Findings")[:31],
+        "headers": headers,
+        "rows": rows,
+        "sources": documents,
+    }]
+
+    preview = [
+        f"Creates the file {output_path.name}",
+        f"1 sheet(s) with columns {', '.join(headers)}",
+        f"{len(rows)} row(s) drawn from "
+        f"{len(documents)} source document(s): {', '.join(documents)}",
+        "Every row names the document its claims came from; a row "
+        "without one is marked UNSOURCED in the file itself",
+        f"Written to {OUTPUT_DIR}",
+    ]
+
+    return ResolvedAction(
+        category="file write",
+        executable=True,
+        tool_name="draft_xlsx",
+        arguments={
+            "title": title,
+            "subtitle": f"Drafted from the loaded corpus on "
+                        f"{datetime.now().strftime('%d %b %Y')}",
+            "sheets": sheets,
+            "output_path": str(output_path),
+        },
+        effect=(
+            f'Requested: "{request.strip()}"\n'
+            f"Effect: write an Excel spreadsheet to {output_path.name}, "
+            f"containing {len(rows)} row(s) grounded in "
             f"{len(documents)} source document(s)."
         ),
         preview=preview,
@@ -332,7 +482,9 @@ _INSTRUCTION_WORDS = re.compile(
     r"^\s*(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?"
     r"(?:draft|write|generate|create|produce|prepare|make|export|save)\s+"
     r"(?:me\s+)?(?:an?\s+|the\s+)?"
-    r"(?:new\s+)?(?:word\s+|docx\s+|doc\s+)?",
+    r"(?:new\s+)?"
+    r"(?:word\s+|docx\s+|doc\s+)?"
+    r"(?:excel\s+|spreadsheet\s+|xlsx\s+|sheet\s+)?",
     re.I,
 )
 _TRAILING_INSTRUCTION = re.compile(

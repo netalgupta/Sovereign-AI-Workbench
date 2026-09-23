@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Chart rendering for answers — TOOLS.md row 31 (🔴).
 
 When an answer is about a trend, a chart carries it better than a
@@ -28,12 +30,16 @@ show someone is not a side effect on their machine.
 import io
 from typing import Literal
 
-import matplotlib
-
-# Agg before pyplot: this runs headless (a service, a container, a test),
-# and importing pyplot without a backend set will try to find a display.
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+plt = None
+_MATPLOTLIB_AVAILABLE = False
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # noqa: E402
+    _MATPLOTLIB_AVAILABLE = True
+except (Exception, AttributeError, SystemError, ImportError):
+    plt = None
+    _MATPLOTLIB_AVAILABLE = False
 from pydantic import BaseModel  # noqa: E402
 
 from backend.tools.registry import tool  # noqa: E402

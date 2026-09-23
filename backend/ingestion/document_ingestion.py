@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Full per-document ingestion pipeline — RAG_SPEC.md §2, steps 1-4 tied together.
 
 This is the single function the rest of the system calls to turn one

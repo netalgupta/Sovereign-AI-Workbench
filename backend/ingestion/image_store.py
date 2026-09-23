@@ -35,6 +35,8 @@ locking to be safe concurrently. A file per image is atomic per image
 and survives a half-finished run with exactly the images it finished.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path

@@ -7,6 +7,8 @@ model name is ever hardcoded in router/orchestrator logic. Adding a model
 is an edit to the YAML file + a registry reload, never a code change (FR-4).
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Literal

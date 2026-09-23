@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The `verify` node — AGENTS_SPEC.md §3/§5, TOOLS.md row 23 (🟡),
 Aryan.md Day 8.
 

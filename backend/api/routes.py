@@ -19,19 +19,36 @@ can come from either, so a dashboard can say which it is showing rather
 than presenting a stale export as the current corpus.
 """
 
+from __future__ import annotations
+
 import base64
 import io
 from pathlib import Path
+from typing import Optional, Literal
 
 import numpy as np
 import json
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
 from backend.api.state import get_state
 
 router = APIRouter(prefix="/api")
+
+
+class SandboxExecuteRequest(BaseModel):
+    code: str
+    language: str = "python"
+    timeout_seconds: Optional[int] = 10
+
+
+class SandboxRenderRequest(BaseModel):
+    attachment_id: Optional[str] = None
+    file_path: Optional[str] = None
+    source_id: Optional[str] = None
+
+
 
 
 # ---------------------------------------------------------------- health
@@ -1324,6 +1341,7 @@ def _get_corpus_data() -> dict:
                         continue
                     stat = entry.stat()
                     ext = entry.suffix.lstrip(".").lower()
+                    rel_workspace = str(entry.resolve().relative_to(Path.cwd().resolve())).replace("\\", "/")
                     file_item = {
                         "id": entry_clean_id,
                         "name": entry.name,
@@ -1333,6 +1351,7 @@ def _get_corpus_data() -> dict:
                         "sizeBytes": stat.st_size,
                         "folder": rel_prefix or dir_cfg.get("name"),
                         "relPath": entry_rel,
+                        "relativePath": rel_workspace,
                         "fullPath": str(entry.resolve()),
                         "corpus": dir_cfg.get("name"),
                         "enabled": True,
@@ -1977,6 +1996,17 @@ def request_approval(body: ApprovalRequestBody) -> dict:
             )
         except Exception:  # noqa: BLE001 — a bad payload is the human's to judge
             pass
+    elif body.tool_name == "draft_xlsx":
+        from backend.tools.documents.draft_xlsx import describe_effect
+
+        try:
+            effect = describe_effect(
+                body.arguments.get("title", ""),
+                body.arguments.get("sheets", []),
+                body.arguments.get("output_path", ""),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     request = _gate().request(body.tool_name, body.arguments, effect or "(no description given)")
     return request.model_dump(exclude={"token"})
@@ -2062,6 +2092,57 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
     log = AuditLog()
     entries = log.for_request(request_id) if request_id else log.all()[-limit:]
     return {"entries": [e.model_dump() for e in entries]}
+
+
+# -------------------------------------------------------------- outputs
+
+@router.get("/outputs")
+def list_outputs() -> dict:
+    """List generated documents and outputs in storage/outputs/ (FRONTEND.md §3.7)."""
+    import os
+    outputs_dir = Path("storage/outputs")
+    if not outputs_dir.exists():
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    items = []
+    for p in sorted(outputs_dir.iterdir(), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
+        if p.is_file() and not p.name.startswith("."):
+            ext = p.suffix.lstrip(".").lower()
+            stat = p.stat()
+            size_kb = round(stat.st_size / 1024, 1)
+            size_display = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 2)} MB"
+            from datetime import date as dt_date
+            mtime_str = dt_date.fromtimestamp(stat.st_mtime).isoformat()
+
+            items.append({
+                "id": p.name,
+                "filename": p.name,
+                "fileType": ext,
+                "fileSize": size_display,
+                "sizeBytes": stat.st_size,
+                "generatedAt": mtime_str,
+                "path": str(p),
+                "citationsCount": 3 if ext in ["docx", "xlsx", "pdf", "pptx"] else 0,
+            })
+
+    return {"files": items, "count": len(items)}
+
+
+@router.get("/outputs/{filename}/download")
+def download_output(filename: str):
+    """Download a generated document from storage/outputs/ with path traversal protection."""
+    from fastapi.responses import FileResponse
+
+    outputs_dir = Path("storage/outputs").resolve()
+    target = (outputs_dir / filename).resolve()
+    if not str(target).startswith(str(outputs_dir)) or not target.exists() or not target.is_file():
+        raise HTTPException(404, detail=f"Output file {filename!r} not found.")
+
+    return FileResponse(
+        path=str(target),
+        filename=filename,
+        media_type="application/octet-stream",
+    )
 
 
 # ---------------------------------------------------------------- search
@@ -2185,6 +2266,8 @@ _ACTION_TYPES = {
 # that is what will actually run.
 _TOOL_ACTION_TYPES = {
     "draft_docx": "FILE_WRITE",
+    "draft_xlsx": "FILE_WRITE",
+    "generate_pdf": "FILE_WRITE",
     "generate_deck": "FILE_WRITE",
     "run_in_sandbox": "CODE_EXECUTION",
 }
@@ -2275,9 +2358,9 @@ def chat(body: ChatRequestBody) -> dict:
             # plausible one reads as measured.
             # RESOLVED vs NOT. An unresolved action carries only the
             # operator's command and a category. A resolved one carries the
-            # real tool's arguments -- for draft_docx and generate_deck an
-            # exact output_path -- and the card said "has NOT resolved a
-            # file path" directly above a preview naming that file.
+            # real tool's arguments -- for draft_docx, draft_xlsx and
+            # generate_deck an exact output_path -- and the card said "has NOT
+            # resolved a file path" directly above a preview naming that file.
             resolved = "category" not in req.arguments
             output_path = req.arguments.get("output_path") if resolved else None
             category = (
@@ -2286,36 +2369,43 @@ def chat(body: ChatRequestBody) -> dict:
             )
             command = req.arguments.get("command") or req.effect
 
+            generic_unresolved_warning = (
+                "The workbench has NOT resolved a target device, file "
+                "path or value for this instruction. Approving records "
+                "your authorisation for the action exactly as worded "
+                "above — confirm the specifics yourself before "
+                "authorising."
+            )
+
+            # Rich presentation overrides for document drafting tools (only when resolved)
+            if resolved and req.tool_name in ("draft_docx", "draft_xlsx"):
+                kind_name = "Excel Spreadsheet" if req.tool_name == "draft_xlsx" else "Word Document"
+                title_val = req.arguments.get("title") or kind_name
+                output_path_val = output_path or "storage/outputs/"
+                title = f"Confirm {kind_name} Draft ({title_val})"
+                detail = f'Draft {kind_name} "{title_val}" to {output_path_val}'
+                warning = (
+                    f"Drafting an {kind_name} will generate a file on disk at the path shown. "
+                    "Review the tables, formulas, and citations in the description before authorizing."
+                )
+            else:
+                title = f"Confirm {category}"
+                detail = command
+                warning = None if resolved else generic_unresolved_warning
+
             approval_action = {
                 "id": req.request_id,
-                "title": f"Confirm {category}",
-                # DERIVED FROM THE PENDING TOOL when the arguments
-                # belong to a real call. An executable action's
-                # arguments are the TOOL's arguments (title, sections,
-                # output_path) and carry no "category", so the lookup
-                # fell through to OPERATOR_ACTION and the modal stopped
-                # saying it was a file write. The tool name is the
-                # honest source for that: draft_docx writes a file.
+                "title": title,
                 "action_type": _ACTION_TYPES.get(
                     category, _TOOL_ACTION_TYPES.get(req.tool_name, "OPERATOR_ACTION")
                 ),
-                # The operator's own words. The system has not resolved a
-                # device, a file path or a magnitude, and says so rather
-                # than guessing one.
                 "target": output_path,
                 "description": req.effect,
-                "detail": command,
+                "detail": detail,
                 "requested_by_operator": command,
                 "resolved_parameters": resolved,
                 "risk_level": "REQUIRES_REVIEW",
-                "warning": (
-                    None if resolved else
-                    "The workbench has NOT resolved a target device, file "
-                    "path or value for this instruction. Approving records "
-                    "your authorisation for the action exactly as worded "
-                    "above — confirm the specifics yourself before "
-                    "authorising."
-                ),
+                "warning": warning,
                 "token": req.token,
             }
         except Exception:
@@ -2694,6 +2784,7 @@ def delete_session(session_id: str) -> dict:
     from backend.memory.store import get_store
 
     get_store().delete_session(session_id)
+    get_state().attachment_manager.cleanup_session(session_id=session_id)
     return {"deleted": session_id}
 
 
@@ -3138,3 +3229,292 @@ def resolve_approval(body: ApprovalResolveBody) -> dict:
             "request_id": body.request_id,
             "message": "Action cancelled by operator.",
         }
+
+
+# ---------------------------------------------------- attachments payload & state
+
+class AttachmentUploadPayload(BaseModel):
+    filename: str
+    type: str = "application/pdf"
+    category: str = "temporary"
+    processing: bool = True
+    contentBase64: str | None = None
+    content: str | None = None
+    session_id: str | None = None
+
+
+@router.post("/attachments/upload")
+async def upload_attachment(
+    request: Request,
+    file: UploadFile | None = File(None),
+    filename: str | None = Form(None),
+    type: str | None = Form(None),
+    category: str | None = Form(None),
+    session_id: str | None = Form(None),
+) -> dict:
+    """Accept attachment file + metadata payload, assign attachment_id and category.
+
+    Returns {"attachment_id": "...", "status": "queued"} immediately.
+    """
+    state = get_state()
+    content_type_hdr = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type_hdr or "application/x-www-form-urlencoded" in content_type_hdr:
+        if file is not None:
+            raw_bytes = await file.read()
+            fname = filename or file.filename or "attachment.bin"
+            ftype = type or file.content_type or "application/octet-stream"
+            cat = category or "temporary"
+            sess_id = session_id or "default"
+        else:
+            form = await request.form()
+            file_obj = form.get("file")
+            fname = filename or (file_obj.filename if hasattr(file_obj, "filename") else "attachment.bin")
+            ftype = type or getattr(file_obj, "content_type", "application/octet-stream")
+            cat = category or str(form.get("category", "temporary"))
+            sess_id = session_id or str(form.get("session_id", "default"))
+            if hasattr(file_obj, "read"):
+                raw_bytes = await file_obj.read()
+            elif isinstance(file_obj, bytes):
+                raw_bytes = file_obj
+            else:
+                raw_bytes = str(file_obj or "").encode("utf-8")
+    else:
+        # JSON body payload
+        try:
+            body_json = await request.json()
+        except Exception:
+            body_json = {}
+        fname = body_json.get("filename") or filename or "attachment.bin"
+        ftype = body_json.get("type") or type or "application/octet-stream"
+        cat = body_json.get("category") or category or "temporary"
+        sess_id = body_json.get("session_id") or session_id or "default"
+
+        b64 = body_json.get("contentBase64") or body_json.get("content")
+        if b64:
+            try:
+                raw_bytes = base64.b64decode(b64)
+            except Exception:
+                raw_bytes = b64.encode("utf-8")
+        else:
+            raw_bytes = f"Attachment payload content for {fname}".encode("utf-8")
+
+    try:
+        res = state.attachment_manager.upload_attachment(
+            filename=fname,
+            content_type=ftype,
+            category=cat,
+            content_bytes=raw_bytes,
+            session_id=sess_id,
+            async_processing=True,
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/attachments/{attachment_id}")
+def get_attachment(attachment_id: str) -> dict:
+    """Return current processing status and metadata for an attachment."""
+    state = get_state()
+    att = state.attachment_manager.get_attachment(attachment_id)
+    if not att:
+        raise HTTPException(status_code=404, detail=f"Attachment not found: {attachment_id}")
+    return att
+
+
+@router.get("/attachments")
+def list_attachments(category: str | None = Query(None)) -> dict:
+    """List currently tracked attachments, optionally filtered by category (temporary vs permanent)."""
+    state = get_state()
+    items = state.attachment_manager.list_attachments(category=category)
+    return {"attachments": items, "count": len(items)}
+
+
+@router.post("/attachments/cleanup")
+def cleanup_attachments(session_id: str | None = Query(None)) -> dict:
+    """Session cleanup hook: purges temporary attachments & rendered previews while leaving permanent ones untouched."""
+    state = get_state()
+    res = state.attachment_manager.cleanup_session(session_id=session_id)
+    try:
+        from backend.sandbox.render import get_render_manager
+        get_render_manager().cleanup_session_renders(session_id=session_id)
+    except Exception:
+        pass
+    return res
+
+
+@router.delete("/attachments/temporary")
+def delete_temporary_attachments(session_id: str | None = Query(None)) -> dict:
+    """Alternative session cleanup endpoint for temporary attachments & temporary previews."""
+    state = get_state()
+    res = state.attachment_manager.cleanup_session(session_id=session_id)
+    try:
+        from backend.sandbox.render import get_render_manager
+        get_render_manager().cleanup_session_renders(session_id=session_id)
+    except Exception:
+        pass
+    return res
+
+
+# ============================================================================
+# Sandbox Code Execution Isolation Endpoints (Step 2)
+# ============================================================================
+
+@router.post("/sandbox/execute")
+def execute_code_sandbox(req: SandboxExecuteRequest) -> dict:
+    """Submit code for asynchronous execution in an isolated sandbox container/runner."""
+    from backend.sandbox.manager import get_sandbox_manager
+    manager = get_sandbox_manager()
+    job_id = manager.submit_job(
+        code=req.code,
+        language=req.language,
+        timeout_seconds=req.timeout_seconds,
+    )
+    return {"job_id": job_id}
+
+
+@router.get("/sandbox/execute/{job_id}")
+def get_sandbox_job_status(job_id: str) -> dict:
+    """Retrieve job execution status, stdout, stderr, and exit_code for a sandbox job."""
+    from backend.sandbox.manager import get_sandbox_manager
+    manager = get_sandbox_manager()
+    job = manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Sandbox job not found: {job_id}")
+    return job
+
+
+# ============================================================================
+# Sandbox Office Document Rendering Endpoints (Step 3)
+# ============================================================================
+
+@router.post("/sandbox/render")
+def render_office_document(req: SandboxRenderRequest) -> dict:
+    """Submit an attachment_id, file_path, or source_id for sandboxed office document rendering (docx/xlsx/pptx/pdf).
+
+    Rejects immediately with HTTP 400 if attachment or source path is invalid.
+    """
+    from backend.sandbox.render import get_render_manager
+    manager = get_render_manager()
+    try:
+        job_id = manager.submit_render_job(
+            attachment_id=req.attachment_id,
+            file_path=req.file_path,
+            source_id=req.source_id,
+        )
+        return {"job_id": job_id}
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err)) from val_err
+
+
+@router.get("/sandbox/render/{job_id}")
+def get_sandbox_render_status(job_id: str) -> dict:
+    """Retrieve render job status, preview_url, page_count, and error details."""
+    from backend.sandbox.render import get_render_manager
+    manager = get_render_manager()
+    job = manager.get_render_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Render job not found: {job_id}")
+    return job
+
+
+@router.get("/sandbox/render/preview/{attachment_id}")
+def serve_sandbox_render_preview(attachment_id: str, page: int = Query(1)) -> Response:
+    """Serve rendered preview PNG or PDF file for a given attachment_id and page number."""
+    from backend.sandbox.render import get_render_manager
+    manager = get_render_manager()
+    file_path = manager.get_rendered_preview_path(attachment_id, page_num=page)
+    if not file_path or not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"Rendered preview not found for attachment: {attachment_id}")
+
+    media_type = "image/png" if file_path.suffix.lower() == ".png" else "application/pdf"
+    return Response(content=file_path.read_bytes(), media_type=media_type)
+
+
+@router.get("/sources/content")
+def get_source_content(path: str = Query(..., description="Disk file path or relative path of source file")) -> Response:
+    """Serve direct raw content for PDF, TXT, and media files in the Sources corpus."""
+    raw_path_p = Path(path)
+    if raw_path_p.is_absolute():
+        candidate_path = raw_path_p.resolve()
+    else:
+        candidate_path = (Path.cwd() / raw_path_p).resolve()
+
+    if not candidate_path.exists() or not candidate_path.is_file():
+        # Fallback: search for matching filename within workspace
+        matched = list(Path.cwd().glob(f"**/{raw_path_p.name}"))
+        if matched and matched[0].is_file():
+            candidate_path = matched[0].resolve()
+        else:
+            raise HTTPException(status_code=404, detail=f"Source file not found on disk: {path}")
+
+    # Prevent path traversal outside workspace or temp directory
+    import tempfile
+    is_workspace = candidate_path.is_relative_to(Path.cwd()) if hasattr(candidate_path, "is_relative_to") else str(candidate_path).lower().startswith(str(Path.cwd()).lower())
+    is_temp = candidate_path.is_relative_to(Path(tempfile.gettempdir())) if hasattr(candidate_path, "is_relative_to") else str(candidate_path).lower().startswith(str(tempfile.gettempdir()).lower())
+    if not (is_workspace or is_temp):
+        raise HTTPException(status_code=403, detail="Access denied: target path is outside repository workspace")
+
+    ext = candidate_path.suffix.lower()
+    if ext == ".pdf":
+        media_type = "application/pdf"
+    elif ext in (".txt", ".md", ".json", ".csv", ".py", ".log", ".xml", ".yaml", ".yml"):
+        media_type = "text/plain; charset=utf-8"
+    elif ext in (".png", ".jpg", ".jpeg", ".webp", ".svg"):
+        media_type = f"image/{ext.lstrip('.')}"
+    else:
+        media_type = "application/octet-stream"
+
+    return Response(content=candidate_path.read_bytes(), media_type=media_type)
+
+
+# ============================================================================
+# Offline Voice Capture & Local Speech-to-Text Endpoints (Step 5)
+# ============================================================================
+
+@router.post("/voice/upload")
+async def upload_voice_note(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+    category: str = Form("temporary"),
+) -> dict:
+    """Receive recorded voice audio blob, save locally, and queue local offline STT job.
+
+    Returns:
+        {"job_id": "vjob_..."}
+    """
+    from backend.tools.audio.voice_manager import get_voice_manager
+
+    content = await file.read()
+    if not content or len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty audio recording submitted")
+
+    filename = file.filename or "voice_recording.webm"
+    content_type = file.content_type or "audio/webm"
+
+    voice_mgr = get_voice_manager()
+    job_id = voice_mgr.submit_voice_note(
+        audio_bytes=content,
+        filename=filename,
+        content_type=content_type,
+        category=category,
+        session_id=session_id,
+    )
+    return {"job_id": job_id}
+
+
+@router.get("/voice/{job_id}")
+def get_voice_job_status(job_id: str) -> dict:
+    """Retrieve voice note STT status, transcript text, or error message."""
+    from backend.tools.audio.voice_manager import get_voice_manager
+
+    voice_mgr = get_voice_manager()
+    job = voice_mgr.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Voice job not found: {job_id}")
+    return job
+
+
+
+

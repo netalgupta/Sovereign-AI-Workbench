@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """LangGraph multi-agent orchestration engine — AGENTS_SPEC.md §1-§6, FR-5.
 
 Coordinates the end-to-end execution graph:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The tool registry — how an agent discovers and calls anything in
 `backend/tools`.
 

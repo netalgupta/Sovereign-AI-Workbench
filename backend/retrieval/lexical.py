@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Lexical matching: tokenization, a cached BM25 index, and evidence.
 
 THREE REAL DEFECTS THIS REPLACES.
@@ -30,8 +32,6 @@ THREE REAL DEFECTS THIS REPLACES.
    whose exact terms appear verbatim in a document could still be
    refused for having an unlucky embedding. See lexical_evidence().
 """
-
-from __future__ import annotations
 
 import math
 import re

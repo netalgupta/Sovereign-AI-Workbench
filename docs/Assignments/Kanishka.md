@@ -21,12 +21,10 @@ the log of what it did.
 
 ### 1. File generation — backend AND frontend
 
-| Row | Tool | Backend | Status |
-|---|---|---|---|
 | 38 | DOCX (`python-docx`) | Aryan | **built** — `backend/tools/documents/draft_docx.py` |
-| 39 | XLSX with live formulas | **you** | not started, 🔴 |
-| 40 | PPTX | **you** | not started, 🟡 |
-| 40a | PDF export | **you** | not started, 🟡 |
+| 39 | XLSX with live formulas | **you** | **built** — `backend/tools/documents/draft_xlsx.py` |
+| 40 | PPTX | Aryan / Aditya | **built** — `backend/tools/generation/deck/` |
+| 40a | PDF export | **you** | **built** — `backend/tools/documents/generate_pdf.py` |
 
 **Why you own the backend too, not just the card.** Splitting one
 feature across two people means you cannot test the card until someone

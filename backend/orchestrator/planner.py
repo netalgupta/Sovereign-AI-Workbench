@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """The planner node — AGENTS_SPEC.md §3/§4, TOOLS.md row 20 (🔴), FR-5.
 
 Decomposes a request into a dependency graph of steps, each assigned to
@@ -79,7 +81,7 @@ def _call_planner_model(prompt: str, model_name: str) -> str:
     return ollama_generate(
         model_name,
         prompt,
-        timeout=300,
+        timeout=45,
     )
 
 

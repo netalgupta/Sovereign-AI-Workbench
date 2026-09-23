@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """FAISS + SQLite chunk storage — RAG_SPEC.md §2 step 6.
 
 Exact index type per spec: `IndexFlatIP` — "flat is fine at hackathon

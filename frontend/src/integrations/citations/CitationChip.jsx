@@ -17,7 +17,8 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FileText, ExternalLink } from 'lucide-react'
+import { FileText, ExternalLink, Eye } from 'lucide-react'
+import { usePreviewStore } from '../../store/previewStore'
 
 /**
  * @param {{ citation: { id: number, doc: string, section: string, passage: string } }} props
@@ -149,15 +150,40 @@ export function CitationChip({ citation }) {
             {citation.passage}
           </div>
 
-          {/* Footer: view full source */}
+          {/* Footer: preview & view full source */}
           <div
             style={{
               display: 'flex',
+              alignItems: 'center',
               justifyContent: 'flex-end',
+              gap: '12px',
               padding: '5px 10px',
               borderTop: '1px solid var(--color-border)',
             }}
           >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                usePreviewStore.getState().openPreview(citation.doc)
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '10px',
+                fontWeight: 500,
+                color: 'var(--color-accent)',
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+              }}
+            >
+              <Eye size={10} strokeWidth={2} />
+              Preview document
+            </button>
+
             <Link
               to="/sources"
               style={{
@@ -166,12 +192,13 @@ export function CitationChip({ citation }) {
                 gap: '3px',
                 fontSize: '10px',
                 fontWeight: 500,
-                color: 'var(--color-accent)',
+                color: 'var(--color-text-muted)',
+                opacity: 0.75,
                 textDecoration: 'none',
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              View full source
+              Sources Hub
               <ExternalLink size={9} strokeWidth={2} />
             </Link>
           </div>

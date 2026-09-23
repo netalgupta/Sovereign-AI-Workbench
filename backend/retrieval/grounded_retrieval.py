@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Retrieval confidence threshold — RAG_SPEC.md §3.
 
 The literal implementation of this system's NotebookLM-style refusal

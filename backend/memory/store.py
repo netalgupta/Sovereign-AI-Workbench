@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Durable sessions, messages, and per-turn artifacts.
 
 WHY THIS EXISTS. `session_id` was threaded through every request and
@@ -45,8 +47,6 @@ SQLite because it is already a dependency (the vector store uses it),
 it survives a restart, and a session that vanishes when uvicorn reloads
 is not memory.
 """
-
-from __future__ import annotations
 
 import json
 import sqlite3

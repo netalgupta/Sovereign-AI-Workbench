@@ -33,6 +33,8 @@ state change means a crash costs at most the line being written, and the
 file can be replayed to rebuild state.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import tempfile

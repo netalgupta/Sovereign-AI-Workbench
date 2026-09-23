@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Contradiction detection across documents — TOOLS.md row 15 (🟡),
 Aryan.md Day 8.
 

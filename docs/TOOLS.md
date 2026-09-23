@@ -108,8 +108,9 @@ This consolidates the full tool/skill catalog into one authoritative, owner-assi
 | # | Tool | Owner | Status | Priority | Notes |
 |---|---|---|---|---|---|
 | 38 | DOCX generation (python-docx) | Aryan | built | 🔴 | FR-9, FR-12 — the headline demo output; pre-tuned with hydrocracker/CCR terminology per H1 |
-| 39 | XLSX generation with live formulas | Kanishka | not started | 🔴 | FR-9 |
+| 39 | XLSX generation with live formulas | Kanishka | built | 🔴 | FR-9 — `draft_xlsx.py` with live formulas, approval gate, unsourced amber markers, and structural citations. |
 | 40 | PPTX generation | Aditya / Aryan | built | 🔴 | FR-9 — `prepare_deck` (grounded storyline, every figure verified against the source) + approval-gated `generate_deck`, rendered by the code-driven deck design system (native charts/tables, text measured to fit, no slide cap). |
+| 40a | PDF generation & export | Kanishka | built | 🟡 | FR-9, FR-12 — `generate_pdf.py` via PyMuPDF (fitz) with approval gate, structural citations, unsourced warning banner, and estimate markers. |
 | 41 | Calculation trace documents | Aryan | built | 🔴 | NFR-5 |
 | 42 | Audio briefing (Piper TTS) | Kanishka | not started | ⚪ | Polish item |
 | 43 | Redaction tool | Kanishka | not started | 🟡 | Confidentiality-relevant differentiator |
