@@ -1,107 +1,84 @@
-# HANDOFF — Aryan's session, 2026-09-19 (PPTX rebuild, team merges, vision QA in progress)
+# HANDOFF — 2026-09-24 (deliverables, quality, and the two team merges)
 
-Written just before a context compaction so the next window resumes without
-re-deriving state. Branch `main` == `aryan/rag-and-graphrag` == `origin/main`
-except for the WIP commit noted in §5. Fast suite at last full run:
-**543 passed, 13 skipped** (`py -3 -m pytest backend/tests -q -m "not live_model"`).
+Branch `main`, pushed. Fast suite at last full run:
+**~700 passed, 19 skipped** (`py -3 -m pytest backend/tests -q -m "not live_model"`).
+The 19 skips are environmental: Docker Desktop off (sandbox + Neo4j) and one
+unpulled router model. `py -3 -m backend.evaluation.ps_compliance`:
+**15 PASS, 1 MANUAL, no gaps** (the MANUAL row is the live network monitor,
+which cannot be asserted from inside the process it is proving).
 
 ---
 
-## 1. What landed this session (all pushed to main)
+## 1. What the product does now
 
-- **Advay's branch merged** (`integrate/advay-fixes`): ingest froze the Sources
-  page, duplicated every chunk, and could segfault the API. Fixed: one
-  serialized `PipelineState.ingest_files`, skip already-indexed files BY PATH,
-  `VectorStore` RLock, `/api/chunks` uses stored vectors + neighbours (matrix
-  omitted >600 chunks), background catch-up instead of in-lock ingest,
-  `delete_source` rebuilds the store from kept vectors and persists.
-- **Aditya's PPTX branch merged**, then the whole deck engine REPLACED:
-  - Design system `backend/tools/generation/deck/` (theme, fit, primitives,
-    render, art). Text measured with the real Segoe UI TTFs; `LINE_EM = 1.2`
-    calibrated against PowerPoint's own laid-out bounds (0 overflow / 0
-    overlap across 384 shapes). Native charts/tables, pagination (no slide cap),
-    statement cards, exhibit (real corpus images), bars start at zero.
-  - Content engine `backend/orchestrator/deck_agent.py`: topic-only retrieval,
-    anchor docs (relative score ≥0.55), topic-coverage check + model relevance
-    verdict (refuses off-corpus requests), storyline plan, fill per section,
-    validation (every figure ≥10 must appear in sources, numerically; KPI/big_stat
-    values must be measurements; type/field synonyms; fragment merging).
-  - `slide_agent.py`: `prepare_deck` (writes nothing) + `generate_deck`
-    (registered, `requires_approval=True`). Decks are approval-gated (user's
-    decision). Old `slide_kit.py`/`qa_render.py` deleted.
-- **Sahil's branch merged**; `detect_defects` made honest (it is OCR text
-  regions, NOT a defect detector); hardcoded "8 local sources" toast removed.
-  Brief for him: `docs/Assignments/Sahil_Remaining_Work.md`.
-- **Voice dictation was sending audio to Google** (Web Speech API). Replaced with
-  MediaRecorder → `POST /api/transcribe` (local faster-whisper). Guard test
-  fails if SpeechRecognition reappears in frontend code.
-- **Tests wiped the real Neo4j graph**; `backend/tests/conftest.py` now disables
-  background extraction and skips Neo4j tests on a non-empty DB unless
-  `WORKBENCH_TEST_ALLOW_NEO4J_WIPE=1`. Graph rebuilt (199 nodes / 240 rels).
-- **Local image model**: registry backend `diffusers`; `image-model` =
-  `stabilityai/sd-turbo` (weights in gitignored `models/image/`, fetched with
-  `python -m backend.ingestion.fetch_models --model sd-turbo`). Abstract cover /
-  divider art only, tinted to palette, opt-in via `spec["artwork"] = True`.
-  55 s cold load, 0.3 s/image. `deck-writer-large` = `qwen2.5:14b` registered.
+**Every deliverable is a background job** (`backend/orchestrator/output_jobs.py`).
+A request in chat starts one and answers immediately; the UI follows it
+(`OutputJobCard`) and the approval arrives when the work is finished and
+checked. Nothing reaches `outputs/` until the operator approves — previews
+render into a temp directory that is deleted (hard constraint #4).
 
-## 2. User decisions on record
+| kind | written by | checked by |
+|---|---|---|
+| presentation | `deck_agent` → design system in `tools/generation/deck/` | PowerPoint measures every page; the local vision model reviews each one; weak pages repaired and re-reviewed |
+| Word / PDF | `document_agent` | every figure ≥10 must appear in the anchored sources; a section with no source is dropped |
+| spreadsheet | `document_agent.build_spreadsheet_spec` | a cell the sources do not give is left EMPTY and marked unsourced |
 
-- Decks go through the approval gate (hard constraint #4).
-- Imagery: icons/real images AND local SD-Turbo abstract art.
-- Deck model: **route by size** — 7b for short sources, 14b for long, as a
-  BACKGROUND job (NotebookLM-style, 15-20 min acceptable).
-- Wants: many more slide types, better visuals, a visible quality score, and
-  page-by-page vision review that auto-improves weak slides.
+All four anchor the request to the documents it is actually about and
+**refuse** when the corpus does not cover it.
 
-## 3. OPEN PROBLEM — the vision model runs 100% on CPU (user saw 98% RAM, 100% disk)
+## 2. Measurements that decided the design
 
-Measured on Ollama 0.17.1:
-- `qwen2.5vl:7b` (Q4_K_M, ~6 GB weights) is estimated at **13.4 GB** and placed
-  **0% on GPU**; `num_gpu` 20/28 is ignored; `num_ctx` 4096 changes nothing.
-  145-183 s per slide, pages RAM to disk -> the lag the user reported.
-- `qwen2.5vl:3b` (pulled this session): estimated 10.8 GB, **also 0% GPU**;
-  3 s warm, ~170 s cold.
-- `qwen2.5:7b` text model: 100% GPU, 4.9 GB. So Ollama's GPU works; its
-  estimator for the Qwen2.5-VL vision encoder is what forces CPU.
+- **Vision model placement.** Ollama put qwen2.5vl (7b AND 3b) 0% on the GPU
+  on the 8 GB card and ignored `num_gpu`: 145–183 s per page, RAM paged to
+  disk. Running it in-process with our own budget (`models.yaml` `placement`):
+  Qwen2.5-VL-7B in NF4, **100% GPU, 2.6–5 s per page**. The 3B at fp16 split
+  77/23 GPU/RAM was 14–30 s and rated too coarsely to act on.
+- **Reviewer discrimination**, 4 deliberately broken slides vs 4 real pages:
+  broken mean 3.2/10, real 6.5/10; with measured-defect penalties every broken
+  control scores below every real page. Its scale is compressed on real decks
+  (5.5–7.2), so it separates broken from decent, not decent from excellent.
+- **Writer routing.** One 14b planning call takes **588 s** and a section
+  **206 s** (8 GB card, num_ctx 12288); the 7b answers in seconds. The 300 s
+  default killed long-source jobs at their first step — the 14b now gets 1800 s.
+  `DECK_LARGE_SOURCE_CHARS = 9000` decides which writer runs.
+- **Layout.** 34 real pages measured by PowerPoint: 0 overflow, 0 overlap, 0
+  off-page, 0 empty. The one empty page found was a real bug (below).
 
-User wants **partial CPU offload, not all-CPU, and full authority over
-placement** (not Ollama's scheduler deciding). Next step options, in order:
-1. Run the vision model in-process with transformers + accelerate
-   (`device_map="auto"`, `max_memory={0: "6GiB", "cpu": "12GiB"}`) — we choose
-   the split. Qwen2_5_VLForConditionalGeneration; weights via fetch-once into
-   `models/vision/`. Add a registry backend (e.g. `transformers`).
-2. Or llama.cpp server with explicit `-ngl` for the VL GGUF.
-Before loading any vision model, unload other Ollama models (keep_alive=0).
-Always unload the vision model after a QA pass.
+## 3. Bugs found by these checks (each with a regression test)
 
-## 4. In progress (uncommitted before this handoff -> committed as WIP, see §5)
+- A timeline whose events carried KPI field names rendered a **bare axis on a
+  blank page**. Layout measurement could not see it (nothing to overflow); the
+  page reviewer scored it 3.2 and said "lacks any content". Validation now
+  requires the field each layout draws, and `empty` is a measured defect.
+- A short alert computed a text box height of `h - 2.8` in → `cy="-150266"`,
+  and **PowerPoint refused the whole file**. The primitives now reject a
+  non-positive box, and every layout is rendered short and long in tests.
+- A value under its range shipped as a red **"EXCEEDED"** pill beside the note
+  "Below normal range" — the schema had no honest status for it.
+- Four regressions from the team merges, including an approval path that wrote
+  a **fabricated** "Hydrocracker Unit Inspection Report" (invented feed rate,
+  valve tags and sources) for any approved instruction containing "draft".
 
-- `backend/tools/generation/deck/qa.py`: `assess()` renders every page via
-  PowerPoint COM (pywin32), measures overflow/overlap/off-page/small type/
-  density, asks the vision model for a 1-10 design score + issues per page,
-  combines into a deck score and grade (A≥8.5, B≥7, C≥5.5, D). NOT yet run to
-  completion (stopped because of §3). No tests yet.
-- `render.py`: `render_deck` now returns `page_map` (rendered page -> spec
-  (section, slide)) and honours per-slide `max_items` (fewer items per page).
-  Intended for the auto-improve loop: weak page -> remedy on its spec slide ->
-  re-render -> re-review only changed pages -> keep if score improves.
+## 4. Open, in priority order
 
-## 5. Next steps, in order
+1. **Document quality on the 14b** is unmeasured: a live PDF job was still
+   running at handoff. Compare the same request written by 7b and 14b and set
+   `DECK_LARGE_SOURCE_CHARS` from that, rather than from size alone.
+2. **Per-figure LABEL check.** Figures are verified to EXIST in the sources,
+   not to be labelled correctly (365 °C shown as a "trigger"). The status
+   contradiction check is the first half of this.
+3. **More slide types** (icon grid, 2×2 matrix, stat+chart, quote, vertical
+   timeline, before/after) and offline icons.
+4. **Jobs are in memory**: a backend restart forgets them, and says so.
+5. `storage/quarantine/FABRICATED-*.docx` is the file the removed fabrication
+   path wrote. Kept out of `outputs/` deliberately; delete it when you have
+   looked at it.
 
-1. Fix vision placement (§3) with explicit control; measure GPU% + s/slide.
-2. Finish `qa.py` tests; build the improve loop in the deck job.
-3. Background deck jobs: `/api/decks` (start, poll progress, result with quality
-   report); route 7b vs `deck-writer-large` by anchored source size; generate
-   art after text (unload LLM first), then QA, then request approval.
-   Frontend (Advay): progress card + quality badge + per-page issues.
-4. More slide types (icon grid, 2x2 matrix, stat+chart, quote/statement,
-   vertical timeline, before/after), icons rendered offline to PNG.
-5. Known content limitation: numbers are verified to EXIST in sources, not to be
-   LABELLED correctly (365 °C shown as "trigger"; 91% as "normal range"). Add a
-   per-figure label check (one model call) before approval.
-6. Uncommitted local-only: `backend/evaluation/extraction_cache/mrpl_extractions.jsonl`
-   (graph extractions of the user's `docs/` source) — leave uncommitted.
+## 5. Where things are
 
-Final decks from this session: `outputs/deck_trials_final/0{1..4}_deck.pptx`
-(+ `_spec.json` to re-render without the model). Render/measure helpers:
-`scratchpad/render_pptx.ps1`, `measure_text.ps1` (session scratchpad, not repo).
+- Deliverable engines: `backend/orchestrator/{deck_agent,document_agent,output_jobs}.py`
+- Deck design system + quality: `backend/tools/generation/deck/` (`render`, `qa`, `improve`, `art`)
+- In-process models: `backend/models/{local_vision,gpu,registry}.py`, budgets in `models/models.yaml`
+- Frontend: `OutputJobCard.jsx`, `SourcePreviewPanel.jsx` + `renderers/`, mounted from `App.jsx`
+- One-time model fetches: `python -m backend.ingestion.fetch_models --model <id>`,
+  then `python -m backend.models.local_vision --prepare page-reviewer`
