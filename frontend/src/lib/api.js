@@ -323,6 +323,9 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                   case 'text_delta':
                     onTextDelta?.(event.text || '')
                     break
+                  case 'deck_job':
+                    handlers.onDeckJob?.(event)
+                    break
                   case 'approval_required':
                     onApprovalRequired?.(event)
                     break
@@ -423,6 +426,7 @@ export async function sendMessage(message, sessionId) {
   let tool_call_events = []
   let awaiting_human_approval = false
   let approval_action = null
+  let deck_job = null
   let isLive = true
 
   const res = await sendMessageStream(message, sessionId, {
@@ -451,19 +455,28 @@ export async function sendMessage(message, sessionId) {
     },
     onApprovalRequired: (appEv) => {
       awaiting_human_approval = true
+      // NO INVENTED LABELS. This fallback used to title every approval
+      // "Confirm Critical Parameter Modification" with action_type
+      // DCS_SETPOINT_WRITE -- so a request to write a Word document was
+      // shown to the operator as a setpoint change on the one screen where
+      // they sign off. Only what the backend actually sent.
       approval_action = appEv.action || {
         id: appEv.id,
-        title: 'Confirm Critical Parameter Modification',
-        action_type: appEv.name || 'DCS_SETPOINT_WRITE',
-        description: appEv.effect || 'Critical parameter change intercepted',
+        title: 'Confirm action',
+        action_type: appEv.name || 'operator action',
+        description: appEv.effect || '',
         arguments: appEv.arguments,
       }
+    },
+    onDeckJob: (jobEv) => {
+      deck_job = jobEv.job || null
     },
     onDone: (doneEv) => {
       if (doneEv.citations) citations = doneEv.citations
       if (doneEv.plan) plan = doneEv.plan
       if (doneEv.awaiting_approval !== undefined) awaiting_human_approval = doneEv.awaiting_approval
       if (doneEv.approval_action) approval_action = doneEv.approval_action
+      if (doneEv.deck_job) deck_job = doneEv.deck_job
       if (doneEv.simulated) isLive = false
     },
     onError: (err) => {
@@ -481,6 +494,7 @@ export async function sendMessage(message, sessionId) {
     session_id: sessionId,
     awaiting_human_approval,
     approval_action,
+    deck_job,
     live: isLive,
     error: !res?.ok,
   }

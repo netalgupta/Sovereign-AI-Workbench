@@ -34,6 +34,8 @@ export const useChatStore = create((set, get) => ({
   // ── Approval Gate State (§3.12 / FR-15) ────────────────────────────────────
   awaitingHumanApproval: false,
   pendingApprovalAction: null,
+  // The background job writing a deck, document or spreadsheet, while it runs.
+  activeJob: null,
   isApprovalModalOpen: false,
   approvalError: null,
   isResolvingApproval: false,
@@ -82,6 +84,51 @@ export const useChatStore = create((set, get) => ({
     }),
 
   openApprovalModal: () => set({ isApprovalModalOpen: true, approvalError: null }),
+
+  /**
+   * Follow a background output job (deck, document, spreadsheet) until it
+   * is finished, refused or failed. When it is ready, its approval becomes
+   * the pending one, so the same gate the operator always sees carries it.
+   */
+  setActiveJob: (job) => {
+    if (!job?.job_id) return
+    set({ activeJob: job })
+    const poll = async () => {
+      if (get().activeJob?.job_id !== job.job_id) return
+      let next = null
+      try {
+        const res = await fetch(`/api/decks/${job.job_id}`)
+        if (res.ok) next = await res.json()
+      } catch {
+        // The backend went away mid-job: leave the last state on screen
+        // rather than replacing it with a guess about what happened.
+      }
+      if (!next) {
+        setTimeout(poll, 3000)
+        return
+      }
+      set({ activeJob: next })
+      if (next.status === 'awaiting_approval' && next.approval) {
+        set({
+          awaitingHumanApproval: true,
+          pendingApprovalAction: next.approval,
+          isApprovalModalOpen: true,
+        })
+        return
+      }
+      if (next.status === 'refused' || next.status === 'failed') {
+        get().addMessage('assistant', next.status === 'refused'
+          ? `**Nothing was written.** ${next.error || ''}`
+          : `**The job failed.** ${next.error || ''}`)
+        set({ activeJob: null })
+        return
+      }
+      setTimeout(poll, 2000)
+    }
+    setTimeout(poll, 1500)
+  },
+
+  clearActiveJob: () => set({ activeJob: null }),
   closeApprovalModal: () => set({ isApprovalModalOpen: false, approvalError: null }),
   setApprovalError: (error) => set({ approvalError: error }),
 
@@ -95,7 +142,7 @@ export const useChatStore = create((set, get) => ({
    */
   resolveApproval: async (confirmed) => {
     const action = get().pendingApprovalAction
-    const actionDesc = action?.description || 'Critical parameter modification'
+    const actionDesc = action?.description || ''
     set({ approvalError: null, isResolvingApproval: true })
 
     // ── REFUSE path ──────────────────────────────────────────────────────────
@@ -120,9 +167,13 @@ export const useChatStore = create((set, get) => ({
         approvalError: null,
         isResolvingApproval: false,
       })
+      // What was actually refused, not an invented setpoint story: this
+      // said "Parameter modification was rejected... Setpoint retained at
+      // nominal" for a refused Word document.
+      set({ activeJob: null })
       get().addMessage(
         'assistant',
-        `❌ **Action Cancelled by Operator:** Parameter modification was rejected. ${actionDesc} aborted. Setpoint retained at nominal.`
+        `**Cancelled.** Nothing was written.${actionDesc ? `\n\n${actionDesc}` : ''}`
       )
       return { success: true }
     }

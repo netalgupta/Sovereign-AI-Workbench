@@ -34,6 +34,7 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { usePreviewStore } from '../../store/previewStore'
+import { OutputJobCard } from './OutputJobCard'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
@@ -89,6 +90,7 @@ export function ChatPane() {
   const activeDocuments = useChatStore((s) => s.activeDocuments)
   const awaitingHumanApproval = useChatStore((s) => s.awaitingHumanApproval)
   const setAwaitingApproval = useChatStore((s) => s.setAwaitingApproval)
+  const setActiveJob = useChatStore((s) => s.setActiveJob)
   const openApprovalModal = useChatStore((s) => s.openApprovalModal)
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState('')
@@ -878,15 +880,22 @@ export function ChatPane() {
         onTextDelta: (delta) => {
           appendStreamChunk(msgId, delta)
         },
+        onDeckJob: (jobEv) => {
+          // A deck, report or spreadsheet is being written in the background;
+          // the card follows it and its approval arrives when it is ready.
+          if (jobEv.job) setActiveJob(jobEv.job)
+        },
         onApprovalRequired: (appEv) => {
+          // Only what the backend sent. This fallback used to title every
+          // approval "Confirm Critical Parameter Modification" as a
+          // DCS_SETPOINT_WRITE, so a request to write a document was shown
+          // as a setpoint change on the screen where the operator signs off.
           const actionPayload = appEv.action || {
             id: appEv.id,
-            title: 'Confirm Critical Parameter Modification',
-            action_type: appEv.name || 'DCS_SETPOINT_WRITE',
-            description: appEv.effect || 'Critical parameter change intercepted',
+            title: 'Confirm action',
+            action_type: appEv.name || 'operator action',
+            description: appEv.effect || '',
             arguments: appEv.arguments,
-            target: appEv.arguments?.target || appEv.name,
-            proposed_value: appEv.arguments ? JSON.stringify(appEv.arguments) : '',
           }
           setAwaitingApproval(true, actionPayload)
         },
@@ -1216,6 +1225,9 @@ export function ChatPane() {
         className="px-8 py-4 flex-shrink-0"
         style={{ borderTop: '1px solid var(--color-border)' }}
       >
+        {/* A deck, report or spreadsheet being written in the background. */}
+        <OutputJobCard />
+
         {/* Safety Gate Locked Banner when approval is pending (§3.12 / FR-15) */}
         {awaitingHumanApproval && (
           <div
