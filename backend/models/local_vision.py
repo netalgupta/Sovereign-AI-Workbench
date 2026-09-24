@@ -96,12 +96,9 @@ def _weight_bytes_by_device(model) -> dict[str, int]:
 
 def quantized_dir(cfg) -> Path | None:
     """Where the pre-quantized copy of a quantized entry lives, or None."""
-    from backend.models.registry import weights_dir
+    from backend.models.registry import quantized_weights_dir
 
-    if cfg.placement is None or cfg.placement.quantization == "none":
-        return None
-    full = weights_dir(cfg)
-    return full.with_name(f"{full.name}.{cfg.placement.quantization}")
+    return quantized_weights_dir(cfg)
 
 
 def _complete(d: Path) -> bool:
@@ -140,8 +137,10 @@ def load(model_id: str) -> PlacementReport:
         from backend.models.registry import fetch_command, is_locally_available, weights_dir
 
         if not is_locally_available(cfg, None):
+            prepared = quantized_dir(cfg)
+            where = f"{weights_dir(cfg)}" + (f" or {prepared}" if prepared else "")
             raise LocalVisionUnavailable(
-                f"weights for {cfg.model} are not at {weights_dir(cfg)}. "
+                f"weights for {cfg.model} are not at {where}. "
                 f"Run once, online: {fetch_command(cfg)}")
 
         from backend.ingestion.model_cache import force_offline_mode

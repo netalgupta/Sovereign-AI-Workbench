@@ -393,3 +393,23 @@ def test_a_download_cannot_escape_the_outputs_directory():
     from backend.main import app
 
     assert TestClient(app).get("/api/outputs/..%2F..%2Fmodels%2Fmodels.yaml/download").status_code == 404
+
+
+def test_the_outputs_listing_shows_deliverables_not_working_files(tmp_path, monkeypatch):
+    """The approval ledger and audit log sit beside the documents as .jsonl;
+    listing them as generated outputs invites opening a log as a report."""
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    from backend.orchestrator import action_resolver
+
+    out = tmp_path / "outputs"
+    out.mkdir()
+    (out / "report.docx").write_bytes(b"x")
+    (out / "requests.jsonl").write_text("{}")
+    (out / "audit.jsonl").write_text("{}")
+    monkeypatch.setattr(action_resolver, "OUTPUT_DIR", out)
+    monkeypatch.chdir(tmp_path)
+
+    names = {f["filename"] for f in TestClient(app).get("/api/outputs").json()["files"]}
+    assert names == {"report.docx"}

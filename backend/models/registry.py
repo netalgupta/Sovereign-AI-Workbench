@@ -125,6 +125,16 @@ def diffusers_weights_dir(config: ModelConfig) -> Path:
     return weights_dir(config)
 
 
+def quantized_weights_dir(config: ModelConfig) -> Path | None:
+    """Where a quantized entry's prepared copy lives, or None if it has none."""
+    if config.backend != "transformers" or config.placement is None:
+        return None
+    if config.placement.quantization == "none":
+        return None
+    full = weights_dir(config)
+    return full.with_name(f"{full.name}.{config.placement.quantization}")
+
+
 def fetch_command(config: ModelConfig) -> str:
     """The one-time, online command that puts this model on disk."""
     if config.backend == "ollama":
@@ -143,6 +153,14 @@ def is_locally_available(config: ModelConfig, pulled_ollama_tags: set[str] | Non
     if config.backend == "diffusers":
         return (weights_dir(config) / "model_index.json").exists()
     if config.backend == "transformers":
+        # A PREPARED (quantized) copy is enough on its own. Once
+        # local_vision --prepare has written it, the full-precision download
+        # can be deleted -- it is 16 GB against the copy's 6 GB -- and the
+        # model still loads. Checking only the full weights reported a
+        # usable reviewer as "not pulled".
+        prepared = quantized_weights_dir(config)
+        if prepared is not None and (prepared / "DONE").exists() and any(prepared.glob("*.safetensors")):
+            return True
         # Every shard the index names, not merely "some safetensors": a
         # half-finished download must not read as available.
         d = weights_dir(config)

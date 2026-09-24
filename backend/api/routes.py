@@ -2133,9 +2133,15 @@ def list_outputs() -> dict:
     if legacy.exists() and legacy.resolve() != outputs_dir.resolve():
         candidates += list(legacy.iterdir())
 
+    # DELIVERABLES ONLY. The directory also holds working files -- the
+    # approval ledger and the audit log are .jsonl next to the documents --
+    # and listing those as "generated outputs" invites someone to open an
+    # internal log expecting a report.
+    DELIVERABLE_TYPES = {"docx", "pdf", "xlsx", "pptx", "csv", "md", "txt", "png", "jpg", "jpeg", "svg"}
+
     items = []
     for p in sorted(candidates, key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
-        if p.is_file() and not p.name.startswith("."):
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lstrip(".").lower() in DELIVERABLE_TYPES:
             ext = p.suffix.lstrip(".").lower()
             stat = p.stat()
             size_kb = round(stat.st_size / 1024, 1)
