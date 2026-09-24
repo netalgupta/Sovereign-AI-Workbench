@@ -363,3 +363,33 @@ def test_the_request_decides_the_deliverable(request_text, kind, monkeypatch):
                         or J.OutputJob(job_id=f"{kind}-x", request=request, session_id=session_id, kind=kind))
     resolved = action_resolver.resolve(request_text, "file write")
     assert started == [kind] and resolved.job_id == f"{kind}-x"
+
+
+# ── an approved file is where the Outputs page looks ────────────────────────
+
+
+def test_an_approved_file_appears_in_the_outputs_listing(stubs, tmp_path, monkeypatch):
+    """MEASURED: approvals wrote to outputs/ while /api/outputs listed
+    storage/outputs/, so the Outputs page never showed anything the
+    operator had approved."""
+    from fastapi.testclient import TestClient
+
+    from backend.orchestrator.slide_agent import generate_deck
+    from backend.main import app
+
+    job = J.run(J.OutputJob(job_id="deck-out", request="Make a presentation on CCR-1", session_id="s"))
+    written = generate_deck(**stubs["gate"]().get(job.approval["id"]).arguments)
+    name = Path(written["deck_path"]).name
+
+    listed = TestClient(app).get("/api/outputs").json()["files"]
+    assert any(f["filename"] == name for f in listed), (
+        f"{name} was approved and written, but the Outputs page does not list it")
+    assert TestClient(app).get(f"/api/outputs/{name}/download").status_code == 200
+
+
+def test_a_download_cannot_escape_the_outputs_directory():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    assert TestClient(app).get("/api/outputs/..%2F..%2Fmodels%2Fmodels.yaml/download").status_code == 404

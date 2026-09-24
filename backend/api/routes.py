@@ -2114,14 +2114,27 @@ def audit_trail(limit: int = Query(100, ge=1, le=1000), request_id: str | None =
 
 @router.get("/outputs")
 def list_outputs() -> dict:
-    """List generated documents and outputs in storage/outputs/ (FRONTEND.md §3.7)."""
+    """List generated documents and outputs (FRONTEND.md §3.7).
+
+    Reads THE DIRECTORY APPROVED WRITES GO TO. This listed storage/outputs/
+    while every approved deliverable was written to outputs/ (the path the
+    approval card itself shows), so the Outputs page was empty of everything
+    the operator had actually approved. storage/outputs/ is still read for
+    files written by earlier builds.
+    """
     import os
-    outputs_dir = Path("storage/outputs")
-    if not outputs_dir.exists():
-        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    from backend.orchestrator.action_resolver import OUTPUT_DIR
+
+    outputs_dir = OUTPUT_DIR
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    legacy = Path("storage/outputs")
+    candidates = list(outputs_dir.iterdir())
+    if legacy.exists() and legacy.resolve() != outputs_dir.resolve():
+        candidates += list(legacy.iterdir())
 
     items = []
-    for p in sorted(outputs_dir.iterdir(), key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
+    for p in sorted(candidates, key=lambda x: x.stat().st_mtime if x.is_file() else 0, reverse=True):
         if p.is_file() and not p.name.startswith("."):
             ext = p.suffix.lstrip(".").lower()
             stat = p.stat()
@@ -2149,9 +2162,17 @@ def download_output(filename: str):
     """Download a generated document from storage/outputs/ with path traversal protection."""
     from fastapi.responses import FileResponse
 
-    outputs_dir = Path("storage/outputs").resolve()
-    target = (outputs_dir / filename).resolve()
-    if not str(target).startswith(str(outputs_dir)) or not target.exists() or not target.is_file():
+    from backend.orchestrator.action_resolver import OUTPUT_DIR
+
+    roots = [OUTPUT_DIR.resolve(), Path("storage/outputs").resolve()]
+    target = None
+    for root in roots:
+        candidate = (root / filename).resolve()
+        # Path traversal: the resolved file must still sit inside its root.
+        if str(candidate).startswith(str(root)) and candidate.is_file():
+            target = candidate
+            break
+    if target is None:
         raise HTTPException(404, detail=f"Output file {filename!r} not found.")
 
     return FileResponse(
