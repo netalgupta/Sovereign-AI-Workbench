@@ -137,7 +137,9 @@ def run_checks() -> list[Check]:
         "is_estimate, P&ID and segment maps in the graph",
     ))
 
-    monitor = _module_exists("backend.audit.network_monitor") and _has_route("/api/network")
+    # The route is /api/network/status; this asked for "/api/network" and so
+    # reported the monitor as missing while it was serving the UI.
+    monitor = _module_exists("backend.audit.network_monitor") and _has_route("/api/network/status")
     checks.append(Check(
         E,
         "Logs or a visible network monitor proving no external calls",
@@ -187,18 +189,22 @@ def run_checks() -> list[Check]:
         D,
         "Deliverable: Excel / spreadsheet work",
         PASS if xlsx else GAP,
-        "TOOLS.md row 39. NOT BUILT. The PS names Excel explicitly and also lists "
-        "'spreadsheet work' as an agent capability.",
+        "TOOLS.md rows 39/73. draft_xlsx, approval-gated, built by the same grounded "
+        "engine as documents: a cell the sources do not give is left EMPTY and marked "
+        "unsourced rather than filled with a plausible number.",
         owner="Kanishka",
     ))
 
-    pptx = any("ppt" in name for name in tools)
+    # The registered tool is generate_deck; looking for "ppt" in tool names
+    # reported the whole deck pipeline as NOT BUILT long after it shipped.
+    pptx = any("ppt" in name or "deck" in name for name in tools)
     checks.append(Check(
         D,
         "Deliverable: PPT / board presentations",
         PASS if pptx else GAP,
-        "NOT BUILT. The PS names PPT explicitly, and 'board presentations' is in "
-        "its opening paragraph.",
+        "TOOLS.md rows 40/73-75. generate_deck, approval-gated: written from anchored "
+        "sources, illustrated by the local image model, then every page rendered by "
+        "PowerPoint, measured and reviewed by the local vision model, weak pages repaired.",
         owner="Kanishka",
     ))
 
