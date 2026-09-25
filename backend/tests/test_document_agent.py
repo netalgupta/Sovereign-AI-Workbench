@@ -9,6 +9,8 @@ pasted into a refinery report under generated headings.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from backend.orchestrator import document_agent as D
@@ -160,4 +162,87 @@ def test_sections_on_different_material_are_both_kept():
     different = _section(heading="Coke burn rate",
                          body="The coke burn rate held at 128 kg/hr throughout the regeneration, "
                               "within the range the procedure allows for a cycle of this length.")
-    assert D._overlap(_section()["body"], different["body"]) < D.DUPLICATE_OVERLAP
+    assert D.is_retelling(different["body"], _section()["body"]) is False
+
+
+def test_shared_vocabulary_is_not_a_retelling_when_the_figures_differ():
+    """Sections of a manual share their words; what tells them apart is their
+    figures. Overlap alone dropped eight of nine sections of a book summary."""
+    one = ("Procedure 12 covers valve isolation, a purge duration of 30 minutes, and the pressure "
+           "check the manual requires at step 12 before release.")
+    two = ("Procedure 47 covers valve isolation, a purge duration of 90 minutes, and the pressure "
+           "check the manual requires at step 47 before release.")
+    assert D._overlap(one, two) >= D.DUPLICATE_OVERLAP, "these do share their vocabulary"
+    assert D.is_retelling(one, two) is False, "different procedures, different figures"
+
+
+# ── a long source (a book) is read end to end, not just its opening ─────────
+
+
+def _book(blocks: int = 120) -> list[dict]:
+    """A source of `blocks` 1,000-character sections, each named, so both
+    coverage across the document and per-section selection are checkable."""
+    text = "".join(
+        f"MARKER{i} Procedure {i} of the manual is carried out as follows. ".ljust(1000, "x")
+        for i in range(blocks)
+    )
+    return [{"id": "S1", "document": "Manual.pdf", "pages": [1], "truncated": False, "text": text}]
+
+
+def test_the_outline_is_planned_from_across_the_whole_document():
+    """A 500-page book's first 16,000 characters is chapter one; a summary
+    planned from it covers chapter one."""
+    import re
+
+    view = D.outline_view(_book())
+    markers = set(re.findall(r"MARKER(\d+)", view))
+    assert len(markers) >= 8, f"the outline saw only {sorted(markers)}"
+    numbers = sorted(int(m) for m in markers)
+    assert numbers[0] <= 5, "the opening is missing"
+    assert numbers[-1] >= 100, "the end of the book is missing"
+
+
+def test_a_section_is_written_from_the_passages_that_match_it():
+    docs = _book()
+    context = D.context_for({"heading": "Procedure 47", "must_cover": ["procedure 47"]}, docs)
+    text = " ".join(d["text"] for d in context)
+    assert "procedure 47" in text.lower(), "the section's own passage is missing"
+    assert len(text) <= D.SECTION_CONTEXT_CHARS + 1200, "a section gets its passages, not the whole book"
+
+
+def test_a_long_source_earns_more_sections_and_writes_them_in_parallel(monkeypatch):
+    import threading
+
+    docs = _book()
+    monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: docs)
+    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (1.0, []))
+    monkeypatch.setattr(D, "sources_can_answer", lambda *a, **k: (True, ""))
+
+    seen_max = {"n": 0}
+    running = {"n": 0}
+    lock = threading.Lock()
+
+    def slow_write(request, planned, context, *, writer):
+        with lock:
+            running["n"] += 1
+            seen_max["n"] = max(seen_max["n"], running["n"])
+        time.sleep(0.05)
+        with lock:
+            running["n"] -= 1
+        n = planned["heading"].split()[-1]
+        # Distinct wording per section: near-identical bodies are dropped as
+        # duplicates, which is the behaviour tested above.
+        return {"heading": planned["heading"],
+                "body": f"Procedure {n} covers {'valve' * (int(n) % 3 + 1)} isolation, purge duration "
+                        f"{n}0 minutes, and the {'pressure' if int(n) % 2 else 'temperature'} check the "
+                        f"manual requires at step {n} before release.",
+                "sources": ["S1"], "contains_estimate": False}
+
+    monkeypatch.setattr(D, "write_section", slow_write)
+    monkeypatch.setattr(D, "plan_document", lambda *a, **k: {
+        "title": "The manual", "subtitle": "",
+        "sections": [{"heading": f"Procedure {i}"} for i in range(9)]})
+
+    spec = D.build_document_spec("Summarise the manual", object(), [])
+    assert len(spec["sections"]) == 9
+    assert seen_max["n"] > 1, "sections of a long source are written concurrently"

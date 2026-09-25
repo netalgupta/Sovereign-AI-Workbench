@@ -294,14 +294,18 @@ def test_only_documents_near_the_best_match_become_sources(monkeypatch):
     import backend.retrieval.grounded_retrieval as gr
 
     class _Chunk:
-        def __init__(self, doc, score):
-            self.text, self.source_document, self.page_number, self.score = f"text of {doc}", doc, 1, score
+        def __init__(self, doc, score, text):
+            self.text, self.source_document, self.page_number, self.score = text, doc, 1, score
 
     class _Result:
         found = True
         reason = None
-        chunks = [_Chunk("relevant.pdf", 0.90), _Chunk("also_relevant.pdf", 0.62),
-                  _Chunk("unrelated_guide.md", 0.30)]
+        # The second document has to BE about the subject as well as score
+        # near the first: a relative cosine score is a similarity, not a
+        # subject (see the TOOLS.md contamination this rule was added for).
+        chunks = [_Chunk("relevant.pdf", 0.90, "CCR-1 regeneration cycle 18 ran long."),
+                  _Chunk("also_relevant.pdf", 0.62, "Annex: CCR-1 regeneration parameters."),
+                  _Chunk("unrelated_guide.md", 0.30, "How to write a sandbox module guide.")]
 
     monkeypatch.setattr(gr, "retrieve_with_grounding_check", lambda *a, **k: _Result())
     docs = D.anchor_documents(object(), [], "CCR-1 regeneration")
@@ -635,3 +639,63 @@ def test_a_matrix_needs_exactly_four_titled_cells():
                                               ("two_by_two", "matrix"), ("quadrant", "matrix")])
 def test_the_names_a_model_reaches_for_resolve(alias, canonical):
     assert D.canonical_type(alias) == canonical
+
+
+# ── a second source must be about the subject, not merely near it ───────────
+
+
+class _Chunk:
+    def __init__(self, doc, text, idx=0):
+        self.text = text
+        self.metadata = type("M", (), {"source_document": doc, "chunk_index": idx, "page_number": 1})()
+
+
+def _anchor_with(monkeypatch, docs_and_text, scores):
+    """Retrieval returns `scores`; the corpus holds `docs_and_text`."""
+    import backend.retrieval.grounded_retrieval as GR
+
+    class Res:
+        found = True
+        reason = ""
+        chunks = [type("C", (), {"source_document": d, "score": s, "page_number": 1,
+                                 "text": docs_and_text[d]})() for d, s in scores.items()]
+
+    monkeypatch.setattr(D, "retrieve_with_grounding_check", lambda *a, **k: Res(), raising=False)
+    monkeypatch.setattr(GR, "retrieve_with_grounding_check", lambda *a, **k: Res())
+    chunks = [_Chunk(d, t) for d, t in docs_and_text.items()]
+    return D.anchor_documents(object(), chunks, "Draft a report on the Novolen batch QA results for August 2026")
+
+
+def test_a_near_scoring_document_that_never_says_the_subject_is_dropped(monkeypatch):
+    """MEASURED: TOOLS.md and SYSTEM_DESIGN_QA_RESPONSES.md (7 kB each of this
+    project's own paperwork) were anchored beside a 1 kB Novolen report,
+    because a relative cosine score is a similarity, not a subject."""
+    docs = _anchor_with(monkeypatch, {
+        "Novolen_Batch_QA_Report_Aug2026.pdf": "Novolen batch QA results for August 2026: H030SG, 22 batches.",
+        "TOOLS.md": "This table lists every tool, its owner and its QA status in the workbench.",
+    }, {"Novolen_Batch_QA_Report_Aug2026.pdf": 0.9, "TOOLS.md": 0.7})
+    assert [d["document"] for d in docs] == ["Novolen_Batch_QA_Report_Aug2026.pdf"]
+
+
+def test_the_best_match_is_always_kept(monkeypatch):
+    """Even a thin best match: dropping it would leave nothing to write from."""
+    docs = _anchor_with(monkeypatch, {"Some_Report.pdf": "A short note with none of those words."},
+                        {"Some_Report.pdf": 0.9})
+    assert [d["document"] for d in docs] == ["Some_Report.pdf"]
+
+
+def test_a_second_document_that_shares_the_subject_is_kept(monkeypatch):
+    docs = _anchor_with(monkeypatch, {
+        "Novolen_Batch_QA_Report_Aug2026.pdf": "Novolen batch QA results for August 2026: H030SG, 22 batches.",
+        "Novolen_Batch_QA_Annex.pdf": "Annex to the Novolen batch QA results for August 2026, off-spec detail.",
+    }, {"Novolen_Batch_QA_Report_Aug2026.pdf": 0.9, "Novolen_Batch_QA_Annex.pdf": 0.8})
+    assert len(docs) == 2
+
+
+def test_the_writer_is_the_fast_model_whatever_the_source_size(monkeypatch):
+    """Measured on this card: the 14b takes 588 s to plan and 206 s a section,
+    scoring the same as the 7b on the corpus QA set."""
+    monkeypatch.delenv("WORKBENCH_DECK_WRITER", raising=False)
+    assert D.choose_writer([{"text": "x" * 40000}]) == D.WRITER_SMALL
+    monkeypatch.setenv("WORKBENCH_DECK_WRITER", D.WRITER_LARGE)
+    assert D.choose_writer([{"text": "x"}]) == D.WRITER_LARGE

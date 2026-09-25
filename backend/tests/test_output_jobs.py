@@ -175,14 +175,14 @@ def test_the_decks_api(monkeypatch):
 # ── model routing and the GPU hand-off ──────────────────────────────────────
 
 
-def test_long_sources_go_to_the_large_writer():
-    from backend.orchestrator import deck_agent as D
+def test_one_writer_by_measurement_not_by_size():
+    """Routing by size sent most requests to qwen2.5:14b: 588 s to plan and
+    206 s a section on this card, scoring the same as the 7b on the corpus
+    QA set. The large writer stays registered for hardware that can hold it."""
     from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
+    from backend.orchestrator import deck_agent as D
 
-    short = [{"text": "x" * 2000}]
-    long = [{"text": "x" * 6000}, {"text": "y" * 6000}]
-    assert D.choose_writer(short) == D.WRITER_SMALL
-    assert D.choose_writer(long) == D.WRITER_LARGE
+    assert D.choose_writer([{"text": "x" * 40000}]) == D.WRITER_SMALL
     registry = load_registry(_DEFAULT_REGISTRY_PATH)
     assert D.WRITER_SMALL in registry and D.WRITER_LARGE in registry
 

@@ -22,6 +22,23 @@ So documents are built the way decks are, from the same functions:
      numerically; a section with no resolvable source is dropped rather
      than shipped looking like the sourced ones.
 
+LONG SOURCES (a whole book) WORK DIFFERENTLY, BECAUSE THEY HAVE TO. The
+anchored text is capped at 16,000 characters -- about four pages of a
+500-page book -- so a request to summarise one saw its opening and nothing
+else, and every section was written from the same prompt. For a source
+past LONG_SOURCE_CHARS:
+
+  * the OUTLINE is planned from passages spread evenly across the whole
+    document, so the plan covers the end as well as the beginning;
+  * each section is then written from only the passages that match ITS
+    heading, selected by word overlap inside the anchored documents (no
+    model call, no chance of drifting into another document);
+  * sections are written CONCURRENTLY, because each one is now a small,
+    independent prompt.
+
+A 10-20 section report from a book therefore costs about as much as one
+long call, not twenty of them.
+
 A spreadsheet is the same pipeline with a different shape at the end:
 sheets of headers and rows, each row carrying its source, and any cell
 the sources do not give left EMPTY and marked unsourced -- never filled
@@ -41,6 +58,7 @@ from backend.orchestrator.deck_agent import (
     _sources_block,
     anchor_documents,
     choose_writer,
+    source_chars,
     sources_can_answer,
     topic_coverage,
     topic_of,
@@ -52,19 +70,37 @@ logger = logging.getLogger("documents.agent")
 MAX_SECTIONS = 8
 MIN_BODY_CHARS = 120
 
+# Past this much anchored text, the whole document cannot be shown to the
+# model at once and the long-source path is used instead.
+LONG_SOURCE_CHARS = 20000
+# A long source earns more sections: this is what makes a 10-20 page PDF.
+MAX_SECTIONS_LONG = 20
+# Passages sampled across the document to plan from, and their size.
+OUTLINE_SAMPLES = 16
+OUTLINE_SAMPLE_CHARS = 700
+# Characters of matched passage given to one section's writer.
+SECTION_CONTEXT_CHARS = 4500
+# Sections written at once. Ollama serves parallel requests from one
+# resident model; more than a few on an 8 GB card costs more in context
+# than it saves in wall clock.
+SECTION_WORKERS = 3
+
 
 def plan_document(request: str, docs: list[dict], *, writer: str) -> dict | None:
     """Section headings and what each must cover, from these documents only."""
+    long_source = source_chars(docs) >= LONG_SOURCE_CHARS
+    max_sections = MAX_SECTIONS_LONG if long_source else MAX_SECTIONS
+    sources_view = outline_view(docs) if long_source else _sources_block(docs)
     prompt = f"""You are writing a report for MRPL refinery operations, using ONLY the source
 documents below.
 
 REQUEST: {request}
 
 SOURCES:
-{_sources_block(docs)}
+{sources_view}
 
 Plan the report. Rules:
-1. Between 3 and {MAX_SECTIONS} sections, in the order a reader needs them: what happened,
+1. Between 3 and {max_sections} sections, in the order a reader needs them: what happened,
    what was measured, what it means, what must happen next.
 2. Every section must be answerable from the sources above. Do not plan a section the
    sources cannot fill.
@@ -73,6 +109,8 @@ Plan the report. Rules:
 3. Headings say the finding, not the category: "Cycle 18 ran six hours long", not
    "Introduction".
 4. List the facts each section must carry, copied from the sources.
+5. For a long source, the sections must cover it END TO END, not only its opening:
+   the passages above are taken from across the whole document.
 
 Reply with ONLY this JSON object:
 {{"title": "the report title", "subtitle": "one line of context",
@@ -80,7 +118,7 @@ Reply with ONLY this JSON object:
     data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer))
     if not isinstance(data, dict) or not isinstance(data.get("sections"), list):
         return None
-    sections = [s for s in data["sections"] if isinstance(s, dict) and s.get("heading")][:MAX_SECTIONS]
+    sections = [s for s in data["sections"] if isinstance(s, dict) and s.get("heading")][:max_sections]
     if not sections:
         return None
     return {"title": str(data.get("title") or request).strip(),
@@ -115,12 +153,87 @@ Reply with ONLY this JSON object:
     return data
 
 
-# Two sections are the same section when most of their words are the same.
-# MEASURED on a live PDF: "Batch H110F-0847 Exceeded MFI Spec Limit" and
-# "Grade Changeover Checklist Updated" both told the whole story of the same
-# batch -- the same MFI, the same excursion, the same 20-minute hold point --
+def _passages(docs: list[dict], size: int = 1200) -> list[tuple[str, str]]:
+    """The anchored text as (source id, passage) pairs of roughly `size`."""
+    out: list[tuple[str, str]] = []
+    for doc in docs:
+        text = doc["text"]
+        for start in range(0, len(text), size):
+            piece = text[start:start + size].strip()
+            if len(piece) > 200:
+                out.append((doc["id"], piece))
+    return out
+
+
+def outline_view(docs: list[dict]) -> str:
+    """Passages spread across the WHOLE source, for planning a long document.
+
+    Reading the first 16,000 characters of a 500-page book and calling it
+    the source is how a "summary" ends up covering only chapter one.
+    """
+    pieces = _passages(docs, OUTLINE_SAMPLE_CHARS)
+    if len(pieces) <= OUTLINE_SAMPLES:
+        chosen = pieces
+    else:
+        step = len(pieces) / OUTLINE_SAMPLES
+        chosen = [pieces[int(i * step)] for i in range(OUTLINE_SAMPLES)]
+    return "\n\n".join(f"[{sid}] …{text}…" for sid, text in chosen)
+
+
+def _words(text: str) -> set[str]:
+    """Words and figures worth matching on.
+
+    Numbers count: "Procedure 47", "Section 12.3" and "IT Act 2000" are
+    identified by their figures, and a matcher that drops them selected the
+    opening of the document for every section.
+    """
+    import re as _re
+
+    return {w for w in _re.findall(r"[a-z][a-z0-9.-]{2,}|\d[\d.]*", text.lower())}
+
+
+def context_for(section: dict, docs: list[dict]) -> list[dict]:
+    """The passages of the anchored documents that match this heading.
+
+    Word overlap, not a model call and not a fresh corpus search: the
+    material is already the right document, and the only question is which
+    part of it this section is about.
+    """
+    wanted = _words(str(section.get("heading", "")) + " " +
+                    " ".join(str(f) for f in (section.get("must_cover") or [])))
+    if not wanted:
+        return docs
+    scored = []
+    for sid, piece in _passages(docs):
+        overlap = len(wanted & _words(piece))
+        if overlap:
+            scored.append((overlap, sid, piece))
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    by_id = {d["id"]: d for d in docs}
+    kept: dict[str, list[str]] = {}
+    budget = SECTION_CONTEXT_CHARS
+    for _score, sid, piece in scored:
+        if budget <= 0:
+            break
+        kept.setdefault(sid, []).append(piece[:budget])
+        budget -= len(piece)
+    if not kept:
+        return [{**docs[0], "text": docs[0]["text"][:SECTION_CONTEXT_CHARS]}]
+    return [{**by_id[sid], "text": "\n…\n".join(pieces)} for sid, pieces in kept.items()]
+
+
+# TWO SECTIONS ARE THE SAME SECTION when they share most of their words AND
+# their figures. MEASURED on a live PDF: "Batch H110F-0847 Exceeded MFI Spec
+# Limit" and "Grade Changeover Checklist Updated" both told the whole story
+# of the same batch -- same MFI, same excursion, same 20-minute hold point --
 # under two headings, which reads as two findings.
-DUPLICATE_OVERLAP = 0.72
+#
+# Word overlap ALONE is not enough to say so: sections of a manual describing
+# different procedures share their vocabulary ("procedure", "purge", "the
+# check the manual requires") while being about different things. Their
+# FIGURES differ, and the retelling's do not.
+DUPLICATE_OVERLAP = 0.75
 
 
 def _overlap(a: str, b: str) -> float:
@@ -130,6 +243,19 @@ def _overlap(a: str, b: str) -> float:
     if not wa or not wb:
         return 0.0
     return len(wa & wb) / min(len(wa), len(wb))
+
+
+def _same_figures(a: str, b: str) -> bool:
+    fa, fb = _numbers(a), _numbers(b)
+    if not fa and not fb:
+        return True
+    if not fa or not fb:
+        return False
+    return len(fa & fb) / min(len(fa), len(fb)) >= 0.8
+
+
+def is_retelling(body: str, earlier: str) -> bool:
+    return _overlap(body, earlier) >= DUPLICATE_OVERLAP and _same_figures(body, earlier)
 
 
 def validate_section(section: Any, docs: list[dict]) -> tuple[dict | None, str]:
@@ -184,10 +310,18 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
     if not plan:
         raise NotInCorpus("The planner could not produce a usable report outline from these documents.")
 
-    sections: list[dict] = []
-    dropped: list[str] = []
-    for planned in plan["sections"]:
-        written = write_section(request, planned, docs, writer=writer)
+    long_source = source_chars(docs) >= LONG_SOURCE_CHARS
+
+    def write_one(planned: dict) -> tuple[dict, dict | None, str]:
+        """One section, from only the passages that match it."""
+        # A long source is not shown whole to any section: its own passages
+        # are, which keeps the prompt small enough to be quick and specific.
+        context = context_for(planned, docs) if long_source else docs
+        written = write_section(request, planned, context, writer=writer)
+        # WRITTEN from its own passages, VALIDATED against the whole anchored
+        # source: a figure that appears in another chapter of the same book is
+        # sourced, and checking it against this section's passages alone
+        # rejected eight of nine sections of a book summary.
         section, why = validate_section(written, docs)
         attempts = 0
         while section is None and attempts < max_repairs:
@@ -195,12 +329,25 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             logger.info("Section rejected (%s); rewriting.", why)
             retry = dict(planned)
             retry["must_cover"] = list(planned.get("must_cover") or []) + [f"Fix: {why}"]
-            written = write_section(request, retry, docs, writer=writer)
+            written = write_section(request, retry, context, writer=writer)
             section, why = validate_section(written, docs)
+        return planned, section, why
+
+    if long_source and SECTION_WORKERS > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=SECTION_WORKERS) as pool:
+            written_sections = list(pool.map(write_one, plan["sections"]))
+    else:
+        written_sections = [write_one(planned) for planned in plan["sections"]]
+
+    sections: list[dict] = []
+    dropped: list[str] = []
+    for planned, section, why in written_sections:
         if section is None:
             dropped.append(f"{planned.get('heading', '?')}: {why}")
             continue
-        twin = next((s for s in sections if _overlap(s["body"], section["body"]) >= DUPLICATE_OVERLAP), None)
+        twin = next((s for s in sections if is_retelling(section["body"], s["body"])), None)
         if twin is not None:
             dropped.append(f"{section['heading']}: says the same as {twin['heading']!r}")
             continue

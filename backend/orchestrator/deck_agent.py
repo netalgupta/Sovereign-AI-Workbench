@@ -242,6 +242,27 @@ def anchor_documents(store, chunks: list, request: str) -> list[dict]:
     top_score = best[ranked[0]]
     ranked = [d for d in ranked if best[d] >= top_score * MIN_RELATIVE_SCORE][:MAX_DOCS]
 
+    # AND IT MUST SAY THE SUBJECT'S OWN WORDS. MEASURED on "the Novolen
+    # batch QA results for August 2026": the 1 kB Novolen report ranked
+    # first and was then joined by TOOLS.md and SYSTEM_DESIGN_QA_RESPONSES.md
+    # -- 7 kB each of this project's own paperwork, admitted because a
+    # relative cosine score is a similarity, not a subject. They then
+    # dominated the prompt and inflated the source size enough to route the
+    # job to the slow writer. The same word check topic_coverage applies to
+    # the whole set is applied per document; the best match is always kept,
+    # so a request whose words are all in one document still works.
+    chunk_text: dict[str, list[str]] = {}
+    for ch in chunks or []:
+        chunk_text.setdefault(ch.metadata.source_document, []).append(ch.text)
+    for c in result.chunks:
+        chunk_text.setdefault(c.source_document, []).append(c.text)
+
+    def about_the_topic(name: str) -> bool:
+        coverage, _ = topic_coverage(request, [{"text": " ".join(chunk_text.get(name, []))}])
+        return coverage >= MIN_DOC_TOPIC_COVERAGE
+
+    ranked = [ranked[0]] + [d for d in ranked[1:] if about_the_topic(d)]
+
     by_doc: dict[str, list] = {}
     for ch in chunks or []:
         if ch.metadata.source_document in ranked:
@@ -310,6 +331,10 @@ def topic_coverage(request: str, docs: list[dict]) -> tuple[float, list[str]]:
 
 
 MIN_TOPIC_COVERAGE = 0.4
+
+# A SECOND document has to earn its place: it must contain this fraction of
+# the subject's own words, not merely score near the best match.
+MIN_DOC_TOPIC_COVERAGE = 0.5
 
 
 def sources_can_answer(request: str, docs: list[dict]) -> tuple[bool, str]:
@@ -790,12 +815,20 @@ def _chart_from_list(slide: dict) -> dict:
     return chart
 
 
-# ROUTE BY SIZE (operator's decision). Short sources: the chat model
-# (models.yaml `reasoning-model`), fast. Long or several sources: the
-# larger `deck-writer-large`, whose structure holds up over more material;
-# a deck is a background job, so its extra minutes are affordable. The
-# threshold is in characters of anchored source text actually shown to
-# the model, the thing that grows the planning problem.
+# ONE WRITER, CHOSEN BY MEASUREMENT.
+#
+# Routing by source size sent most real requests to `deck-writer-large`
+# (qwen2.5:14b). What that cost, measured on this 8 GB card:
+#
+#   qwen2.5:7b     plan   seconds          section   seconds
+#   qwen2.5:14b    plan   588 s            section   206 s
+#
+# A two-section PDF took 13 minutes, and the repo's own model notes record
+# the two scoring identically (4/5) on the corpus QA set, with the 14b 7x
+# slower. Paying ten minutes a call for no measured gain is not a routing
+# decision, it is a tax. The large writer stays registered in models.yaml
+# for hardware that can hold it on the GPU, and WORKBENCH_DECK_WRITER
+# selects it there; nothing routes to it automatically.
 DECK_LARGE_SOURCE_CHARS = 9000
 WRITER_SMALL = "reasoning-model"
 WRITER_LARGE = "deck-writer-large"
@@ -818,8 +851,17 @@ def source_chars(docs: list[dict]) -> int:
 
 
 def choose_writer(docs: list[dict]) -> str:
-    """The registry id of the model that writes this deck."""
-    return WRITER_LARGE if source_chars(docs) >= DECK_LARGE_SOURCE_CHARS else WRITER_SMALL
+    """The registry id of the model that writes this deliverable.
+
+    `docs` is accepted (and its size logged by the caller) so the decision
+    stays in one place if a future box can afford the larger writer.
+    """
+    import os
+
+    override = os.environ.get("WORKBENCH_DECK_WRITER", "").strip()
+    if override:
+        return override
+    return WRITER_SMALL
 
 
 def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
