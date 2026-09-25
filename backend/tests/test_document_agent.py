@@ -222,7 +222,7 @@ def test_a_long_source_earns_more_sections_and_writes_them_in_parallel(monkeypat
     running = {"n": 0}
     lock = threading.Lock()
 
-    def slow_write(request, planned, context, *, writer):
+    def slow_write(request, planned, context, *, writer, long_source=False):
         with lock:
             running["n"] += 1
             seen_max["n"] = max(seen_max["n"], running["n"])
@@ -233,9 +233,20 @@ def test_a_long_source_earns_more_sections_and_writes_them_in_parallel(monkeypat
         # Distinct wording per section: near-identical bodies are dropped as
         # duplicates, which is the behaviour tested above.
         return {"heading": planned["heading"],
-                "body": f"Procedure {n} covers {'valve' * (int(n) % 3 + 1)} isolation, purge duration "
-                        f"{n}0 minutes, and the {'pressure' if int(n) % 2 else 'temperature'} check the "
-                        f"manual requires at step {n} before release.",
+                # Long enough for a long-source section, and worded distinctly:
+                # near-identical bodies with the same figures are dropped as
+                # retellings, which is the behaviour tested above.
+                # Long enough for a long-source section, worded distinctly, and
+                # carrying only figures the source contains: an invented number
+                # is rejected, which is the behaviour tested above.
+                "body": (f"Procedure {n} covers {'valve' * (int(n) % 3 + 1)} isolation before the line "
+                         f"is opened, as marker {n} of the manual sets out. The "
+                         f"{'pressure' if int(n) % 2 else 'temperature'} check required at step {n} is "
+                         f"carried out by the shift engineer and recorded on the permit. Release follows "
+                         f"only once the reading has held, and the manual gives the passage at marker "
+                         f"{n} as the reference for the limits that apply to this equipment. Where the "
+                         f"manual is silent, the shift engineer records the reading and the step at "
+                         f"marker {n} and refers the matter on rather than releasing the line."),
                 "sources": ["S1"], "contains_estimate": False}
 
     monkeypatch.setattr(D, "write_section", slow_write)

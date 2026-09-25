@@ -69,6 +69,10 @@ logger = logging.getLogger("documents.agent")
 
 MAX_SECTIONS = 8
 MIN_BODY_CHARS = 120
+# A section of a long-source report carries more: twenty sections of two
+# sentences is a three-page summary of a five-hundred-page book, and the
+# ask is ten to twenty pages.
+MIN_BODY_CHARS_LONG = 420
 
 # Past this much anchored text, the whole document cannot be shown to the
 # model at once and the long-source path is used instead.
@@ -130,8 +134,10 @@ Reply with ONLY this JSON object:
             "sections": sections}
 
 
-def write_section(request: str, section: dict, docs: list[dict], *, writer: str) -> dict | None:
+def write_section(request: str, section: dict, docs: list[dict], *, writer: str,
+                  long_source: bool = False) -> dict | None:
     """One section's prose, grounded in the anchored documents."""
+    length = ("5 to 9 full sentences" if long_source else "2 to 5 full sentences")
     prompt = f"""You are writing one section of an MRPL operations report, using ONLY the
 source documents below.
 
@@ -143,7 +149,7 @@ SOURCES:
 {_sources_block(docs)}
 
 Rules:
-1. Write 2 to 5 full sentences of plain operational English. No bullet points, no headings.
+1. Write {length} of plain operational English. No bullet points, no headings.
 2. EVERY figure must appear in the sources above, copied exactly, with its unit.
 3. Never write a number the sources do not contain. If a fact is missing, write the
    section without it rather than estimating.
@@ -266,7 +272,8 @@ def is_retelling(body: str, earlier: str) -> bool:
     return _overlap(body, earlier) >= DUPLICATE_OVERLAP and _same_figures(body, earlier)
 
 
-def validate_section(section: Any, docs: list[dict]) -> tuple[dict | None, str]:
+def validate_section(section: Any, docs: list[dict], *, min_body: int = MIN_BODY_CHARS
+                     ) -> tuple[dict | None, str]:
     """A section fit to publish, or (None, why not).
 
     The figure check is the load-bearing one, exactly as it is for slides:
@@ -280,8 +287,8 @@ def validate_section(section: Any, docs: list[dict]) -> tuple[dict | None, str]:
     # 4, not 6: "Risk" and "Costs" are legitimate headings.
     if len(heading) < 4:
         return None, "heading missing or too short"
-    if len(body) < MIN_BODY_CHARS:
-        return None, f"body is {len(body)} characters; a section needs at least {MIN_BODY_CHARS}"
+    if len(body) < min_body:
+        return None, f"body is {len(body)} characters; a section needs at least {min_body}"
 
     known = {d["id"] for d in docs}
     sources = [s for s in (section.get("sources") or []) if s in known]
@@ -326,20 +333,21 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
         # A long source is not shown whole to any section: its own passages
         # are, which keeps the prompt small enough to be quick and specific.
         context = context_for(planned, docs) if long_source else docs
-        written = write_section(request, planned, context, writer=writer)
+        min_body = MIN_BODY_CHARS_LONG if long_source else MIN_BODY_CHARS
+        written = write_section(request, planned, context, writer=writer, long_source=long_source)
         # WRITTEN from its own passages, VALIDATED against the whole anchored
         # source: a figure that appears in another chapter of the same book is
         # sourced, and checking it against this section's passages alone
         # rejected eight of nine sections of a book summary.
-        section, why = validate_section(written, docs)
+        section, why = validate_section(written, docs, min_body=min_body)
         attempts = 0
         while section is None and attempts < max_repairs:
             attempts += 1
             logger.info("Section rejected (%s); rewriting.", why)
             retry = dict(planned)
             retry["must_cover"] = list(planned.get("must_cover") or []) + [f"Fix: {why}"]
-            written = write_section(request, retry, context, writer=writer)
-            section, why = validate_section(written, docs)
+            written = write_section(request, retry, context, writer=writer, long_source=long_source)
+            section, why = validate_section(written, docs, min_body=min_body)
         return planned, section, why
 
     if long_source and SECTION_WORKERS > 1:
