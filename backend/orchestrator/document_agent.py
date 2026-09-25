@@ -216,6 +216,8 @@ SOURCES:
 
 Rules:
 1. One to three sheets. Each has a short name, 2 to 6 column headers, and its data rows.
+1a. EVERY row the sources give for this subject, not a sample. If the sources list four
+   grades, batches or dates, the sheet has four rows.
 2. EVERY value must be copied from the sources above, exactly, including units.
 3. If the sources do not give a value for a cell, put an empty string "" there. NEVER
    estimate, infer or invent a figure -- an empty cell reads as unknown, a plausible one
@@ -292,8 +294,11 @@ def build_spreadsheet_spec(request: str, store, chunks: list) -> dict:
 
     by_id = {d["id"]: d for d in docs}
     used = {s for sh in sheets for row in sh["rows"] for s in row["sources"]}
+    topic = topic_of(request)
     return {
-        "title": topic_of(request).title() or request.strip(),
+        # The subject, capitalised once -- not Title Case, which turned
+        # "QA" into "Qa" and read like a headline generator.
+        "title": (topic[:1].upper() + topic[1:]) if topic else request.strip(),
         "sheets": sheets,
         "documents": [by_id[s]["document"] for s in sorted(used) if s in by_id],
         "dropped_sheets": dropped,

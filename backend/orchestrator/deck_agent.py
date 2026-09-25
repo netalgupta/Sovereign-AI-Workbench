@@ -126,11 +126,22 @@ SLIDE_TYPES: dict[str, dict[str, Any]] = {
 # "Make a presentation on the CCR-1 regeneration cycle" pulled in
 # PPTX_SANDBOX_MODULE_GUIDE.md as a source, and the model then took its
 # slide-type names from that document's text.
+_DELIVERABLE_WORD = (
+    r"(?:power\s*point|pptx|ppt|presentation|slide\s*deck|deck|slides?|briefing|"
+    r"excel|xlsx|spread\s*sheet|spreadsheet|workbook|comparison|matrix|table|"
+    r"pdf|docx|word|document|report|memo|approval\s+note|note|summary|file)"
+)
 _DELIVERABLE_PHRASE = re.compile(
-    r"^\s*(please\s+)?(can\s+you\s+)?(make|create|prepare|build|generate|draft|put\s+together|give\s+me)\s+"
-    r"(me\s+)?(a|an|the)?\s*(nice|short|quick|brief|detailed|executive|board|technical)?\s*"
-    r"(power\s*point|pptx|ppt|presentation|slide\s*deck|deck|slides?|briefing)\s*"
-    r"(presentation|deck)?\s*(on|about|for|covering|regarding|re)?\s*",
+    r"^\s*(?:please\s+)?(?:can\s+you\s+)?"
+    r"(?:make|create|prepare|build|generate|draft|write|export|put\s+together|give\s+me)\s+"
+    r"(?:me\s+)?(?:a|an|the)?\s*"
+    r"(?:nice|short|quick|brief|detailed|executive|board|technical)?\s*"
+    # REPEATED: requests stack these words -- "an Excel comparison table",
+    # "a PDF report", "an approval note". Stripping only one left the
+    # instruction in the title of the file it produced.
+    + _DELIVERABLE_WORD + r"(?:\s+" + _DELIVERABLE_WORD + r"){0,2}\s*"
+    r"(?:of|on|about|for|covering|regarding|re)?\s*"
+    r"(?:a|an|the)?\s*",
     re.I,
 )
 
@@ -192,9 +203,15 @@ class NotInCorpus(ValueError):
 # ── anchoring ───────────────────────────────────────────────────────────────
 
 
+# "... and save it", "... and store it": the instruction's tail, not the
+# subject. Left in, it became part of a file's own title.
+_SAVE_TAIL = re.compile(r"\s*(and\s+)?(please\s+)?(save|store|write|export)\s*(it|them|this)?\s*[.!]?\s*$", re.I)
+
+
 def topic_of(request: str) -> str:
-    """The subject of a deck request, without the deliverable words."""
+    """The subject of a request, without the deliverable words around it."""
     topic = _DELIVERABLE_PHRASE.sub("", request or "").strip()
+    topic = _SAVE_TAIL.sub("", topic).strip()
     return topic or (request or "").strip()
 
 

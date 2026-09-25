@@ -214,9 +214,16 @@ DOCS = [{"id": "S1", "document": "Inspection_Report_CCR1.pdf", "pages": [1],
 def test_the_deliverable_words_are_stripped_before_retrieval():
     """Searching the request verbatim retrieved documents ABOUT
     presentations -- including this project's own PPTX guide."""
-    assert D.topic_of("Make a presentation on the CCR-1 regeneration cycle") == "the CCR-1 regeneration cycle"
+    # The leading article goes too: the subject is also the TITLE of the file
+    # this produces, and "the CCR-1 regeneration cycle" reads as a fragment.
+    assert D.topic_of("Make a presentation on the CCR-1 regeneration cycle") == "CCR-1 regeneration cycle"
     assert D.topic_of("Create a PowerPoint about hydrocracker catalyst changeout") == "hydrocracker catalyst changeout"
-    assert D.topic_of("give me a deck covering the Hassan pipeline incident") == "the Hassan pipeline incident"
+    assert D.topic_of("give me a deck covering the Hassan pipeline incident") == "Hassan pipeline incident"
+    # The deliverable words stack in real requests, and every one goes.
+    assert D.topic_of("Build an Excel comparison table of the batch QA results") == "batch QA results"
+    assert D.topic_of("Draft an approval note on the inspection findings and save it") == "inspection findings"
+    # A question is not a deliverable request and is left alone.
+    assert D.topic_of("Summarise the maintenance log") == "Summarise the maintenance log"
     assert D.topic_of("CCR-1 findings") == "CCR-1 findings"
 
 
