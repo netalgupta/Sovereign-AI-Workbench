@@ -132,7 +132,10 @@ export function ApprovalModal({
               color: 'var(--color-text-muted)',
             }}
           >
-            {action.action_type || 'DCS_SETPOINT_WRITE'}
+            {/* The pending action's own type. This defaulted to
+                DCS_SETPOINT_WRITE, labelling a document write as a
+                setpoint change on the screen where consent is recorded. */}
+            {action.action_type || 'operator action'}
           </span>
         </div>
 
@@ -215,6 +218,56 @@ export function ApprovalModal({
             what was asked -- including file writes and audit-log
             deletions. A diff with invented endpoints is worse than no
             diff: it is the most convincing part of the screen. */}
+        {/* WHAT THIS WILL WRITE. The backend resolves every gated action to
+            a concrete call and describes it line by line — the file, its
+            slides or sections, the sources they rest on, and what was
+            checked. The modal never rendered any of it, so the operator
+            approved a one-line effect with the detail sitting unused in
+            the payload. */}
+        {Array.isArray(action.preview) && action.preview.length > 0 && (
+          <div
+            className="mt-3 rounded-lg border px-3 py-2 text-left"
+            style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-wider mb-1"
+                 style={{ color: 'var(--color-text-muted)' }}>
+              What this writes
+            </div>
+            <ul className="space-y-0.5 text-[11px]" style={{ color: 'var(--color-text)' }}>
+              {action.preview.map((line, i) => (
+                <li key={i} className="leading-snug">{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* The pages the reviewer scored below the pass mark, or measured a
+            defect on: the evidence behind the grade on the line above. */}
+        {action.quality?.pages?.some((p) => (p.defects || []).length || (p.issues || []).length) && (
+          <div
+            className="mt-2 rounded-lg border px-3 py-2 text-left"
+            style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-wider mb-1"
+                 style={{ color: 'var(--color-text-muted)' }}>
+              Pages worth a look
+            </div>
+            <ul className="space-y-0.5 text-[11px]" style={{ color: 'var(--color-text)' }}>
+              {action.quality.pages
+                .filter((p) => (p.defects || []).length || (p.issues || []).length)
+                .slice(0, 6)
+                .map((p) => (
+                  <li key={p.page} className="leading-snug">
+                    <span className="font-semibold">p.{p.page}</span>
+                    {p.score !== null && p.score !== undefined && <span> · {p.score}/10</span>}
+                    {(p.defects || []).length > 0 && <span> · measured: {p.defects.join(', ')}</span>}
+                    {(p.issues || []).length > 0 && <span> · {p.issues[0]}</span>}
+                  </li>
+                ))}
+            </ul>
+          </div>
+        )}
+
         {action.current_value && action.proposed_value ? (
           <div
             className="mt-3.5 p-3 rounded-xl flex items-center justify-between gap-3 border"

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Sparkles, Download, CheckCircle2, FileText, FileSpreadsheet, Presentation, Filter, FolderDown } from 'lucide-react'
-import { CANONICAL_OUTPUTS } from './contract'
+import { OutputJobsList } from './OutputJobsList'
 
 const ICONS = {
   docx: { icon: FileText, color: '#3b82f6', label: 'DOCX' },
@@ -14,13 +14,16 @@ const ICONS = {
  * Connects directly to GET /api/outputs to list real generated files from storage/outputs/.
  */
 export default function RealOutputCards({
-  files: initialFiles = CANONICAL_OUTPUTS,
+  files: initialFiles = [],
   onDownload,
   filterType: initialFilter = 'all',
 }) {
   const [files, setFiles] = useState(initialFiles)
   const [filter, setFilter] = useState(initialFilter)
   const [isLoading, setIsLoading] = useState(false)
+  // Why the list is empty matters: nothing generated yet is not the same as
+  // the backend being unreachable, and the page must not say "LIVE" either way.
+  const [loadError, setLoadError] = useState(null)
 
   // Fetch real outputs from the backend
   useEffect(() => {
@@ -29,21 +32,31 @@ export default function RealOutputCards({
       try {
         setIsLoading(true)
         const res = await fetch('/api/outputs')
-        if (res.ok && active) {
-          const data = await res.json()
-          if (Array.isArray(data.files) && data.files.length > 0) {
-            setFiles(data.files)
-          }
+        if (!active) return
+        if (!res.ok) {
+          setLoadError(`The backend answered ${res.status} for /api/outputs.`)
+          return
         }
-      } catch {
-        // Keep fallback on error
+        const data = await res.json()
+        // THE REAL LIST, INCLUDING WHEN IT IS EMPTY. This kept a built-in
+        // sample list of three deliverables -- an "HCU Runaway Mitigation
+        // Approval Note" about a 115% feed rate among them -- and showed it
+        // whenever the backend returned nothing or could not be reached,
+        // with download buttons, on a page headed LIVE OUTPUTS. Nobody
+        // approved those files and they do not exist.
+        setFiles(Array.isArray(data.files) ? data.files : [])
+        setLoadError(null)
+      } catch (err) {
+        if (active) setLoadError(`Could not reach the backend (${err?.message || 'network error'}).`)
       } finally {
         if (active) setIsLoading(false)
       }
     }
     fetchOutputs()
+    const timer = setInterval(fetchOutputs, 10000)
     return () => {
       active = false
+      clearInterval(timer)
     }
   }, [])
 
@@ -101,11 +114,11 @@ export default function RealOutputCards({
                   border: '1px solid rgba(34, 197, 94, 0.3)',
                 }}
               >
-                LIVE OUTPUTS ({files.length})
+                {loadError ? 'BACKEND UNREACHABLE' : `LIVE OUTPUTS (${files.length})`}
               </span>
             </div>
             <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-              Sovereign generated artifacts in <code>storage/outputs/</code> · Approval-gated DOCX, XLSX, PPTX &amp; PDF (FRONTEND.md §3.7).
+              Approved, approval-gated deliverables in <code>outputs/</code> — DOCX, XLSX, PPTX &amp; PDF (FRONTEND.md §3.7).
             </p>
           </div>
         </div>
@@ -130,10 +143,23 @@ export default function RealOutputCards({
         </div>
       </div>
 
+      {/* ── Jobs being written right now ────────────────────────────────── */}
+      <OutputJobsList />
+
       {/* ── File Grid ───────────────────────────────────────────────────── */}
-      {filtered.length === 0 ? (
-        <div className="p-12 text-center rounded-xl border text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>
-          No generated outputs found matching filter &quot;{filter.toUpperCase()}&quot;.
+      {loadError ? (
+        <div className="p-12 text-center rounded-xl border text-xs font-mono"
+             style={{ color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}>
+          {loadError} Nothing is listed rather than showing files that may not exist.
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="p-12 text-center rounded-xl border text-xs font-mono"
+             style={{ color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}>
+          {isLoading
+            ? 'Reading the outputs directory…'
+            : filter === 'all'
+              ? 'No deliverables yet. Ask for a presentation, report or spreadsheet in chat; it appears here once you approve it.'
+              : `No ${filter.toUpperCase()} deliverables yet.`}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-6xl">
