@@ -136,3 +136,28 @@ def test_a_row_with_no_source_is_marked_unsourced():
     sheet, _ = D.validate_sheet({"sheet_name": "S", "headers": ["A", "B"],
                                  "rows": [{"cells": ["x", "y"], "sources": []}]}, DOCS)
     assert sheet["rows"][0]["is_unsourced"] is True
+
+
+def test_a_section_that_retells_an_earlier_one_is_dropped(monkeypatch):
+    """MEASURED on a live PDF: two headings, one incident, told twice —
+    which reads as two separate findings."""
+    monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: DOCS)
+    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (1.0, []))
+    monkeypatch.setattr(D, "sources_can_answer", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(D, "plan_document", lambda *a, **k: {
+        "title": "t", "subtitle": "", "sections": [{"heading": "What happened"}, {"heading": "Why it matters"}]})
+    first = _section(heading="What happened")
+    twin = _section(heading="Why it matters", body=_section()["body"] + " The cycle ran long.")
+    written = iter([first, twin, twin])
+    monkeypatch.setattr(D, "write_section", lambda *a, **k: next(written))
+
+    spec = D.build_document_spec("Report on CCR-1 cycle 18", object(), [])
+    assert [s["heading"] for s in spec["sections"]] == ["What happened"]
+    assert "says the same as" in spec["dropped_sections"][0]
+
+
+def test_sections_on_different_material_are_both_kept():
+    different = _section(heading="Coke burn rate",
+                         body="The coke burn rate held at 128 kg/hr throughout the regeneration, "
+                              "within the range the procedure allows for a cycle of this length.")
+    assert D._overlap(_section()["body"], different["body"]) < D.DUPLICATE_OVERLAP

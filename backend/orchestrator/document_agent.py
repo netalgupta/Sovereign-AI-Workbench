@@ -68,6 +68,8 @@ Plan the report. Rules:
    what was measured, what it means, what must happen next.
 2. Every section must be answerable from the sources above. Do not plan a section the
    sources cannot fill.
+2a. Each section covers DIFFERENT material. Two sections retelling the same incident
+   under different headings read as two findings; plan one.
 3. Headings say the finding, not the category: "Cycle 18 ran six hours long", not
    "Introduction".
 4. List the facts each section must carry, copied from the sources.
@@ -111,6 +113,23 @@ Reply with ONLY this JSON object:
     if not isinstance(data, dict):
         return None
     return data
+
+
+# Two sections are the same section when most of their words are the same.
+# MEASURED on a live PDF: "Batch H110F-0847 Exceeded MFI Spec Limit" and
+# "Grade Changeover Checklist Updated" both told the whole story of the same
+# batch -- the same MFI, the same excursion, the same 20-minute hold point --
+# under two headings, which reads as two findings.
+DUPLICATE_OVERLAP = 0.72
+
+
+def _overlap(a: str, b: str) -> float:
+    """Fraction of the shorter section's words that the longer one repeats."""
+    wa = {w for w in a.lower().split() if len(w) > 3}
+    wb = {w for w in b.lower().split() if len(w) > 3}
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / min(len(wa), len(wb))
 
 
 def validate_section(section: Any, docs: list[dict]) -> tuple[dict | None, str]:
@@ -180,6 +199,10 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             section, why = validate_section(written, docs)
         if section is None:
             dropped.append(f"{planned.get('heading', '?')}: {why}")
+            continue
+        twin = next((s for s in sections if _overlap(s["body"], section["body"]) >= DUPLICATE_OVERLAP), None)
+        if twin is not None:
+            dropped.append(f"{section['heading']}: says the same as {twin['heading']!r}")
             continue
         sections.append(section)
 
