@@ -148,7 +148,7 @@ Reply with ONLY this JSON object:
 {{"sections": [{{"heading": "...", "must_cover": ["fact", "fact"], "source_ids": ["S1"]}}]}}"""
         def ask() -> list[dict]:
             data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer),
-                             num_ctx=max(4096, len(prompt) // 3 + 1024))
+                             num_ctx=_context_bucket((len(prompt) // 3) + 1024))
             if not isinstance(data, dict):
                 return []
             return [s for s in (data.get("sections") or []) if isinstance(s, dict) and s.get("heading")]
@@ -253,10 +253,12 @@ Rules:
 
 Reply with ONLY this JSON object:
 {reply_shape}"""
-    # The window this call actually needs: prompt plus its passages, not the
-    # full 12k. Three sections are written at once, so the KV cache is paid
-    # three times.
-    window = max(2048, (len(prompt) // 3) + 1024)
+    # The window this call needs, ROUNDED TO A BUCKET. Sizing it exactly to
+    # each prompt gave every call a different num_ctx, and Ollama reloads the
+    # model when the context size changes: twenty "concurrent" sections ran
+    # one after another, 348 s for 20 calls that take 17 s each. Sharing one
+    # bucket lets the server keep a single instance with parallel slots.
+    window = _context_bucket((len(prompt) // 3) + 1024)
     data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=window)
     if not isinstance(data, dict):
         return None
@@ -404,6 +406,17 @@ def validate_section(section: Any, docs: list[dict], *, min_body: int = MIN_BODY
             "contains_estimate": bool(section.get("contains_estimate"))}, ""
 
 
+# Context sizes we ask Ollama for. Anything else forces a reload.
+CONTEXT_BUCKETS = (4096, 8192, 12288)
+
+
+def _context_bucket(tokens: int) -> int:
+    for bucket in CONTEXT_BUCKETS:
+        if tokens <= bucket:
+            return bucket
+    return CONTEXT_BUCKETS[-1]
+
+
 def _bounded(docs: list[dict]) -> list[dict]:
     """The same documents, cut to what a model call can actually read."""
     if source_chars(docs) < LONG_SOURCE_CHARS:
@@ -431,11 +444,18 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             "Nothing was written.")
 
     writer = choose_writer(docs)
+    import time as _time
+
+    _t0 = _time.time()
     plan = plan_document(request, docs, writer=writer)
+    plan_seconds = _time.time() - _t0
     if not plan:
         raise NotInCorpus("The planner could not produce a usable report outline from these documents.")
 
     long_source = source_chars(docs) >= LONG_SOURCE_CHARS
+    # Where the wall clock goes, reported with the result: planning, writing,
+    # and how many sections had to be written twice.
+    timings = {"plan_seconds": round(plan_seconds, 1), "rewrites": 0, "calls": 0}
 
     def write_one(planned: dict) -> tuple[dict, dict | None, str]:
         """One section, from only the passages that match it."""
@@ -443,6 +463,7 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
         # are, which keeps the prompt small enough to be quick and specific.
         context = context_for(planned, docs) if long_source else docs
         min_body = MIN_BODY_CHARS_LONG if long_source else MIN_BODY_CHARS
+        timings["calls"] += 1
         written = write_section(request, planned, context, writer=writer, long_source=long_source)
         # WRITTEN from its own passages, VALIDATED against the whole anchored
         # source: a figure that appears in another chapter of the same book is
@@ -452,6 +473,8 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
         attempts = 0
         while section is None and attempts < max_repairs:
             attempts += 1
+            timings["rewrites"] += 1
+            timings["calls"] += 1
             logger.info("Section rejected (%s); rewriting.", why)
             retry = dict(planned)
             retry["must_cover"] = list(planned.get("must_cover") or []) + [f"Fix: {why}"]
@@ -459,6 +482,7 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             section, why = validate_section(written, docs, min_body=min_body)
         return planned, section, why
 
+    _t1 = _time.time()
     if long_source and SECTION_WORKERS > 1:
         from concurrent.futures import ThreadPoolExecutor
 
@@ -466,6 +490,7 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             written_sections = list(pool.map(write_one, plan["sections"]))
     else:
         written_sections = [write_one(planned) for planned in plan["sections"]]
+    timings["write_seconds"] = round(_time.time() - _t1, 1)
 
     sections: list[dict] = []
     dropped: list[str] = []
@@ -498,6 +523,7 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
         "documents": [by_id[s]["document"] for s in sorted(used) if s in by_id],
         "dropped_sections": dropped,
         "relabelled_figures": relabelled,
+        "timings": timings,
         "writer": writer,
         "topic": topic_of(request),
     }

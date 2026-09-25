@@ -327,3 +327,13 @@ def test_a_model_call_never_gets_the_whole_book(monkeypatch):
     with pytest.raises(NotInCorpus):
         D.build_document_spec("Summarise the manual", object(), [])
     assert seen["chars"] < 40000, f"the relevance check was shown {seen['chars']} characters"
+
+
+def test_every_section_asks_for_the_same_context_window():
+    """MEASURED: sizing num_ctx to each prompt gave every call a different
+    value, Ollama reloads the model when the context size changes, and
+    twenty "concurrent" sections ran one after another — 348 s for calls
+    that take 17 s each."""
+    windows = {D._context_bucket(len(f"prompt of {i} characters" * i) // 3 + 1024) for i in range(1, 400)}
+    assert windows <= set(D.CONTEXT_BUCKETS)
+    assert len(windows) <= 3, "a handful of buckets, not a window per prompt"
