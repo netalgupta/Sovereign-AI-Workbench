@@ -285,3 +285,46 @@ def test_expired_graph_failure_is_answered_without_waiting_for_a_probe(monkeypat
 
     assert result["available"] is False
     assert elapsed < 0.5, f"health waited {elapsed:.1f}s on a graph probe"
+
+
+# ── a blank page is not a document ──────────────────────────────────────────
+
+
+def test_placeholder_chunks_are_purged_and_real_ones_kept(tmp_path, monkeypatch):
+    """MEASURED on a 593-page scanned book whose last 156 pages are blank:
+    156 chunks of "[Image Document: tmp….png]" were indexed as page text."""
+    import numpy as np
+
+    from backend.api import state as S
+    from backend.retrieval.vector_store import VectorStore
+
+    st = S.PipelineState.__new__(S.PipelineState)
+    import threading
+
+    st._lock = threading.RLock()
+    st._ingest_lock = threading.RLock()
+    st._snapshot = None
+    st._cached_chunks = None
+    st._indexed_paths = {}
+
+    from backend.ingestion.document_ingestion import ChunkMetadata, IngestedChunk
+
+    def chunk(text, i):
+        return IngestedChunk(text=text, metadata=ChunkMetadata(
+            source_document="Book.pdf", document_type="scanned_pdf", page_number=i,
+            chunk_index=0, ingestion_date="2026-09-26"))
+
+    chunks = [chunk("Real text about phishing and identity theft.", 1),
+              chunk("[Image Document: tmpnzoj8rrf.png]", 2),
+              chunk("[Image Document: tmp1.png] [Image Document: tmp2.png]", 3),
+              chunk("More real text about computer forensics.", 4)]
+    store = VectorStore(dim=1024)
+    store.add_chunks(chunks, np.random.rand(4, 1024).astype("float32"))
+    st._store, st._chunks = store, chunks
+    monkeypatch.setattr(st, "ensure_corpus", lambda: (st._store, st._chunks), raising=False)
+    written = []
+    monkeypatch.setattr(st, "_write_corpus_cache", lambda kept: written.append(len(kept)), raising=False)
+
+    assert st.purge_placeholder_chunks() == 2
+    assert [c.metadata.page_number for c in st._chunks] == [1, 4]
+    assert len(st._store) == 2 and written == [2]

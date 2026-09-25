@@ -691,12 +691,24 @@ class PipelineState:
         from backend.ingestion.embeddings import embed_texts
 
         def _ocr_fn(img_path: str) -> str:
+            """The page's printed text, or "" when there is none to read.
+
+            THIS USED TO RETURN A PLACEHOLDER, "[Image Document: tmpXXXX.png]",
+            for a page with no text AND for a page whose OCR raised -- and the
+            placeholder was indexed as that page's content. MEASURED on a
+            593-page scanned book whose last 156 pages are blank: 156 chunks
+            of "[Image Document: tmp….png]" in the index, and an ingest that
+            reported success. A blank page now adds nothing, and an OCR
+            failure is logged with its cause instead of disappearing into a
+            string that looks like text.
+            """
             try:
                 from backend.tools.vision.ocr_printed import extract_printed_text
-                res = extract_printed_text(img_path).full_text
-                return res if res.strip() else f"[Image Document: {Path(img_path).name}]"
-            except Exception:
-                return f"[Image Document: {Path(img_path).name}]"
+
+                return extract_printed_text(img_path).full_text or ""
+            except Exception as exc:  # noqa: BLE001 - logged, never indexed as content
+                logger.warning("OCR failed on %s: %s: %s", Path(img_path).name, type(exc).__name__, exc)
+                return ""
 
         newly_ingested: list = []
 
@@ -833,6 +845,57 @@ class PipelineState:
                 self._ingesting_names = set()
 
 
+    def _remove_chunks(self, drop) -> int:
+        """Remove every chunk `drop(chunk)` is true for, and persist that.
+
+        The store is rebuilt from the kept chunks and their EXISTING vectors
+        (no re-embedding), under the ingest lock so an ingest cannot
+        interleave, and the cache is rewritten -- the same guarantees
+        delete_source needed, now in one place for every caller.
+        """
+        removed = 0
+        with self._ingest_lock:
+            self.ensure_corpus()
+            with self._lock:
+                old_chunks = list(self._chunks or [])
+                keep = [i for i, c in enumerate(old_chunks) if not drop(c)]
+                removed = len(old_chunks) - len(keep)
+
+            if removed:
+                from backend.ingestion.embeddings import embed_texts
+                from backend.retrieval.vector_store import VectorStore
+
+                kept_chunks = [old_chunks[i] for i in keep]
+                vectors = self._store.vectors(len(old_chunks)) if len(self._store) == len(old_chunks) else None
+                new_store = VectorStore(dim=1024)
+                if kept_chunks:
+                    kept_vecs = (
+                        vectors[keep] if vectors is not None
+                        else embed_texts([c.text for c in kept_chunks])
+                    )
+                    new_store.add_chunks(kept_chunks, kept_vecs)
+                with self._lock:
+                    self._store = new_store
+                    self._chunks = kept_chunks
+                self._write_corpus_cache(kept_chunks)
+
+            with self._lock:
+                self._snapshot = None
+                self._cached_chunks = None
+        return removed
+
+    def purge_placeholder_chunks(self) -> int:
+        """Remove chunks that are only an OCR placeholder, not text.
+
+        Earlier builds indexed "[Image Document: tmpXXXX.png]" for every page
+        OCR found nothing on. Such a chunk matches no question and pollutes
+        every search; this removes the ones already in an index.
+        """
+        import re as _re
+
+        placeholder = _re.compile(r"^\s*(\[Image Document:[^\]]*\]\s*)+$")
+        return self._remove_chunks(lambda c: bool(placeholder.match(c.text or "")))
+
     def delete_source(self, target_path: str) -> dict:
         """Remove a file or folder from the active corpus, VectorStore, and registry."""
         p = Path(target_path)
@@ -856,41 +919,13 @@ class PipelineState:
         # The store is rebuilt from the kept chunks and their EXISTING
         # vectors (no re-embedding), under the ingest lock so an ingest
         # cannot interleave, and the cache is rewritten.
-        removed_count = 0
-        with self._ingest_lock:
-            self.ensure_corpus()
+        def _matches(c) -> bool:
+            name = c.metadata.source_document.lower()
+            return name == doc_name.lower() or name == target_path.lower()
 
-            def _matches(c) -> bool:
-                name = c.metadata.source_document.lower()
-                return name == doc_name.lower() or name == target_path.lower()
-
-            with self._lock:
-                old_chunks = list(self._chunks or [])
-                keep = [i for i, c in enumerate(old_chunks) if not _matches(c)]
-                removed_count = len(old_chunks) - len(keep)
-
-            if removed_count:
-                from backend.ingestion.embeddings import embed_texts
-                from backend.retrieval.vector_store import VectorStore
-
-                kept_chunks = [old_chunks[i] for i in keep]
-                vectors = self._store.vectors(len(old_chunks)) if len(self._store) == len(old_chunks) else None
-                new_store = VectorStore(dim=1024)
-                if kept_chunks:
-                    kept_vecs = (
-                        vectors[keep] if vectors is not None
-                        else embed_texts([c.text for c in kept_chunks])
-                    )
-                    new_store.add_chunks(kept_chunks, kept_vecs)
-                with self._lock:
-                    self._store = new_store
-                    self._chunks = kept_chunks
-                self._indexed_paths.pop(doc_name, None)
-                self._write_corpus_cache(kept_chunks)
-
-            with self._lock:
-                self._snapshot = None
-                self._cached_chunks = None
+        removed_count = self._remove_chunks(_matches)
+        if removed_count:
+            self._indexed_paths.pop(doc_name, None)
 
         # 4. Only delete from disk if the file was physically an app-managed upload in 07_User_Uploads.
         # User original documents elsewhere on disk must NEVER be deleted.
