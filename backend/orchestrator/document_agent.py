@@ -52,6 +52,7 @@ from typing import Any
 
 from backend.orchestrator.deck_agent import (
     MIN_TOPIC_COVERAGE,
+    figure_label_mismatches,
     NotInCorpus,
     _ask_json,
     _numbers,
@@ -377,12 +378,18 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
 
     by_id = {d["id"]: d for d in docs}
     used = {sid for sec in sections for sid in sec["sources"]}
+    # Sourced figures whose LABEL differs from the source's wording. Not a
+    # rejection: paraphrase is legitimate and a wrong label is for a person
+    # to judge, so they go on the approval card.
+    relabelled = sorted({fig for sec in sections
+                         for fig in figure_label_mismatches(sec["body"], docs)})
     return {
         "title": plan["title"],
         "subtitle": plan["subtitle"],
         "sections": sections,
         "documents": [by_id[s]["document"] for s in sorted(used) if s in by_id],
         "dropped_sections": dropped,
+        "relabelled_figures": relabelled,
         "writer": writer,
         "topic": topic_of(request),
     }

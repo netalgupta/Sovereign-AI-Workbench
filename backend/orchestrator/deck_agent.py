@@ -569,6 +569,64 @@ ITEM_TEXT_FIELD = {
 }
 
 
+# Words that carry no subject on their own, for the label check below.
+_LABEL_STOP = {
+    "the", "a", "an", "of", "in", "on", "at", "to", "for", "and", "or", "is", "was", "were",
+    "with", "by", "from", "this", "that", "its", "it", "as", "per", "than", "over", "under",
+    "value", "values", "reading", "readings", "recorded", "measured", "approximately", "about",
+    # UNITS ARE NOT LABELS. A slide calling 365 degC a "trigger" and a source
+    # calling it a bed inlet temperature share "degC", and sharing the unit
+    # was enough to make the check pass on the very case it exists for.
+    "degc", "degf", "celsius", "c", "f", "k", "kg", "kg/hr", "kgs", "g", "mg", "tonne", "tonnes",
+    "hr", "hrs", "hour", "hours", "min", "mins", "minute", "minutes", "sec", "secs", "day", "days",
+    "ppm", "ppb", "bar", "bara", "barg", "psi", "kpa", "mpa", "pa", "m3", "m3/h", "m3/hr", "nm3",
+    "mm", "cm", "km", "litre", "litres", "l", "ml", "wt", "vol", "rpm", "mw", "kw", "kwh",
+}
+
+
+def _label_words(text: str, index: int, span: int = 60) -> set[str]:
+    """The content words either side of a figure -- what it is called."""
+    window = text[max(0, index - span):index + span].lower()
+    return {w for w in re.findall(r"[a-z][a-z0-9/-]{2,}", window) if w not in _LABEL_STOP}
+
+
+def figure_label_mismatches(text: str, docs: list[dict]) -> list[str]:
+    """Figures whose surrounding words share nothing with the source's.
+
+    The figure check proves a number EXISTS in the sources. It does not
+    prove the deck calls it what the source calls it: 365 °C appeared on a
+    slide as a "trigger" when the source gave it as a bed inlet
+    temperature, and 91% as a "normal range" when it was a measurement.
+    Both are sourced numbers under a label nobody wrote.
+
+    Reported, not rejected: paraphrase is legitimate, and a wrong label is
+    for a person to judge. Returned as short strings for the approval card.
+    """
+    source_text = " ".join(d["text"] for d in docs)
+    mismatches: list[str] = []
+    for match in re.finditer(r"\d[\d.,]*", text):
+        raw = match.group(0).rstrip(".,")
+        try:
+            value = float(raw.replace(",", ""))
+        except ValueError:
+            continue
+        if value < 10:  # counts and step numbers, not measurements
+            continue
+        said = _label_words(text, match.start())
+        if not said:
+            continue
+        found_any = False
+        agrees = False
+        for hit in re.finditer(re.escape(raw), source_text):
+            found_any = True
+            if said & _label_words(source_text, hit.start()):
+                agrees = True
+                break
+        if found_any and not agrees:
+            mismatches.append(raw)
+    return sorted(set(mismatches))
+
+
 def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
     """A slide fit to render, or (None, why not).
 

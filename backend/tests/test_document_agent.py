@@ -276,3 +276,34 @@ def test_a_report_may_read_the_whole_book_not_four_pages_of_it(monkeypatch):
     with pytest.raises(NotInCorpus):
         D.build_document_spec("Summarise the manual", object(), [])
     assert seen["per_doc"] >= 1_000_000 and seen["total"] >= 1_000_000
+
+
+# ── a sourced figure under a label nobody wrote ─────────────────────────────
+
+
+LABEL_DOCS = [{"id": "S1", "document": "SOP.pdf", "pages": [1], "truncated": False,
+               "text": "The bed inlet temperature was 365 degC during the run. Chlorination "
+                       "efficiency was 91% against a normal range of 90 - 96."}]
+
+
+def test_a_figure_called_something_the_source_does_not_call_it_is_flagged():
+    """365 degC appeared on a slide as a "trigger" when the source gave it as a
+    bed inlet temperature: a sourced number under a label nobody wrote."""
+    from backend.orchestrator.deck_agent import figure_label_mismatches
+
+    assert figure_label_mismatches("Trigger point: 365 degC was reached.", LABEL_DOCS) == ["365"]
+
+
+def test_paraphrase_is_not_a_mismatch():
+    from backend.orchestrator.deck_agent import figure_label_mismatches
+
+    assert figure_label_mismatches("The bed inlet temperature reached 365 degC.", LABEL_DOCS) == []
+    assert figure_label_mismatches("Chlorination efficiency was 91% that cycle.", LABEL_DOCS) == []
+
+
+def test_sharing_only_the_unit_is_not_agreement():
+    """The check passed on its own worst case because a slide calling 365 degC
+    a trigger and a source calling it a temperature both say "degC"."""
+    from backend.orchestrator import deck_agent
+
+    assert "degc" in deck_agent._LABEL_STOP

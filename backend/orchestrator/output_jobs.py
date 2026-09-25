@@ -177,6 +177,7 @@ def _run_document(job: OutputJob) -> None:
         "sources": by_name,
         "dropped": spec["dropped_sections"],
         "estimates": sum(1 for s in spec["sections"] if s["contains_estimate"]),
+        "relabelled_figures": spec.get("relabelled_figures") or [],
     }
     job._spec = {
         "title": spec["title"],

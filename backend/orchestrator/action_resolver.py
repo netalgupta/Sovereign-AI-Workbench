@@ -260,6 +260,9 @@ def _report_line(report: dict) -> str:
             parts.append(f"{report['emptied_cells']} cell(s) left EMPTY: no source gives that value")
     if report.get("dropped"):
         parts.append(f"{len(report['dropped'])} dropped for lack of a source")
+    if report.get("relabelled_figures"):
+        figures = ", ".join(report["relabelled_figures"][:5])
+        parts.append(f"CHECK {figures}: sourced figures the report words differently from the source")
     return "Checked: " + "; ".join(parts) if parts else "Checked: nothing to report"
 
 
