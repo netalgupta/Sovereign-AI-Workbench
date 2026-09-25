@@ -303,6 +303,7 @@ def request_approval(job: OutputJob) -> dict:
         # rather than only a sentence about it.
         "quality": job.quality,
         "report": job.report,
+        "rounds": job.rounds,
         "kind": job.kind,
     }
     _stage(job, "awaiting_approval", f"Ready: approve to write {output_path.name}")

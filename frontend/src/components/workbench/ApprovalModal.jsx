@@ -241,6 +241,20 @@ export function ApprovalModal({
           </div>
         )}
 
+        {/* What the repair loop tried on this deck, and what it kept: a
+            change is only kept when the page scores higher after it. */}
+        {Array.isArray(action.rounds) && action.rounds.length > 0 && (
+          <div className="mt-2 text-[11px] text-left" style={{ color: 'var(--color-text-muted)' }}>
+            {action.rounds.map((r) => (
+              <div key={r.round}>
+                Repair pass {r.round}: {Object.keys(r.tried || {}).length} slide(s) re-paginated,{' '}
+                {(r.kept || []).length} kept, {(r.reverted || []).length} reverted
+                {r.score_after != null && ` · deck ${r.score_before ?? '?'} → ${r.score_after}`}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* The pages the reviewer scored below the pass mark, or measured a
             defect on: the evidence behind the grade on the line above. */}
         {action.quality?.pages?.some((p) => (p.defects || []).length || (p.issues || []).length) && (

@@ -79,8 +79,15 @@ def generate_pdf(
     title: str,
     sections: list[dict[str, Any]],
     output_path: str = "storage/outputs/report.pdf",
+    subtitle: str = "",
 ) -> dict[str, Any]:
-    """Generate a sovereign, publication-ready PDF document from structured sections."""
+    """Generate a sovereign, publication-ready PDF document from structured sections.
+
+    `subtitle` is the one line of context under the title, as draft_docx
+    takes. It was missing here, so an approved PDF failed at execution with
+    "generate_pdf does not take ['subtitle']" -- the operator had approved
+    a document that could not be written.
+    """
     parsed = [PdfSection.model_validate(s) for s in sections]
 
     # Validate file extension
@@ -130,7 +137,16 @@ def generate_pdf(
     )
     y_pos += 26
 
-    # Subtitle / Metadata
+    # Subtitle, then the metadata line.
+    if subtitle:
+        current_page.insert_text(
+            fitz.Point(MARGIN_LEFT, y_pos),
+            subtitle,
+            fontsize=11,
+            color=(0.25, 0.3, 0.4),
+        )
+        y_pos += 18
+
     today_str = date.today().isoformat()
     meta_text = f"Drafted on {today_str} | Verified Citations & Provenance Trace"
     current_page.insert_text(

@@ -413,3 +413,23 @@ def test_the_outputs_listing_shows_deliverables_not_working_files(tmp_path, monk
 
     names = {f["filename"] for f in TestClient(app).get("/api/outputs").json()["files"]}
     assert names == {"report.docx"}
+
+
+@pytest.mark.parametrize("kind", ["deck", "docx", "pdf", "xlsx"])
+def test_every_kind_files_arguments_its_tool_actually_takes(kind):
+    """MEASURED: an approved PDF failed at execution with "generate_pdf does
+    not take ['subtitle']" — the operator had authorised a document that
+    could not be written. The gate cannot catch this; the signature can."""
+    import inspect
+
+    from backend.tools import catalog  # noqa: F401 — importing registers every tool
+    from backend.tools.registry import get_tool
+
+    name = J.KINDS[kind][1]
+    tool = get_tool(name)
+    assert tool is not None, f"{name} is not registered, so approving it could never execute"
+    accepted = set(inspect.signature(tool.func).parameters)
+    filed = ({"deck_spec", "output_path"} if kind == "deck"
+             else {"title", "subtitle", "sections", "output_path"} if kind in ("docx", "pdf")
+             else {"title", "sheets", "output_path"})
+    assert filed <= accepted, f"{J.KINDS[kind][1]} does not take {sorted(filed - accepted)}"
