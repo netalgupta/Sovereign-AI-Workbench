@@ -347,19 +347,43 @@ class WorkerPool:
                 )
             time.sleep(0.2)
 
+    def _alive(self, w: Worker) -> bool:
+        """Is this worker's container still running?"""
+        try:
+            w.container.reload()
+            return w.container.status == "running"
+        except (docker.errors.NotFound, docker.errors.APIError):
+            return False
+
+    def _healed(self, w: Worker) -> Worker:
+        """The same worker slot, with a running container.
+
+        The pool handed out workers without asking whether their container
+        still existed, so one container removed from outside -- a crash, an
+        OOM kill, another process's cleanup -- made every later job on that
+        slot fail "No such container". It is replaced in place instead.
+        """
+        if self._alive(w):
+            return w
+        logger.warning("sandbox worker %s has no running container; respawning it", w.name)
+        fresh = self._spawn(w.name)
+        fresh.session_id, fresh.busy = w.session_id, w.busy
+        self.workers[self.workers.index(w)] = fresh
+        return fresh
+
     def _try_acquire_locked(self, session_id: str) -> Worker | None:
         # 1. sticky: this session already owns a worker and it's free
         for w in self.workers:
             if w.session_id == session_id and not w.busy:
                 w.busy = True
-                return w
+                return self._healed(w)
 
         # 2. an unbound worker is free
         for w in self.workers:
             if w.session_id is None and not w.busy:
                 w.session_id = session_id
                 w.busy = True
-                return w
+                return self._healed(w)
 
         # 3. evict the least-recently-used idle worker bound to someone else
         idle = [w for w in self.workers if not w.busy]
@@ -369,7 +393,7 @@ class WorkerPool:
         self._wipe_workspace(victim)
         victim.session_id = session_id
         victim.busy = True
-        return victim
+        return self._healed(victim)
 
     def _wipe_workspace(self, w: Worker):
         if w.session_id:

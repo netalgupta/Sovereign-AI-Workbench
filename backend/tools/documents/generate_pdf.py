@@ -63,6 +63,13 @@ def describe_effect(title: str, sections: list[dict[str, Any]], output_path: str
     return " ".join(lines)
 
 
+def _org() -> str:
+    """Whose name goes on the file: the deployment, not the subject."""
+    import os
+
+    return os.environ.get("WORKBENCH_ORG", "MRPL").strip() or "MRPL"
+
+
 @tool(
     name="generate_pdf",
     description=(
@@ -119,7 +126,7 @@ def generate_pdf(
         )
         p.insert_text(
             fitz.Point(MARGIN_LEFT, 35),
-            "MRPL Sovereign Air-Gapped Workbench — Offline Publication",
+            f"{_org()} Sovereign Air-Gapped Workbench — Offline Publication",
             fontsize=8,
             color=(0.4, 0.4, 0.4),
         )

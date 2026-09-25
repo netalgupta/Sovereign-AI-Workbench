@@ -149,3 +149,16 @@ def test_the_page_count_is_the_document_s_real_length(tmp_path):
     )
     assert out["page_count"] == fitz.open(str(tmp_path / "long.pdf")).page_count
     assert out["page_count"] > 1
+
+
+def test_whose_name_is_on_the_file_is_configurable(tmp_path, monkeypatch):
+    """The header marks who produced the deliverable, not what it is about:
+    a summary of a cyber security textbook carried a refinery's name."""
+    import fitz
+
+    from backend.tools.documents.generate_pdf import generate_pdf
+
+    monkeypatch.setenv("WORKBENCH_ORG", "Acme")
+    generate_pdf(title="A report", sections=[{"heading": "One", "body": "Body.", "sources": ["S"]}],
+                 output_path=str(tmp_path / "o.pdf"))
+    assert "Acme Sovereign" in fitz.open(str(tmp_path / "o.pdf"))[0].get_text()

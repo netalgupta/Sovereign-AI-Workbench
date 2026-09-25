@@ -78,6 +78,16 @@ def status_colours(word: str | None) -> tuple[str, str] | None:
     return getattr(PALETTE, names[0]), getattr(PALETTE, names[1])
 
 
+# WHOSE NAME GOES ON THE FILE. This marks who PRODUCED the deliverable --
+# the deployment -- not what it is about. The workbench runs at MRPL, so
+# that is the default, but a summary of a cyber security textbook carrying
+# a refinery's name in its header is the same over-reach as writing
+# refinery prose about it. WORKBENCH_ORG overrides it.
+import os as _os
+
+ORG = _os.environ.get("WORKBENCH_ORG", "MRPL").strip() or "MRPL"
+
+
 # Typography. Segoe UI ships with Windows and Office, which is where these
 # decks are opened; the measurement code reads the same TTFs.
 FONT = "Segoe UI"

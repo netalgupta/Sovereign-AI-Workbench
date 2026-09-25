@@ -233,7 +233,10 @@ class RenderManager:
 
         # Submit conversion job to Step 2 SandboxManager
         sandbox_mgr = get_sandbox_manager()
-        sb_job_id = sandbox_mgr.submit_job(code=render_code, language="python", timeout_seconds=15)
+        # host_paths: the converter reads the attachment and writes previews by
+        # their host path, which the Docker pool's read-only container cannot see.
+        sb_job_id = sandbox_mgr.submit_job(code=render_code, language="python", timeout_seconds=15,
+                                           host_paths=True)
 
         # Poll sandbox execution completion
         start_t = time.time()

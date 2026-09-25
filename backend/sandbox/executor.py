@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pathlib
+
 """
 backend/sandbox/executor.py
 
@@ -67,6 +69,12 @@ def run_in_sandbox_streaming(
         cmd=cmd,
         stdout=True,
         stderr=True,
+        # The job's OWN session directory is its working directory. Without
+        # this, code ran in the container's read-only root and any relative
+        # write ("open('shared.txt', 'w')") failed -- the scratch space the
+        # sandbox contract promises did not exist. The session directory is
+        # per job, so two jobs cannot see each other's files.
+        workdir=str(pathlib.PurePosixPath(container_path).parent),
     )
     stream = client.api.exec_start(exec_id, stream=True, demux=True)
 

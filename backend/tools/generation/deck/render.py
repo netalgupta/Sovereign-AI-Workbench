@@ -118,7 +118,7 @@ def _footer(slide, ctx: _Ctx, sources: list[str] | None, dark: bool = False):
     fg = "8FA3B8" if dark else C.muted
     y = theme.FOOTER_Y
     P.hline(slide, theme.MARGIN_X, y - 0.14, theme.PAGE_W - theme.MARGIN_X, "22415F" if dark else C.rule, 0.5)
-    P.text(slide, theme.MARGIN_X, y, 2.2, 0.25, "MRPL  ·  INTERNAL", size=theme.SIZE_FOOTER,
+    P.text(slide, theme.MARGIN_X, y, 2.2, 0.25, f"{theme.ORG}  ·  INTERNAL", size=theme.SIZE_FOOTER,
            colour=fg, weight="semibold", tracking=1.0)
     line = ctx.source_line(sources)
     if line:

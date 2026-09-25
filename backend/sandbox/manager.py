@@ -47,8 +47,18 @@ class SandboxManager:
         code: str,
         language: str = "python",
         timeout_seconds: Optional[int] = None,
+        host_paths: bool = False,
     ) -> str:
         """Submit code for asynchronous execution in an isolated sandbox.
+
+        `host_paths=True` says the code reads and writes files by their HOST
+        path (the office-document renderer does: the attachment it converts
+        and the preview directory it fills). Such a job cannot run in the
+        Docker pool -- a read-only Linux container has no E:\\... -- so it
+        runs in the process-isolated runner, which still blocks the network
+        and confines the working directory. MEASURED: with Docker up, every
+        preview render failed "Read-only file system: 'E:\\Hackathons\\...'";
+        it had only ever passed because Docker happened to be down.
 
         Returns immediately with job_id.
         """
@@ -68,6 +78,7 @@ class SandboxManager:
             "exit_code": None,
             "created_at": now_iso,
             "completed_at": None,
+            "host_paths": host_paths,
         }
 
         with self._lock:
@@ -106,8 +117,9 @@ class SandboxManager:
         language = job["language"]
         timeout_sec = job["timeout_seconds"]
 
-        # Try Docker container pool execution first if Docker is available
-        result = self._try_docker_execution(code, language, timeout_sec)
+        # Try Docker container pool execution first if Docker is available --
+        # unless the job works on host paths, which a container cannot see.
+        result = None if job.get("host_paths") else self._try_docker_execution(code, language, timeout_sec)
 
         if result is None:
             # Docker unavailable or failed initialization — fallback to process-isolated runner
@@ -142,6 +154,11 @@ class SandboxManager:
 
             if res.timed_out:
                 status = "timeout"
+                # The process runner says why a job stopped; the Docker path
+                # returned an empty stderr, so a killed infinite loop read as
+                # a job that produced nothing.
+                res.stderr = ((res.stderr or "") +
+                              f"\nExecution timed out after {timeout_seconds}s and was killed.").strip()
             elif res.exit_code == 0:
                 status = "completed"
             else:
