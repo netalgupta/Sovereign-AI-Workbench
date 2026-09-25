@@ -372,19 +372,25 @@ def _sources_block(docs: list[dict]) -> str:
 # ── model calls ─────────────────────────────────────────────────────────────
 
 
-def _ask_json(prompt: str, *, model_id: str = "reasoning-model", timeout: int = 300) -> Any:
+def _ask_json(prompt: str, *, model_id: str = "reasoning-model", timeout: int = 300,
+              num_ctx: int | None = None) -> Any:
     """One JSON call. Returns parsed JSON, or None.
 
     format=json makes Ollama return a JSON OBJECT, never a bare array --
     the previous planner asked for an array and so failed every time.
     Every prompt here therefore asks for an object.
+
+    `num_ctx` is the window this call needs. A section of a long document is
+    written from a few thousand characters of matched passage, and asking
+    for the full 12k window costs KV cache for nothing -- three times over,
+    since those sections are written concurrently.
     """
     raw = ollama_generate(
         resolve_model_name(model_id),
         prompt,
         timeout=timeout,
         format="json",
-        options={"num_ctx": NUM_CTX},
+        options={"num_ctx": num_ctx or NUM_CTX},
     )
     try:
         return json.loads(raw)

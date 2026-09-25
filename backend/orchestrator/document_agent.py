@@ -147,7 +147,11 @@ Rules:
 
 Reply with ONLY this JSON object:
 {{"heading": "...", "body": "...", "sources": ["S1"], "contains_estimate": false}}"""
-    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer))
+    # The window this call actually needs: prompt plus its passages, not the
+    # full 12k. Three sections are written at once, so the KV cache is paid
+    # three times.
+    window = max(2048, (len(prompt) // 3) + 1024)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=window)
     if not isinstance(data, dict):
         return None
     return data
