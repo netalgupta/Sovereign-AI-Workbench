@@ -246,3 +246,22 @@ def test_a_long_source_earns_more_sections_and_writes_them_in_parallel(monkeypat
     spec = D.build_document_spec("Summarise the manual", object(), [])
     assert len(spec["sections"]) == 9
     assert seen_max["n"] > 1, "sections of a long source are written concurrently"
+
+
+def test_a_report_may_read_the_whole_book_not_four_pages_of_it(monkeypatch):
+    """Anchoring caps a document at 7,000 characters because a deck shows
+    whole documents to the model. A report reads passages, so it asks for
+    the book — otherwise a 500-page source is summarised from chapter one."""
+    seen = {}
+
+    def fake_anchor(store, chunks, request, *, max_chars_per_doc, max_chars_total):
+        seen.update(per_doc=max_chars_per_doc, total=max_chars_total)
+        return DOCS
+
+    monkeypatch.setattr(D, "anchor_documents", fake_anchor)
+    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (1.0, []))
+    monkeypatch.setattr(D, "sources_can_answer", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(D, "plan_document", lambda *a, **k: None)
+    with pytest.raises(NotInCorpus):
+        D.build_document_spec("Summarise the manual", object(), [])
+    assert seen["per_doc"] >= 1_000_000 and seen["total"] >= 1_000_000

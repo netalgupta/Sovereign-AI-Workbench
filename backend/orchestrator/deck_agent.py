@@ -215,7 +215,9 @@ def topic_of(request: str) -> str:
     return topic or (request or "").strip()
 
 
-def anchor_documents(store, chunks: list, request: str) -> list[dict]:
+def anchor_documents(store, chunks: list, request: str, *,
+                     max_chars_per_doc: int = MAX_CHARS_PER_DOC,
+                     max_chars_total: int = MAX_CHARS_TOTAL) -> list[dict]:
     """The documents this request is about, each with its full text.
 
     THE ONE RETRIEVAL THAT MATTERS. Section-level searches were what let
@@ -269,13 +271,17 @@ def anchor_documents(store, chunks: list, request: str) -> list[dict]:
             by_doc.setdefault(ch.metadata.source_document, []).append(ch)
 
     docs = []
-    budget = MAX_CHARS_TOTAL
+    # The caller says how much text it can use. A deck shows whole documents
+    # to the model, so it keeps the small default; a long-document report
+    # reads PASSAGES of its sources and asks for the whole book, which at
+    # 7,000 characters a document was four pages of a five-hundred-page one.
+    budget = max_chars_total
     for i, name in enumerate(ranked, 1):
         ordered = sorted(by_doc.get(name, []), key=lambda c: (c.metadata.chunk_index or 0))
         text = "\n".join(c.text for c in ordered).strip()
         if not text:
             text = "\n".join(c.text for c in result.chunks if c.source_document == name)
-        allowance = min(MAX_CHARS_PER_DOC, budget)
+        allowance = min(max_chars_per_doc, budget)
         # AT MOST FOUR PAGES. A 15-page document matched on every page
         # printed "p.1, 2, 3, ... 15" under every slide, which is noise
         # rather than a citation.

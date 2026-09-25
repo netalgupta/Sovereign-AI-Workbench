@@ -84,6 +84,10 @@ SECTION_CONTEXT_CHARS = 4500
 # resident model; more than a few on an 8 GB card costs more in context
 # than it saves in wall clock.
 SECTION_WORKERS = 3
+# How much anchored source text a report may read. Far above the deck's
+# budget because sections read PASSAGES of it rather than the whole thing:
+# a 593-page book is about 1.2 million characters.
+DOC_SOURCE_BUDGET = 2_000_000
 
 
 def plan_document(request: str, docs: list[dict], *, writer: str) -> dict | None:
@@ -296,7 +300,8 @@ def validate_section(section: Any, docs: list[dict]) -> tuple[dict | None, str]:
 
 def build_document_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
     """Corpus in, validated document spec out. Raises NotInCorpus when it cannot."""
-    docs = anchor_documents(store, chunks, request)
+    docs = anchor_documents(store, chunks, request,
+                            max_chars_per_doc=DOC_SOURCE_BUDGET, max_chars_total=DOC_SOURCE_BUDGET)
 
     coverage, missing = topic_coverage(request, docs)
     if coverage < MIN_TOPIC_COVERAGE:
