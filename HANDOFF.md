@@ -37,10 +37,17 @@ All four anchor the request to the documents it is actually about and
   broken mean 3.2/10, real 6.5/10; with measured-defect penalties every broken
   control scores below every real page. Its scale is compressed on real decks
   (5.5–7.2), so it separates broken from decent, not decent from excellent.
-- **Writer routing.** One 14b planning call takes **588 s** and a section
-  **206 s** (8 GB card, num_ctx 12288); the 7b answers in seconds. The 300 s
-  default killed long-source jobs at their first step — the 14b now gets 1800 s.
-  `DECK_LARGE_SOURCE_CHARS = 9000` decides which writer runs.
+- **The writer is the 7b, and nothing routes to the 14b.** One 14b planning
+  call takes **588 s** and a section **206 s** on this card; a two-section PDF
+  took 13 minutes. The repo's own model notes record the two scoring
+  identically (4/5) on the corpus QA set. `WORKBENCH_DECK_WRITER` selects the
+  larger model on hardware that can hold it; nothing selects it automatically.
+- **Long sources** (past 20,000 characters — a book) are planned from passages
+  spread across the WHOLE document, each section is written from only the
+  passages matching its heading, and sections are written concurrently
+  (`SECTION_WORKERS`). A section is written from its passages but VALIDATED
+  against the whole source. Reports ask anchoring for the entire document
+  rather than the deck's 7,000-character-per-document budget.
 - **Layout.** 34 real pages measured by PowerPoint: 0 overflow, 0 overlap, 0
   off-page, 0 empty. The one empty page found was a real bug (below).
 
@@ -61,9 +68,10 @@ All four anchor the request to the documents it is actually about and
 
 ## 4. Open, in priority order
 
-1. **Document quality on the 14b** is unmeasured: a live PDF job was still
-   running at handoff. Compare the same request written by 7b and 14b and set
-   `DECK_LARGE_SOURCE_CHARS` from that, rather than from size alone.
+1. **The book run.** A 593-page scanned book (OCR, ~1.2M characters) is being
+   ingested to measure a 10-20 page PDF summary end to end; the target is
+   3-4 minutes. The long-source path above exists for it and is unit-tested,
+   but has not yet been measured on the real thing.
 2. **Per-figure LABEL check.** Figures are verified to EXIST in the sources,
    not to be labelled correctly (365 °C shown as a "trigger"). The status
    contradiction check is the first half of this.
