@@ -595,3 +595,36 @@ def test_a_primitive_refuses_a_negative_box():
     slide = P_().slides.add_slide(P_().slide_layouts[6])
     with pytest.raises(ValueError, match="non-positive"):
         primitives.text(slide, 1, 1, 3, -0.35, "x", size=12)
+
+
+# ── the two newest layouts ──────────────────────────────────────────────────
+
+
+def test_a_quote_must_be_one_sentence_from_a_source():
+    short = {"type": "quote", "title": "The standing instruction", "text": "Too short.", "sources": ["S1"]}
+    assert D.validate_slide(short, DOCS)[0] is None
+    long = {"type": "quote", "title": "The standing instruction", "sources": ["S1"],
+            "text": "Unloading must proceed under a continuous nitrogen blanket, and full-face "
+                    "supplied-air respirators are mandatory for all vessel-entry personnel.",
+            "attribution": "SOP-114-Rev3, p. 2"}
+    out, why = D.validate_slide(long, DOCS)
+    assert out is not None, why
+    assert out["attribution"] == "SOP-114-Rev3, p. 2"
+
+
+def test_a_matrix_needs_exactly_four_titled_cells():
+    three = {"type": "matrix", "title": "Findings by likelihood", "sources": ["S1"],
+             "cells": [{"title": "A"}, {"title": "B"}, {"title": "C"}]}
+    out, why = D.validate_slide(three, DOCS)
+    assert out is None and "exactly 4" in why
+
+    four = {"type": "matrix", "title": "Findings by likelihood", "sources": ["S1"],
+            "cells": [{"title": f"Cell {i}", "items": ["One thing", "Another"], "status": "watch"}
+                      for i in range(4)]}
+    assert D.validate_slide(four, DOCS)[0] is not None
+
+
+@pytest.mark.parametrize("alias, canonical", [("pull_quote", "quote"), ("statement", "quote"),
+                                              ("two_by_two", "matrix"), ("quadrant", "matrix")])
+def test_the_names_a_model_reaches_for_resolve(alias, canonical):
+    assert D.canonical_type(alias) == canonical

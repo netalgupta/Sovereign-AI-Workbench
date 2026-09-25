@@ -102,6 +102,18 @@ SLIDE_TYPES: dict[str, dict[str, Any]] = {
         "spec": '"columns": [{"title": str, "points": [str], "status": exceeded|below|watch|normal}] (2-3)',
         "use": "two or three options, units or periods set against each other",
     },
+    "quote": {
+        "required": ["text"],
+        "spec": '"text": str (ONE sentence copied from a source, under 220 chars), '
+                '"attribution": str (the document it came from)',
+        "use": "a directive, limit or conclusion that carries a slide on its own, in the source's words",
+    },
+    "matrix": {
+        "required": ["cells"],
+        "spec": '"axes": {"x": str, "y": str}, "cells": [{"title": str, "items": [str] (1-4), '
+                '"status": exceeded|below|watch|normal}] (exactly 4, read left-right then top-bottom)',
+        "use": "two dimensions set against each other -- likelihood against consequence, effort against impact",
+    },
     "actions": {
         "required": ["items"],
         "spec": '"items": [{"action": str, "owner": str, "due": str, "priority": high|medium|low}] (2-6)',
@@ -154,6 +166,8 @@ TYPE_SYNONYMS = {
     "two_column": "comparison", "comparison_cards": "comparison", "compare": "comparison",
     "action_plan": "actions", "next_steps": "actions", "recommendations": "actions",
     "image_caption": "exhibit", "diagram": "exhibit",
+    "pull_quote": "quote", "statement": "quote", "callout_quote": "quote",
+    "two_by_two": "matrix", "quadrant": "matrix", "risk_matrix_2x2": "matrix",
 }
 
 # Field names a model uses for the same thing.
@@ -591,6 +605,21 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
         out["columns"] = [str(c) for c in cols]
         out["rows"] = rows
 
+    if stype == "quote":
+        text = " ".join(str(out.get("text") or "").split())
+        if not 20 <= len(text) <= 240:
+            return None, "a quote is one sentence between 20 and 240 characters"
+        out["text"] = text
+        out["attribution"] = str(out.get("attribution") or "").strip()
+
+    if stype == "matrix":
+        cells = [c for c in (out.get("cells") or []) if isinstance(c, dict) and str(c.get("title") or "").strip()]
+        if len(cells) != 4:
+            return None, "a matrix needs exactly 4 cells, each with a title"
+        out["cells"] = [{"title": str(c["title"]).strip(),
+                         "items": [str(i).strip() for i in (c.get("items") or []) if str(i).strip()][:4],
+                         **({"status": c["status"]} if c.get("status") else {})} for c in cells]
+
     if stype == "chart":
         cats = [str(c) for c in out.get("categories") or []]
         series = []
@@ -634,7 +663,10 @@ def validate_slide(slide: Any, docs: list[dict]) -> tuple[dict | None, str]:
     out["sources"] = [s for s in (out.get("sources") or []) if s in known] or [docs[0]["id"]]
 
     sourced = _numbers(" ".join(d["text"] for d in docs))
-    content = {k: v for k, v in out.items() if k not in ("sources", "type", "notes")}
+    # `attribution` is a DOCUMENT NAME ("SOP-114-Rev3, p. 2"), not a
+    # measurement: document names carry numbers (SOP-114, CCR-1, P-HS-02)
+    # and checking them against the source text rejects correct citations.
+    content = {k: v for k, v in out.items() if k not in ("sources", "type", "notes", "attribution")}
     # Single digits are exempt: they are counts, step numbers and list
     # positions, not measurements.
     unsourced = {n for n in _numbers(content) if n >= 10 and n not in sourced}

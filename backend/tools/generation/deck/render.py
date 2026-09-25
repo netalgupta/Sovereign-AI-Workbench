@@ -21,6 +21,8 @@ DECK SPEC (all content; validated upstream in slide_agent):
       process     steps: [{title, detail?}]
       timeline    events: [{date, title, detail?}]
       alert       severity, headline, what, impact, action
+      quote       text (the source's own sentence), attribution
+      matrix      axes: {x, y}?, cells: [{title, items: [str], status?}] (4)
       comparison  columns: [{title, points: [str], status?}]
       actions     items: [{action, owner?, due?, priority?}]
       exhibit     image_path (a REAL file from the corpus), caption?,
@@ -830,7 +832,71 @@ def _exhibit(prs, ctx, sec_title, sd):
             oy += oh + 0.2
 
 
+def _quote(prs, ctx, sec_title, sd):
+    """One sentence from the sources, set large, with the document it came from.
+
+    For a directive or finding that carries a section on its own -- an SOP
+    instruction, a limit, a conclusion. The text is the source's own words;
+    the attribution is the document, so a strong line on a slide can still
+    be traced.
+    """
+    s = _content_slide(prs, ctx, sec_title, sd)
+    text = str(sd.get("text", "")).strip()
+    attribution = str(sd.get("attribution", "")).strip()
+    box_w = theme.CONTENT_W - 1.6
+    size = fit.fit_size(text, box_w, theme.BODY_H - 1.6, 34, 18, "light", 1.28, max_lines=6) or 18
+    height = fit.text_height_in(text, box_w, size, "light", 1.28)
+    top = _centre_y(height + (0.9 if attribution else 0.2))
+
+    P.rect(s, theme.MARGIN_X, top - 0.1, 0.1, height + 0.2, C.amber)
+    P.text(s, theme.MARGIN_X + 0.55, top, box_w, height + 0.1, text, size=size, colour=C.navy,
+           weight="light", line_spacing=1.28)
+    if attribution:
+        P.text(s, theme.MARGIN_X + 0.55, top + height + 0.35, box_w, 0.35, attribution,
+               size=12, colour=C.teal, weight="semibold", caps=True, tracking=1.2)
+
+
+def _matrix(prs, ctx, sec_title, sd):
+    """A 2x2 of labelled quadrants -- likelihood against consequence, effort
+    against impact. Four cells, each with a heading and its items."""
+    s = _content_slide(prs, ctx, sec_title, sd)
+    cells = [c for c in (sd.get("cells") or []) if isinstance(c, dict)][:4]
+    while len(cells) < 4:
+        cells.append({})
+    gap = 0.3
+    cw = (theme.CONTENT_W - gap) / 2
+    ch = (theme.BODY_H - 0.9 - gap) / 2
+    top = theme.BODY_Y + 0.55
+    axes = sd.get("axes") or {}
+    if axes.get("x"):
+        P.text(s, theme.MARGIN_X, theme.BODY_Y, theme.CONTENT_W, 0.3, str(axes["x"]), size=11,
+               colour=C.ink_2, caps=True, tracking=1.2)
+    for i, cell in enumerate(cells):
+        x = theme.MARGIN_X + (i % 2) * (cw + gap)
+        y = top + (i // 2) * (ch + gap)
+        status = theme.status_colours(cell.get("status"))
+        accent = status[0] if status else (C.teal if i % 3 == 0 else C.navy)
+        P.rect(s, x, y, cw, ch, C.panel, radius=0.02)
+        P.rect(s, x, y, cw, 0.07, accent)
+        P.text(s, x + 0.35, y + 0.35, cw - 0.7, 0.4, str(cell.get("title", "")), size=14,
+               colour=C.navy, weight="semibold")
+        items = [str(t) for t in (cell.get("items") or []) if str(t).strip()][:4]
+        if items:
+            # Fitted to the box that is actually drawn, with the gap the
+            # paragraphs are actually given (6 pt): fitting to a taller box
+            # or a wider gap puts the last line past the panel edge, which
+            # PowerPoint reports as overflow.
+            box_h = ch - 1.25
+            # 11 pt floor, not 10: qa.py measures anything under 10.5 pt as
+            # too small to read, so a cell that shrank to fit was a defect.
+            size = fit.fit_many(items, cw - 0.7, box_h, 13, 11, 6 / 72) or 11
+            P.paragraphs(s, x + 0.35, y + 0.95, cw - 0.7, box_h, items, size=size,
+                         colour=C.ink, gap_pt=6, line_spacing=1.22)
+
+
 LAYOUTS = {
+    "quote": _quote,
+    "matrix": _matrix,
     "exhibit": _exhibit,
     "points": _points,
     "big_stat": _big_stat,
