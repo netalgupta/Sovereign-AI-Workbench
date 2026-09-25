@@ -162,3 +162,50 @@ def test_whose_name_is_on_the_file_is_configurable(tmp_path, monkeypatch):
     generate_pdf(title="A report", sections=[{"heading": "One", "body": "Body.", "sources": ["S"]}],
                  output_path=str(tmp_path / "o.pdf"))
     assert "Acme Sovereign" in fitz.open(str(tmp_path / "o.pdf"))[0].get_text()
+
+
+def test_a_section_longer_than_a_page_is_not_truncated(tmp_path):
+    """The first version wrote NOTHING for text that did not fit the space
+    left, retried on one fresh page, and so silently cut any section longer
+    than a page — which a book chapter always is."""
+    import fitz
+
+    from backend.tools.documents.generate_pdf import generate_pdf
+
+    paragraphs = [f"Paragraph {i} explains a distinct idea in enough words to take up real "
+                  f"space on the page, so that the section must run across several pages. "
+                  f"MARKER{i}END." for i in range(60)]
+    out = generate_pdf(title="Long", sections=[{"heading": "One long chapter", "body": "\n\n".join(paragraphs),
+                                                "sources": ["Book.pdf"]}],
+                       output_path=str(tmp_path / "long.pdf"))
+    text = "".join(page.get_text() for page in fitz.open(str(tmp_path / "long.pdf")))
+    missing = [i for i in range(60) if f"MARKER{i}END" not in text]
+    assert not missing, f"paragraphs lost: {missing[:5]}"
+    assert out["page_count"] >= 3
+
+
+def test_dashes_and_quotes_survive(tmp_path):
+    """The built-in font printed an em dash as "?"."""
+    import fitz
+
+    from backend.tools.documents.generate_pdf import generate_pdf
+
+    generate_pdf(title="Dashes — and ‘quotes’", sections=[{"heading": "A", "body": "Before — after “quoted”.",
+                                                          "sources": ["S"]}],
+                 output_path=str(tmp_path / "d.pdf"))
+    text = fitz.open(str(tmp_path / "d.pdf"))[0].get_text()
+    assert "—" in text and "“quoted”" in text
+
+
+def test_a_shared_source_is_named_once_not_after_every_section(tmp_path):
+    import fitz
+
+    from backend.tools.documents.generate_pdf import generate_pdf
+
+    generate_pdf(title="Book", sections=[{"heading": f"Chapter {i}", "body": "Text.", "sources": ["The Book.pdf"],
+                                          "note": f"Pages {i}0-{i}9 of the source"} for i in range(1, 6)],
+                 output_path=str(tmp_path / "b.pdf"))
+    text = "".join(p.get_text() for p in fitz.open(str(tmp_path / "b.pdf")))
+    assert text.count("The Book.pdf") == 1
+    assert "Pages 30-39 of the source" in text
+    assert "Contents" in text
