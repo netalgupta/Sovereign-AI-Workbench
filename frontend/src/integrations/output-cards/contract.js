@@ -59,38 +59,9 @@ export function validateProps(props) {
   return true
 }
 
-export const CANONICAL_OUTPUTS = [
-  {
-    id: 'out-01',
-    filename: 'HCU_Runaway_Mitigation_Approval_Note.docx',
-    fileType: 'docx',
-    fileSize: '184 KB',
-    generatedAt: '2026-09-10 14:22',
-    citationsCount: 4,
-    downloadUrl: '#',
-    status: 'ready',
-    summary: 'Formal executive note detailing risk mitigations for HCU feed rate increase to 115%.',
-  },
-  {
-    id: 'out-02',
-    filename: 'Catalyst_Bed_Exotherm_Simulation.xlsx',
-    fileType: 'xlsx',
-    fileSize: '412 KB',
-    generatedAt: '2026-09-10 13:45',
-    citationsCount: 3,
-    downloadUrl: '#',
-    status: 'ready',
-    summary: 'Thermocouple delta-T step projections across catalyst beds 1 through 4.',
-  },
-  {
-    id: 'out-03',
-    filename: 'Refinery_Operations_Review_Deck.pptx',
-    fileType: 'pptx',
-    fileSize: '2.1 MB',
-    generatedAt: '2026-09-10 11:10',
-    citationsCount: 6,
-    downloadUrl: '#',
-    status: 'ready',
-    summary: 'Slide deck for morning operations briefing with unit superintendent.',
-  },
-]
+// CANONICAL_OUTPUTS was here: three invented deliverables (an "HCU Runaway
+// Mitigation Approval Note" for a 115% feed rate among them) used as the
+// default `files` prop. The Outputs page showed them, with working download
+// buttons, under a "LIVE OUTPUTS" heading whenever the backend returned
+// nothing or could not be reached. Nobody approved those files and they do
+// not exist; the page reads the real directory and says when it is empty.
