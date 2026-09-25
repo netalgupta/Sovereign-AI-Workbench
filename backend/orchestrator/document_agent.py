@@ -73,35 +73,119 @@ MIN_BODY_CHARS = 120
 # A section of a long-source report carries more: twenty sections of two
 # sentences is a three-page summary of a five-hundred-page book, and the
 # ask is ten to twenty pages.
-MIN_BODY_CHARS_LONG = 420
+MIN_BODY_CHARS_LONG = 600
 
 # Past this much anchored text, the whole document cannot be shown to the
 # model at once and the long-source path is used instead.
 LONG_SOURCE_CHARS = 20000
 # A long source earns more sections: this is what makes a 10-20 page PDF.
 MAX_SECTIONS_LONG = 20
+# ...and a FLOOR. Given a range of "3 to 20" for a 593-page book the model
+# planned four sections and produced a one-page summary. A long source is
+# the case where the reader wants the whole of it covered.
+MIN_SECTIONS_LONG = 14
+# A long source is planned in consecutive groups, so every stretch of it is
+# covered rather than whichever part the model found interesting.
+OUTLINE_GROUPS = 5
+OUTLINE_SAMPLES_PER_GROUP = 6
+SECTIONS_PER_GROUP = 4
 # Passages sampled across the document to plan from, and their size.
 OUTLINE_SAMPLES = 16
 OUTLINE_SAMPLE_CHARS = 700
 # Characters of matched passage given to one section's writer.
-SECTION_CONTEXT_CHARS = 4500
-# Sections written at once. Ollama serves parallel requests from one
-# resident model; more than a few on an 8 GB card costs more in context
-# than it saves in wall clock.
-SECTION_WORKERS = 3
+SECTION_CONTEXT_CHARS = 3000
+# Sections written at once. MEASURED against this Ollama: four concurrent
+# calls finished in 18 s of wall clock against 48 s of call time, a 2.7x
+# speedup, so the server does serve them in parallel from one resident
+# model. Five keeps the KV cache modest on an 8 GB card.
+SECTION_WORKERS = 5
 # How much anchored source text a report may read. Far above the deck's
 # budget because sections read PASSAGES of it rather than the whole thing:
 # a 593-page book is about 1.2 million characters.
 DOC_SOURCE_BUDGET = 2_000_000
 
 
+def plan_long_document(request: str, docs: list[dict], *, writer: str) -> dict | None:
+    """Plan a long source in GROUPS, each covering one stretch of it.
+
+    Asked for "between 14 and 20 sections" over a 593-page book in one call,
+    the model planned six and the report came to two pages. The document is
+    split into consecutive groups of passages and each group is planned on
+    its own, concurrently: every part of the source gets its own sections,
+    and the count follows the material instead of the model's appetite.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    pieces = _passages(docs, OUTLINE_SAMPLE_CHARS)
+    if not pieces:
+        return None
+    groups: list[list[tuple[str, str]]] = []
+    stride = max(1, len(pieces) // OUTLINE_GROUPS)
+    for start in range(0, len(pieces), stride):
+        chunk = pieces[start:start + stride]
+        if chunk:
+            groups.append(chunk)
+    groups = groups[:OUTLINE_GROUPS]
+
+    def plan_group(index_and_group):
+        index, group = index_and_group
+        step = max(1, len(group) // OUTLINE_SAMPLES_PER_GROUP)
+        view = "\n\n".join(f"[{sid}] …{text}…" for sid, text in group[::step][:OUTLINE_SAMPLES_PER_GROUP])
+        prompt = f"""You are planning part {index + 1} of {len(groups)} of a report, from the passages
+below. They are consecutive extracts from one long source; part {index + 1} covers this stretch of it.
+
+REQUEST: {request}
+
+PASSAGES:
+{view}
+
+Plan EXACTLY {SECTIONS_PER_GROUP} sections covering what THIS stretch contains, in its own
+vocabulary. Four sections, not fewer: this stretch is a fifth of a long document.
+Headings say what the material says, never "Introduction" or "Overview". For each section list
+the facts it must carry, copied from the passages above.
+
+Reply with ONLY this JSON object:
+{{"sections": [{{"heading": "...", "must_cover": ["fact", "fact"], "source_ids": ["S1"]}}]}}"""
+        def ask() -> list[dict]:
+            data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer),
+                             num_ctx=max(4096, len(prompt) // 3 + 1024))
+            if not isinstance(data, dict):
+                return []
+            return [s for s in (data.get("sections") or []) if isinstance(s, dict) and s.get("heading")]
+
+        # Asked for four sections a group returned one or two, and five groups
+        # planned eight sections for a 593-page book. A thin group is asked
+        # once more before its stretch of the source goes uncovered.
+        planned = ask()
+        # Only a group that came back nearly empty is worth a second call:
+        # asking again for a group that gave three costs a planning round
+        # for one extra section.
+        if len(planned) < 2:
+            planned = max(planned, ask(), key=len)
+        return planned
+
+    with ThreadPoolExecutor(max_workers=SECTION_WORKERS) as pool:
+        planned = list(pool.map(plan_group, enumerate(groups)))
+    sections = [s for group in planned for s in group][:MAX_SECTIONS_LONG]
+    if not sections:
+        return None
+    topic = topic_of(request)
+    return {"title": (topic[:1].upper() + topic[1:]) if topic else request.strip(),
+            "subtitle": f"From {docs[0]['document']}", "sections": sections}
+
+
 def plan_document(request: str, docs: list[dict], *, writer: str) -> dict | None:
     """Section headings and what each must cover, from these documents only."""
     long_source = source_chars(docs) >= LONG_SOURCE_CHARS
+    if long_source:
+        return plan_long_document(request, docs, writer=writer)
     max_sections = MAX_SECTIONS_LONG if long_source else MAX_SECTIONS
+    section_count = (f"Between {MIN_SECTIONS_LONG} and {max_sections}" if long_source
+                     else f"Between 3 and {max_sections}")
     sources_view = outline_view(docs) if long_source else _sources_block(docs)
-    prompt = f"""You are writing a report for MRPL refinery operations, using ONLY the source
-documents below.
+    prompt = f"""You are planning a report from the source documents below, using ONLY them.
+Write about what THESE documents are about: they may be plant procedures, a legal text, a
+textbook or anything else, and the report follows their subject, not a house style.
 
 REQUEST: {request}
 
@@ -109,14 +193,14 @@ SOURCES:
 {sources_view}
 
 Plan the report. Rules:
-1. Between 3 and {max_sections} sections, in the order a reader needs them: what happened,
+1. {section_count} sections, in the order a reader needs them: what happened,
    what was measured, what it means, what must happen next.
 2. Every section must be answerable from the sources above. Do not plan a section the
    sources cannot fill.
 2a. Each section covers DIFFERENT material. Two sections retelling the same incident
    under different headings read as two findings; plan one.
-3. Headings say the finding, not the category: "Cycle 18 ran six hours long", not
-   "Introduction".
+3. Headings say the finding, not the category: "Bed inlet ran six hours long" or
+   "Section 66A was struck down", never "Introduction" or "Overview".
 4. List the facts each section must carry, copied from the sources.
 5. For a long source, the sections must cover it END TO END, not only its opening:
    the passages above are taken from across the whole document.
@@ -138,9 +222,19 @@ Reply with ONLY this JSON object:
 def write_section(request: str, section: dict, docs: list[dict], *, writer: str,
                   long_source: bool = False) -> dict | None:
     """One section's prose, grounded in the anchored documents."""
-    length = ("5 to 9 full sentences" if long_source else "2 to 5 full sentences")
-    prompt = f"""You are writing one section of an MRPL operations report, using ONLY the
-source documents below.
+    # MEASURED: asked for "8 to 12 sentences, at least 700 characters" in a
+    # single `body`, this model returns about 334 -- it writes one field
+    # short however the length is worded. Asked for three or four PARAGRAPHS
+    # it writes each of them, which is how a section reaches the length a
+    # ten-page report needs without three times the calls.
+    length = ("2 to 4 full sentences" if long_source else "2 to 5 full sentences")
+    reply_shape = ('{"heading": "...", "paragraphs": ["...", "...", "..."], "sources": ["S1"], '
+                   '"contains_estimate": false}' if long_source else
+                   '{"heading": "...", "body": "...", "sources": ["S1"], "contains_estimate": false}')
+    paragraph_rule = ("6. Write THREE OR FOUR paragraphs, each on a different part of the material "
+                      "above. Each paragraph is {length} long.\n" if long_source else "")
+    prompt = f"""You are writing one section of a report, using ONLY the source documents
+below. Write about what THEY are about, in their own vocabulary.
 
 REPORT REQUEST: {request}
 SECTION HEADING: {section.get('heading')}
@@ -150,14 +244,15 @@ SOURCES:
 {_sources_block(docs)}
 
 Rules:
-1. Write {length} of plain operational English. No bullet points, no headings.
+1. Write plain, precise English in the subject's own terms. No bullet points, no headings.
 2. EVERY figure must appear in the sources above, copied exactly, with its unit.
 3. Never write a number the sources do not contain. If a fact is missing, write the
    section without it rather than estimating.
 4. "sources" lists the source ids ([S1], [S2]) this section's claims come from.
+{paragraph_rule}
 
 Reply with ONLY this JSON object:
-{{"heading": "...", "body": "...", "sources": ["S1"], "contains_estimate": false}}"""
+{reply_shape}"""
     # The window this call actually needs: prompt plus its passages, not the
     # full 12k. Three sections are written at once, so the KV cache is paid
     # three times.
@@ -165,6 +260,9 @@ Reply with ONLY this JSON object:
     data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=window)
     if not isinstance(data, dict):
         return None
+    paragraphs = [str(par).strip() for par in (data.get("paragraphs") or []) if str(par).strip()]
+    if paragraphs:
+        data["body"] = "\n\n".join(paragraphs)
     return data
 
 
@@ -306,6 +404,13 @@ def validate_section(section: Any, docs: list[dict], *, min_body: int = MIN_BODY
             "contains_estimate": bool(section.get("contains_estimate"))}, ""
 
 
+def _bounded(docs: list[dict]) -> list[dict]:
+    """The same documents, cut to what a model call can actually read."""
+    if source_chars(docs) < LONG_SOURCE_CHARS:
+        return docs
+    return [{**d, "text": outline_view([d]), "truncated": True} for d in docs]
+
+
 def build_document_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
     """Corpus in, validated document spec out. Raises NotInCorpus when it cannot."""
     docs = anchor_documents(store, chunks, request,
@@ -316,7 +421,10 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
         raise NotInCorpus(
             "The documents in the corpus do not cover this request: none of them mention "
             f"{', '.join(missing[:6])}. Nothing was written.")
-    answerable, why = sources_can_answer(request, docs)
+    # The relevance check is a MODEL call, so it must be shown a bounded view:
+    # handing it a 1.4-million-character book overflowed the window and it
+    # answered that the documents were unrelated to their own subject.
+    answerable, why = sources_can_answer(request, _bounded(docs))
     if not answerable:
         raise NotInCorpus(
             f"The corpus does not contain what this request needs{': ' + why if why else ''}. "
@@ -400,8 +508,8 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
 
 def plan_sheets(request: str, docs: list[dict], *, writer: str) -> list[dict] | None:
     """Sheets of headers and rows, every value copied from the sources."""
-    prompt = f"""You are building a spreadsheet for MRPL refinery operations, using ONLY the
-source documents below.
+    prompt = f"""You are building a spreadsheet from the source documents below, using ONLY
+them, whatever their subject is.
 
 REQUEST: {request}
 
@@ -471,7 +579,7 @@ def build_spreadsheet_spec(request: str, store, chunks: list) -> dict:
             f"{', '.join(missing[:6])}. Nothing was written.")
 
     writer = choose_writer(docs)
-    planned = plan_sheets(request, docs, writer=writer)
+    planned = plan_sheets(request, _bounded(docs), writer=writer)
     if not planned:
         raise NotInCorpus("The model could not build a table from these documents.")
 

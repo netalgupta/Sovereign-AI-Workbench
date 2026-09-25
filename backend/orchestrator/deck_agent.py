@@ -416,9 +416,13 @@ _TYPE_MENU = "\n".join(f"- {name}: {meta['use']}" for name, meta in SLIDE_TYPES.
 
 def plan_storyline(request: str, docs: list[dict], *, writer: str = "reasoning-model") -> dict | None:
     """Sections and, per slide, a type and the facts it should carry."""
-    prompt = f"""You are preparing an operations briefing for Mangalore Refinery and Petrochemicals Limited (MRPL).
+    prompt = f"""You are preparing a briefing deck.
 
 Plan a slide deck that answers this request using ONLY the source documents below.
+Write about what THESE documents are about -- plant procedures, a legal text, a textbook,
+anything -- in their own vocabulary. The workbench runs at a refinery, but a deck is about
+its SOURCES: told to write refinery prose about a cyber security textbook, the model wrote
+neither.
 
 REQUEST: "{request}"
 
@@ -493,7 +497,7 @@ def fill_section(request: str, section: dict, docs: list[dict], feedback: str = 
         for i, p in enumerate(planned)
     )
     correction = f"\nA previous attempt was rejected: {feedback}\nFix exactly that.\n" if feedback else ""
-    prompt = f"""You are writing slides for an MRPL operations briefing, from the source documents below.
+    prompt = f"""You are writing slides from the source documents below, whatever their subject is.
 
 REQUEST: "{request}"
 SECTION: {section.get('title', '')} — {section.get('summary', '')}

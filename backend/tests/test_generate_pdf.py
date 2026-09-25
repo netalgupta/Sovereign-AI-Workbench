@@ -131,3 +131,21 @@ def test_api_outputs_endpoints(client, tmp_path):
 
     # Clean up test file
     test_file.unlink(missing_ok=True)
+
+
+def test_the_page_count_is_the_document_s_real_length(tmp_path):
+    """It was read after close() and so was always 1: an 8-page report was
+    recorded as one page on the approval card and in the audit log."""
+    import fitz
+
+    from backend.tools.documents.generate_pdf import generate_pdf
+
+    long_body = ("This paragraph exists to fill the page with enough text that the document "
+                 "must run past a single side of A4 and into the next. ") * 30
+    out = generate_pdf(
+        title="A long report",
+        sections=[{"heading": f"Section {i}", "body": long_body, "sources": ["S.pdf"]} for i in range(4)],
+        output_path=str(tmp_path / "long.pdf"),
+    )
+    assert out["page_count"] == fitz.open(str(tmp_path / "long.pdf")).page_count
+    assert out["page_count"] > 1

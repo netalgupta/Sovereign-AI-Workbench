@@ -246,7 +246,10 @@ def test_a_long_source_earns_more_sections_and_writes_them_in_parallel(monkeypat
                          f"only once the reading has held, and the manual gives the passage at marker "
                          f"{n} as the reference for the limits that apply to this equipment. Where the "
                          f"manual is silent, the shift engineer records the reading and the step at "
-                         f"marker {n} and refers the matter on rather than releasing the line."),
+                         f"marker {n} and refers the matter on rather than releasing the line. The "
+                         f"annex at marker {n} lists the equipment this covers, the records the shift "
+                         f"engineer keeps, and the point at which the procedure is handed to the next "
+                         f"shift rather than carried over."),
                 "sources": ["S1"], "contains_estimate": False}
 
     monkeypatch.setattr(D, "write_section", slow_write)
@@ -307,3 +310,20 @@ def test_sharing_only_the_unit_is_not_agreement():
     from backend.orchestrator import deck_agent
 
     assert "degc" in deck_agent._LABEL_STOP
+
+
+def test_a_model_call_never_gets_the_whole_book(monkeypatch):
+    """MEASURED: handing sources_can_answer a 1.4-million-character book
+    overflowed the window and it answered that the documents were unrelated
+    to their own subject, so a real book summary was refused."""
+    book = _book(400)
+    seen = {}
+
+    monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: book)
+    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (1.0, []))
+    monkeypatch.setattr(D, "sources_can_answer",
+                        lambda request, docs: (seen.update(chars=sum(len(d["text"]) for d in docs)), (True, ""))[1])
+    monkeypatch.setattr(D, "plan_document", lambda *a, **k: None)
+    with pytest.raises(NotInCorpus):
+        D.build_document_spec("Summarise the manual", object(), [])
+    assert seen["chars"] < 40000, f"the relevance check was shown {seen['chars']} characters"

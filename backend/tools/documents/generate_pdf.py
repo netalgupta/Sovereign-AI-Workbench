@@ -247,6 +247,10 @@ def generate_pdf(
         y_pos += 10
 
     # Save to disk
+    # Counted BEFORE closing. `len(doc) if not doc.is_closed else 1` ran after
+    # close() and so always reported 1: an 8-page report was recorded as one
+    # page on the approval card and in the audit log.
+    page_count = len(doc)
     doc.save(str(out_file))
     doc.close()
 
@@ -257,7 +261,7 @@ def generate_pdf(
     result = DraftedPdf(
         file_path=str(out_file),
         title=title,
-        page_count=len(doc) if not doc.is_closed else 1,
+        page_count=page_count,
         section_count=len(parsed),
         total_sources=total_sources,
         unsourced_sections=unsourced,
