@@ -1,6 +1,6 @@
 export const landingConfig = {
   introStorageKey: 'mrpl_intro_seen',
-  heroAsset: null,
+  heroAsset: '/landing/refinery-background.png',
   introSteps: [
     'initializing local intelligence',
     'knowledge layer',

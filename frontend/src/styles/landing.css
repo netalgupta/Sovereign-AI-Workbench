@@ -37,11 +37,26 @@
   position: absolute;
   z-index: -2;
   inset: 0;
+  overflow: hidden;
   background:
     radial-gradient(ellipse at 76% 49%, rgba(167, 111, 56, 0.12), transparent 36%),
     radial-gradient(ellipse at 14% 89%, rgba(69, 81, 75, 0.11), transparent 42%),
     linear-gradient(108deg, #10110f 1%, #131411 52%, #10110f 100%);
   transition: filter 800ms ease, opacity 800ms ease;
+}
+
+.landing-ambient::after {
+  position: absolute;
+  top: -40%;
+  bottom: -40%;
+  left: -48%;
+  width: 58%;
+  content: '';
+  opacity: 0.2;
+  background: linear-gradient(104deg, transparent 12%, rgba(160, 130, 92, 0.08) 54%, rgba(206, 158, 97, 0.12) 61%, transparent 91%);
+  filter: blur(24px);
+  transform: skewX(-15deg);
+  animation: landing-atmosphere 25s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 
 .landing-page.is-active .landing-ambient { filter: brightness(1.14); }
@@ -123,6 +138,18 @@
 .landing-visual::before { background: linear-gradient(90deg, var(--landing-bg) 0%, rgba(16, 17, 15, 0.82) 9%, rgba(16, 17, 15, 0.16) 38%, transparent 70%), linear-gradient(0deg, var(--landing-bg) 0%, transparent 21%, transparent 84%, rgba(16, 17, 15, 0.28)); }
 .landing-visual::after { background: radial-gradient(ellipse at 64% 50%, transparent 20%, rgba(16, 17, 15, 0.18) 77%, rgba(16, 17, 15, 0.68) 100%); }
 .landing-visual.is-awake { filter: brightness(1.12) saturate(1.05); }
+.landing-visual-photo { position: absolute; inset: -2%; overflow: hidden; transform: translate3d(calc(var(--pointer-x, 0) * -15px), calc(var(--pointer-y, 0) * -10px), 0); transition: transform 1100ms cubic-bezier(0.2, 0.7, 0.2, 1); will-change: transform; }
+.landing-visual-asset { position: absolute; inset: -7%; width: 114%; height: 114%; object-fit: cover; object-position: center 54%; opacity: 0.79; filter: saturate(0.74) brightness(0.64) contrast(1.08); transform-origin: 52% 54%; animation: landing-image-drift 31s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate; transition: filter 1200ms ease; will-change: transform; }
+.landing-visual.is-awake .landing-visual-asset { filter: saturate(0.88) brightness(0.74) contrast(1.06); }
+.landing-cloud-motion { position: absolute; z-index: 1; top: 0; right: -14%; left: -14%; height: 59%; overflow: hidden; pointer-events: none; }
+.landing-cloud-motion::before,
+.landing-cloud-motion::after { position: absolute; right: -4%; left: -4%; height: 100%; content: ''; filter: blur(25px); mix-blend-mode: screen; will-change: transform, opacity; }
+.landing-cloud-motion::before { top: -5%; opacity: 0.23; background: radial-gradient(ellipse 30% 30% at 15% 48%, rgba(215, 220, 214, 0.2), transparent 78%), radial-gradient(ellipse 34% 26% at 38% 32%, rgba(197, 207, 204, 0.15), transparent 78%), radial-gradient(ellipse 29% 35% at 63% 50%, rgba(215, 217, 206, 0.17), transparent 78%), radial-gradient(ellipse 34% 25% at 87% 37%, rgba(190, 202, 202, 0.16), transparent 80%); animation: landing-cloud-drift 46s cubic-bezier(0.42, 0, 0.58, 1) infinite alternate; }
+.landing-cloud-motion::after { top: 13%; opacity: 0.16; background: radial-gradient(ellipse 36% 25% at 24% 57%, rgba(222, 218, 205, 0.17), transparent 80%), radial-gradient(ellipse 32% 31% at 54% 39%, rgba(198, 209, 207, 0.15), transparent 78%), radial-gradient(ellipse 38% 24% at 84% 53%, rgba(213, 220, 212, 0.17), transparent 81%); animation: landing-cloud-drift-alt 63s cubic-bezier(0.42, 0, 0.58, 1) infinite alternate; }
+.landing-visual.has-photo .landing-visual-grid { opacity: 0.1; }
+.landing-visual.has-photo .landing-plant-column { border-color: rgba(202, 184, 151, 0.17); background: rgba(22, 23, 20, 0.06); box-shadow: none; }
+.landing-visual.has-photo .landing-plant-column b { background: rgba(228, 207, 169, 0.12); }
+.landing-visual.has-photo .landing-plant-ground { opacity: 0.5; }
 .landing-visual-grid { position: absolute; inset: 8% 0 10% 7%; opacity: 0.19; background-image: linear-gradient(rgba(189, 178, 153, 0.12) 1px, transparent 1px), linear-gradient(90deg, rgba(189, 178, 153, 0.12) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(90deg, transparent, black 24%, black 80%, transparent), linear-gradient(0deg, transparent, black 20%, black 80%, transparent); }
 .landing-visual-halo { position: absolute; top: 16%; right: 4%; width: 72%; height: 75%; border-radius: 50%; background: radial-gradient(ellipse, rgba(164, 113, 61, 0.14), rgba(80, 89, 76, 0.06) 38%, transparent 68%); filter: blur(27px); opacity: 0.7; transition: opacity 850ms ease, transform 1200ms ease; }
 .landing-visual.is-awake .landing-visual-halo { transform: scale(1.06); opacity: 1; }
@@ -157,7 +184,6 @@
 .landing-sensor-two { top: 54%; left: 69%; }
 .landing-sensor-three { top: 78%; left: 19%; }
 .landing-visual.is-awake .landing-sensor { box-shadow: 0 0 13px rgba(210, 166, 108, 0.6); }
-.landing-visual-asset { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.84; }
 .landing-visual-caption { position: absolute; right: 5%; bottom: 10%; left: 9%; z-index: 2; display: flex; justify-content: space-between; color: rgba(190, 183, 166, 0.48); font-size: 7px; }
 
 .landing-status { position: relative; z-index: 2; display: grid; min-height: 79px; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: center; gap: 24px; border-top: 1px solid var(--landing-line); animation: landing-enter 850ms 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
@@ -195,6 +221,10 @@
 @keyframes landing-visual-arrive { from { opacity: 0; transform: translate3d(0, 12px, 0) scale(1.025); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 @keyframes landing-structure { from { opacity: 0.68; } to { opacity: 1; } }
 @keyframes landing-signal-flow { 0% { transform: translateX(-70%); opacity: 0; } 20% { opacity: 0.5; } 70% { opacity: 0.42; } 100% { transform: translateX(480%); opacity: 0; } }
+@keyframes landing-atmosphere { from { transform: translate3d(-5%, 0, 0) skewX(-15deg); opacity: 0.1; } 50% { opacity: 0.28; } to { transform: translate3d(245%, 0, 0) skewX(-15deg); opacity: 0.16; } }
+@keyframes landing-image-drift { 0% { transform: scale(1.04) translate3d(-0.7%, 0, 0); } 52% { transform: scale(1.11) translate3d(0.5%, -0.7%, 0); } 100% { transform: scale(1.07) translate3d(-0.3%, 0.6%, 0); } }
+@keyframes landing-cloud-drift { from { transform: translate3d(-3.5%, 0, 0) scale(1.02); opacity: 0.13; } 50% { opacity: 0.24; } to { transform: translate3d(3%, 2%, 0) scale(1.07); opacity: 0.18; } }
+@keyframes landing-cloud-drift-alt { from { transform: translate3d(2.5%, 2%, 0) scale(1.05); opacity: 0.1; } 50% { opacity: 0.19; } to { transform: translate3d(-2.5%, -1%, 0) scale(1.01); opacity: 0.14; } }
 @keyframes intro-arrive { from { opacity: 0; } to { opacity: 1; } }
 @keyframes intro-word { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -207,21 +237,32 @@
   .landing-status-items { gap: 10px; }
 }
 
+@media (max-height: 780px) and (min-width: 761px) {
+  .landing-topline { min-height: 62px; }
+  .landing-content { padding: 12px 0 22px; }
+  .landing-greeting h1 { margin: 12px 0 5px; font-size: clamp(36px, 3.6vw, 49px); }
+  .landing-question-block { margin: 24px 0 14px; }
+  .landing-command { margin-top: 16px; }
+  .landing-actions { margin-top: 18px; }
+  .landing-action { padding-top: 9px; padding-bottom: 9px; }
+  .landing-status { min-height: 68px; }
+}
+
 @media (max-width: 760px) {
-  .landing-page { min-height: 620px; height: 100%; padding: 0 24px; }
+  .landing-page { min-height: max(760px, 100%); height: auto; padding: 0 24px; overflow-x: hidden; overflow-y: auto; }
   .landing-topline { min-height: 62px; }
   .landing-instance { gap: 7px; font-size: 7px; }
   .landing-instance-divider,
   .landing-instance > span:last-child { display: none; }
-  .landing-content { align-items: flex-start; padding: 76px 0 38px; }
+  .landing-content { flex: 0 0 auto; align-items: flex-start; padding: 54px 0 25px; }
   .landing-copy { width: 100%; padding-top: 0; }
   .landing-greeting h1 { max-width: 100%; margin-top: 15px; font-size: clamp(36px, 10vw, 50px); }
   .landing-greeting-detail { max-width: 330px; font-size: 11px; }
-  .landing-question-block { margin-top: 34px; }
+  .landing-question-block { margin-top: 27px; }
   .landing-question-block h2 { font-size: clamp(30px, 8vw, 37px); }
-  .landing-command { margin-top: 22px; }
+  .landing-command { margin-top: 17px; }
   .landing-command-field { min-height: 54px; }
-  .landing-actions { margin-top: 25px; }
+  .landing-actions { margin-top: 18px; }
   .landing-actions-list { grid-template-columns: 1fr; }
   .landing-action:nth-child(n) { min-height: 49px; padding: 9px 5px; border-left: 0; }
   .landing-action-index { width: 22px; }
@@ -258,6 +299,9 @@
     transition-duration: 1ms !important;
   }
   .landing-plant,
-  .landing-plant-column { transform: none !important; }
+  .landing-plant-column,
+  .landing-visual-photo { transform: none !important; }
+  .landing-cloud-motion::before,
+  .landing-cloud-motion::after { animation: none !important; }
   .landing-signal { display: none; }
 }

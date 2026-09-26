@@ -29,17 +29,20 @@ export function HeroVisual({ awake, asset }) {
   return (
     <div
       ref={visualRef}
-      className={`landing-visual${awake ? ' is-awake' : ''}`}
+      className={`landing-visual${awake ? ' is-awake' : ''}${asset ? ' has-photo' : ''}`}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
       aria-hidden="true"
     >
       {asset ? (
-        asset.match(/\.(mp4|webm)(\?.*)?$/i) ? (
-          <video className="landing-visual-asset" src={asset} autoPlay muted loop playsInline preload="none" />
-        ) : (
-          <img className="landing-visual-asset" src={asset} alt="" loading="lazy" />
-        )
+        <div className="landing-visual-photo">
+          {asset.match(/\.(mp4|webm)(\?.*)?$/i) ? (
+            <video className="landing-visual-asset" src={asset} autoPlay muted loop playsInline preload="none" />
+          ) : (
+            <img className="landing-visual-asset" src={asset} alt="" loading="eager" fetchPriority="high" decoding="async" />
+          )}
+          <div className="landing-cloud-motion" />
+        </div>
       ) : (
         <>
           <div className="landing-visual-grid" />

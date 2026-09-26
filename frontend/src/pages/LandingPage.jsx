@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { HeroVisual } from '../components/landing/HeroVisual'
 import {
   AmbientBackground,
@@ -66,7 +66,7 @@ export function LandingPage() {
       if (!active) return
 
       const next = initialStatus()
-      if (health.status === 'fulfilled') next.intelligence = 'ONLINE'
+      next.intelligence = health.status === 'fulfilled' ? 'ONLINE' : 'UNAVAILABLE'
       if (corpus.status === 'fulfilled') {
         const data = corpus.value
         const count = data.chunkCount ?? data.chunk_count ?? data.count ?? data.sources?.length
@@ -127,15 +127,15 @@ export function LandingPage() {
     <main className={`landing-page${awake ? ' is-active' : ''}${isLeaving ? ' is-leaving' : ''}`}>
       <AmbientBackground />
       <div className="landing-topline">
-        <a className="landing-brand" href="/" aria-label="MRPL sovereign intelligence home">
+        <Link className="landing-brand" to="/" aria-label="MRPL sovereign intelligence home">
           <span className="landing-brand-emblem">M</span>
           <span className="landing-brand-name">MRPL<span> / </span>INTELLIGENCE</span>
-        </a>
+        </Link>
         <div className="landing-instance">
           <span className="landing-instance-light" />
           <span>PRIVATE INSTANCE</span>
           <span className="landing-instance-divider" />
-          <span>LOCAL ONLY</span>
+          <span>NETWORK MONITORED</span>
         </div>
       </div>
 
