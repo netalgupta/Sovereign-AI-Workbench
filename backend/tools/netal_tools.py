@@ -9,12 +9,13 @@ TOOLS.MD OWNERSHIP
 
 from __future__ import annotations
 
-import json
-import pathlib
+import logging
 import re
 from typing import Optional
 
 from backend.tools.registry import tool
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -83,8 +84,12 @@ def _load_graph() -> tuple[dict | None, str]:
     but a reviewer reading urllib.request in the backend has to stop and
     check, and that cost is real.
 
-    Calls the same function the endpoint calls, then falls back to the
-    exported snapshot.
+    Calls the same function the endpoint calls. NO SNAPSHOT FALLBACK
+    (Review Rule 5): this used to fall back to the exported
+    frontend/public/pipeline/graph.json -- a graph from whenever and
+    wherever it was exported -- and the agent answered from it as if it
+    were the live corpus. Unavailable is reported as unavailable; the
+    callers tell the operator to start Neo4j.
     """
     try:
         from backend.api.routes import get_graph
@@ -92,21 +97,10 @@ def _load_graph() -> tuple[dict | None, str]:
         graph = get_graph()
         if graph.get("nodes"):
             return graph, graph.get("source", "live")
-    except Exception:  # noqa: BLE001
-        pass
-
-    # The snapshot lives under frontend/public so the UI can fetch it;
-    # the old path here pointed at a directory that does not exist.
-    snapshot = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "frontend" / "public" / "pipeline" / "graph.json"
-    )
-    if snapshot.exists():
-        try:
-            return json.loads(snapshot.read_text(encoding="utf-8")), "snapshot"
-        except Exception:  # noqa: BLE001
-            return None, "unavailable"
-    return None, "unavailable"
+        return None, "unavailable"
+    except Exception as exc:  # noqa: BLE001 - reported to the caller as unavailable
+        logger.warning("Knowledge graph unavailable: %s: %s", type(exc).__name__, exc)
+        return None, "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -507,43 +501,49 @@ def query_knowledge_graph(
     nodes = graph_data.get("nodes", [])
     relationships = graph_data.get("relationships", [])
 
-    # Find best matching target node
-    target_node = None
-    for n in nodes:
-        props = n.get("properties", {})
-        name = props.get("name") or props.get("tag") or props.get("segment_name") or props.get("summary") or props.get("filename") or str(n.get("id"))
-        if q == str(name).lower():
-            target_node = n
-            break
-        if not target_node and (q in str(name).lower() or any(q in str(v).lower() for v in props.values())):
-            target_node = n
-
-    if not target_node:
-        target_node = nodes[0] if nodes else None
-
-    if not target_node:
-        return {"found": False, "entity": entity_name, "nodes": [], "relationships": []}
-
-    target_id = target_node["id"]
-    connected_rels = []
-    connected_node_ids = {target_id}
-
-    for r in relationships:
-        if r.get("source") == target_id or r.get("target") == target_id:
-            if relationship_type and r.get("type", "").lower() != relationship_type.lower():
-                continue
-            connected_rels.append(r)
-            connected_node_ids.add(r.get("source"))
-            connected_node_ids.add(r.get("target"))
-
-    # Cap nodes to a concise readable subgraph (5-7 nodes)
-    sub_node_ids = list(connected_node_ids)[:7]
-    sub_nodes = [n for n in nodes if n["id"] in sub_node_ids]
-    sub_rels = [r for r in connected_rels if r.get("source") in sub_node_ids and r.get("target") in sub_node_ids]
-
     def _display_name(node_obj):
         props = node_obj.get("properties", {})
         return props.get("name") or props.get("tag") or props.get("segment_name") or props.get("summary") or props.get("filename") or str(node_obj.get("id"))
+
+    # An exact name match wins; otherwise the first node whose name contains
+    # the query, then the first whose properties do. NO MATCH IS NO ANSWER:
+    # this used to fall back to nodes[0] and return the first entity in the
+    # graph -- with its real relationships -- as if it were the one asked for.
+    exact = [n for n in nodes if q == str(_display_name(n)).lower()]
+    in_name = [n for n in nodes if q and q in str(_display_name(n)).lower()]
+    in_props = [n for n in nodes if q and any(q in str(v).lower() for v in n.get("properties", {}).values())]
+    target_node = (exact or in_name or in_props or [None])[0]
+    if not target_node:
+        return {"found": False, "entity": entity_name, "nodes": [], "relationships": [],
+                "message": f"No entity matching '{entity_name}' in the knowledge graph."}
+
+    target_id = target_node["id"]
+    # `depth` hops out from the target (1-3). It was accepted and ignored.
+    depth = max(1, min(int(depth or 1), 3))
+    wanted = (relationship_type or "").lower()
+    rels = [r for r in relationships if not wanted or str(r.get("type", "")).lower() == wanted]
+    order = [target_id]
+    frontier = {target_id}
+    connected_rels = []
+    for _hop in range(depth):
+        nxt = set()
+        for r in rels:
+            a, b = r.get("source"), r.get("target")
+            if a in frontier or b in frontier:
+                if r not in connected_rels:
+                    connected_rels.append(r)
+                for other in (a, b):
+                    if other not in order:
+                        order.append(other)
+                        nxt.add(other)
+        frontier = nxt
+
+    # A readable subgraph: the target FIRST, then neighbours in the order
+    # they were reached. Sliced from an unordered set, the target itself
+    # could be cut from its own result.
+    sub_node_ids = order[:7]
+    sub_nodes = [n for n in nodes if n["id"] in sub_node_ids]
+    sub_rels = [r for r in connected_rels if r.get("source") in sub_node_ids and r.get("target") in sub_node_ids]
 
     return {
         "found": True,

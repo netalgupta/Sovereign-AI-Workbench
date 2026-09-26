@@ -209,7 +209,7 @@ def _write_live_markdown(md_path: str, results: list, total: int, corpus_dir: st
         if r.get("error"):
             p(f"**ERROR** after {r['seconds']}s")
             p()
-            p(f"```")
+            p("```")
             p(r["error"])
             p("```")
             p()

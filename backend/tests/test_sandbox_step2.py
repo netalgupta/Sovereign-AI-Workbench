@@ -18,7 +18,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.sandbox.manager import get_sandbox_manager
 
 client = TestClient(app)
 

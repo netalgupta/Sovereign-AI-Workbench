@@ -281,8 +281,8 @@ def _run_deck(job: OutputJob) -> None:
             from backend.tools.generation.deck import art
 
             art.release()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Image model not released; the page reviewer may not fit on the GPU' + ": %s: %s", type(exc).__name__, exc)
         # The reviewer loads inside improve(); it frees the card first
         # (image model, embedding model, Ollama) via models/gpu.py.
 

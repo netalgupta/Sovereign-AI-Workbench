@@ -35,7 +35,7 @@ file can be replayed to rebuild state.
 
 from __future__ import annotations
 
-import json
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -43,6 +43,8 @@ from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_QUEUE_FILE = Path("document_registry/ingestion_queue.jsonl")
 MAX_ATTEMPTS = 3
@@ -86,7 +88,8 @@ class IngestionQueue:
                     continue
                 try:
                     item = QueueItem.model_validate_json(line)
-                except Exception:  # noqa: BLE001 — a torn final line must not lose the whole queue
+                except Exception as exc:  # noqa: BLE001 — a torn final line must not lose the whole queue
+                    logger.warning('Unreadable line in the ingestion queue, skipped (a torn final write)' + ": %s: %s", type(exc).__name__, exc)
                     continue
                 items[item.path] = item
         return items

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from pathlib import Path
 
 # Narrow by design. Each requires BOTH a "what do you have" shape AND a
 # collection-level object ("documents", "sources", "corpus", "data").

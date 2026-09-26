@@ -6,8 +6,6 @@ value, and uncited values are the one output this product must not
 produce.
 """
 
-import tempfile
-from pathlib import Path
 
 import pytest
 

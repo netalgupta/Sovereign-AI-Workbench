@@ -12,13 +12,15 @@ is a NEW entry (CORRECTION) referencing the earlier record. Each entry is
 flushed and fsync'd immediately to guarantee crash resistance.
 """
 
-import json
+import logging
 import os
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class AuditEvent(str, Enum):
@@ -50,7 +52,13 @@ class AuditRecord(BaseModel):
 class AuditLog:
     """Immutable, append-only audit log backed by a JSON-Lines file."""
 
-    def __init__(self, path: Path | str = "backend/audit/audit.jsonl") -> None:
+    def __init__(self, path: Path | str | None = None) -> None:
+        # Anchored to the repository: relative, it followed the working
+        # directory, and the append-only trail landed wherever the server was started.
+        if path is None:
+            from backend.paths import REPO_ROOT
+
+            path = REPO_ROOT / "backend" / "audit" / "audit.jsonl"
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
@@ -101,6 +109,7 @@ class AuditLog:
                     continue
                 try:
                     records.append(AuditRecord.model_validate_json(line))
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning('Unreadable line in the append-only audit log, skipped -- the trail has a gap here' + ": %s: %s", type(exc).__name__, exc)
                     continue
         return records

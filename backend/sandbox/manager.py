@@ -14,11 +14,9 @@ Enforces:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -26,7 +24,6 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, Literal, Optional, Any
 
 logger = logging.getLogger("sandbox.manager")

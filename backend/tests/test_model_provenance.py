@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.models.provenance import (
-    MODEL_PROVENANCE_LEDGER,
     get_model_provenance,
     get_all_provenance,
 )

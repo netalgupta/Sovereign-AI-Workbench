@@ -11,7 +11,6 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, Optional
 
 from backend.attachments.manager import AttachmentManager, get_attachment_manager

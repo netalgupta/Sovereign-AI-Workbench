@@ -5,7 +5,6 @@ Depends on the real bge-large-en-v1.5 cache (same as test_embeddings.py)
 tested is whether real embeddings actually detect a real topic shift.
 """
 
-import os
 
 import pytest
 

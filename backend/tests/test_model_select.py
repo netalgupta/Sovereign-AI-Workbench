@@ -48,7 +48,7 @@ def test_no_model_name_is_written_in_the_selector():
     import re
 
     # Real model tags, not the word "llama" inside "ollama".
-    assert not re.search(r"qwen|llama3|phi3|mistral|:\d+b", src.lower())
+    assert not re.search(r"qwen|llama3|phi3|mistral|:\d+b\b", src.lower())
 
 
 def test_a_task_no_model_is_tagged_for_falls_back_to_the_default(tmp_path, monkeypatch):

@@ -140,7 +140,6 @@ class AttachmentManager:
         try:
             storage_ref = att_entry.get("storage_ref", "")
             file_path = Path(storage_ref)
-            filename = att_entry.get("filename", "").lower()
             ext = file_path.suffix.lower()
 
             # 1. Forbidden extension security check

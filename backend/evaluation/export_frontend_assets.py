@@ -16,7 +16,6 @@ have to download every chart image to do it.
 """
 
 import json
-import shutil
 import sys
 from pathlib import Path
 

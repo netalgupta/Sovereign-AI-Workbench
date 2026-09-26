@@ -6,7 +6,6 @@ particular answer here would make this file fail for reasons that have
 nothing to do with the wiring it exists to protect.
 """
 
-import pytest
 
 from backend.orchestrator.agent_loop import CHAT_TOOLS, _requires_approval, _tools_for_chat
 

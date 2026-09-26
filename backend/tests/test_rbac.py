@@ -18,14 +18,11 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.auth.rbac import (
-    RBAC_TIERS,
-    RBAC_CATEGORIES,
     normalize_role,
     get_category_for_path,
     is_category_allowed,
     is_path_allowed,
     filter_chunks_by_role,
-    filter_corpus_tree,
     get_rbac_manifest,
 )
 

@@ -6,18 +6,18 @@ Coordinates the end-to-end execution graph:
   [router / safety] ──► [planner] ──► [dispatch loop] ──► [synthesize] ──► [verify] ──► [approval_check] ──► END
 """
 
+import logging
 import re
 import uuid
 from typing import Any
 from langgraph.graph import StateGraph, END
 
 from backend.audit.approval_gate import ApprovalGate
-from backend.models.registry import resolve_model_name
 from backend.orchestrator.dispatch import call_tool_as
-from backend.orchestrator.planner import PlanningError, plan_request
-from backend.orchestrator.router import classify_task
+from backend.orchestrator.planner import plan_request
 from backend.orchestrator.state import AgentState, PlanStep, ToolCallEvent, VerificationResult
-from backend.orchestrator.verification import build_verification_prompt, parse_verification
+
+logger = logging.getLogger(__name__)
 
 
 # An arithmetic expression, as opposed to any string containing digits.
@@ -289,8 +289,8 @@ def _calculation_record(result, expression: str) -> dict[str, Any]:
                 "steps": record.get("steps", []),
             },
         )
-    except Exception:  # noqa: BLE001 - auditing must never break a turn
-        pass
+    except Exception as exc:  # noqa: BLE001 - auditing must never break a turn
+        logger.warning('Calculation not written to the audit log; its calculation_id will not resolve' + ": %s: %s", type(exc).__name__, exc)
 
     return record
 
@@ -893,7 +893,6 @@ def synthesize_node(state: AgentState) -> dict[str, Any]:
     # was never recorded, and the streaming endpoint had no memory at
     # all because it does not use this node. It is now opened once at
     # the entry point (run_agent_turn) and simply read here.
-    from backend.observability import turn_log as T
 
     search_query = state.search_query
     conversation_context = state.memory_context

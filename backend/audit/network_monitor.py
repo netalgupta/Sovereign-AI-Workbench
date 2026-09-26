@@ -46,7 +46,14 @@ def _is_ip_external(ip_str: str) -> bool:
             return False
         return not ip.is_private
     except ValueError:
-        return False
+        # FAIL CLOSED. An address this cannot parse was counted as NOT
+        # external -- in the monitor that is the proof of zero egress. An
+        # IPv6 zone suffix ("fe80::1%12") is the common harmless case, so it
+        # is stripped and retried; anything still unparseable counts as
+        # external until shown otherwise.
+        if "%" in ip_str:
+            return _is_ip_external(ip_str.split("%", 1)[0])
+        return True
 
 
 def _own_process_tree_pids() -> set[int]:
@@ -59,9 +66,22 @@ def _own_process_tree_pids() -> set[int]:
     """
     try:
         me = psutil.Process()
-        return {me.pid} | {child.pid for child in me.children(recursive=True)}
+        pids = {me.pid} | {child.pid for child in me.children(recursive=True)}
     except Exception:  # noqa: BLE001
-        return set()
+        pids = set()
+    # THE MODEL SERVER IS PART OF THE PRODUCT. Every model runs in Ollama,
+    # a separate process the backend did not start, so "this process tree"
+    # left out the one component that talks to the network on its own (the
+    # Ollama app checks online for updates). The claim "0 external
+    # connections" now covers it.
+    for proc in psutil.process_iter(["name"]):
+        try:
+            if (proc.info.get("name") or "").lower().startswith("ollama"):
+                pids.add(proc.pid)
+                pids |= {c.pid for c in proc.children(recursive=True)}
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return pids
 
 
 def get_active_connections(scope: str = "application") -> list[ConnectionInfo]:

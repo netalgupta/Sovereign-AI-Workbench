@@ -153,7 +153,7 @@ def pill(slide, x, y, label: str, fg: str, bg: str, *, size: float = 10, h: floa
     from .fit import text_width_pt
 
     w = text_width_pt(label.upper(), size, "semibold") / 72.0 + 0.32
-    s = rect(slide, x, y, w, h, bg, radius=0.5)
+    rect(slide, x, y, w, h, bg, radius=0.5)
     text(slide, x, y, w, h, label, size=size, colour=fg, weight="semibold", align="center",
          anchor="middle", caps=True, tracking=0.6)
     return w

@@ -30,7 +30,6 @@ a long sweep is readable while it is still going.
 """
 
 import io
-import json
 import time
 import traceback
 from dataclasses import dataclass, field

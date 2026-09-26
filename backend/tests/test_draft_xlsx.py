@@ -15,10 +15,20 @@ import pytest
 
 from backend.audit.approval_gate import ApprovalGate
 from backend.tools.documents.draft_xlsx import (
+
+
     DraftedSpreadsheet,
     describe_effect,
     draft_xlsx,
 )
+
+
+@pytest.fixture(autouse=True)
+def _outputs_in_tmp(tmp_path, monkeypatch):
+    """Approved writes may only land in OUTPUT_DIR (backend/paths.py); here that is the test's tmp dir."""
+    import backend.paths
+
+    monkeypatch.setattr(backend.paths, "OUTPUT_DIR", tmp_path)
 
 
 def _args(tmp_path: Path) -> dict:

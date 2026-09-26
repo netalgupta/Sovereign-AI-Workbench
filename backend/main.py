@@ -15,6 +15,14 @@ reason: the frontend and backend run on the same machine, so there is
 never a legitimate cross-origin caller from anywhere else.
 """
 
+# Run from the repository root, whatever directory the server was started
+# in: many paths below are repo-relative (backend/paths.py says why).
+import os as _os
+
+from backend.paths import REPO_ROOT as _REPO_ROOT
+
+_os.chdir(_REPO_ROOT)
+
 # FIRST, before anything that might import torch/tensorflow/paddle.
 # TF_CPP_MIN_LOG_LEVEL and friends are read by those libraries' C++
 # layers AT IMPORT TIME, so this cannot be tidied in with the imports

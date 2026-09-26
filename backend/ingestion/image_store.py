@@ -38,7 +38,6 @@ and survives a half-finished run with exactly the images it finished.
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from pydantic import BaseModel

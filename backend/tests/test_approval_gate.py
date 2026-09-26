@@ -10,7 +10,6 @@ after approval, approve something that already expired. Each must fail,
 and fail loudly.
 """
 
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -24,6 +23,16 @@ from backend.audit.approval_gate import (
 from backend.audit.audit_log import AuditEvent, AuditLog
 from backend.tools import catalog  # noqa: F401 — registers draft_docx
 from backend.tools.registry import ApprovalRequired, call_tool
+
+
+
+
+@pytest.fixture(autouse=True)
+def _outputs_in_tmp(tmp_path, monkeypatch):
+    """Approved writes may only land in OUTPUT_DIR (backend/paths.py); here that is the test's tmp dir."""
+    import backend.paths
+
+    monkeypatch.setattr(backend.paths, "OUTPUT_DIR", tmp_path)
 
 
 @pytest.fixture

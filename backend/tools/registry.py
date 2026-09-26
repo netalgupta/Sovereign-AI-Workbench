@@ -293,6 +293,16 @@ def call_tool(name: str, arguments: dict | None = None, approved: bool = False) 
         )
 
     arguments = arguments or {}
+    # Defence in depth: an approved write lands in outputs/ or not at all.
+    # Every approval route confines the path before asking; a call that
+    # arrives here outside it did not come through one.
+    if spec.requires_approval and "output_path" in arguments:
+        from backend.paths import is_confined
+
+        if not is_confined(arguments["output_path"]):
+            raise PermissionError(
+                f"{name} may only write inside outputs/; refused {arguments['output_path']!r}."
+            )
     signature = inspect.signature(spec.func)
     accepted = set(signature.parameters)
     unexpected = set(arguments) - accepted

@@ -13,6 +13,7 @@ Enforces:
 5. Append-only audit trail integration.
 """
 
+import logging
 import hashlib
 import json
 import uuid
@@ -23,6 +24,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from backend.audit.audit_log import AuditEvent, AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 class ApprovalState(str, Enum):
@@ -139,7 +142,10 @@ class ApprovalGate:
         audit_log: AuditLog | None = None,
         ttl_minutes: int = 15,
     ) -> None:
-        self.requests_file = Path(requests_file or "backend/audit/requests.jsonl")
+        from backend.paths import REPO_ROOT
+
+        # Anchored to the repository, not the working directory.
+        self.requests_file = Path(requests_file or REPO_ROOT / "backend" / "audit" / "requests.jsonl")
         self.requests_file.parent.mkdir(parents=True, exist_ok=True)
         if not self.requests_file.exists():
             self.requests_file.touch()
@@ -168,7 +174,8 @@ class ApprovalGate:
                         if self._now() >= exp:
                             req.state = ApprovalState.EXPIRED
                     requests[req.request_id] = req
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning('Unreadable line in the approval ledger, skipped (a request on it cannot be approved)' + ": %s: %s", type(exc).__name__, exc)
                     continue
         return requests
 

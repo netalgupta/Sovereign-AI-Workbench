@@ -9,9 +9,7 @@ design, and that the prompts ask for abstraction and never equipment.
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 
 from backend.models import registry as R
 from backend.tools.generation.deck import art, render

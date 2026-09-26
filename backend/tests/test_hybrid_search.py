@@ -6,7 +6,6 @@ proving each half actually contributes something the other would miss;
 a mocked similarity score can't demonstrate that.
 """
 
-import os
 
 import pytest
 

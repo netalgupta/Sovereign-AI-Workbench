@@ -5,7 +5,6 @@ These touch real files and real models, so this part is slow. It is
 separate from part 1 so the fast checks stay repeatable.
 """
 
-import json
 import tempfile
 import time
 from pathlib import Path
@@ -337,7 +336,7 @@ def run(suite: Suite) -> None:
               watcher_orders_newest_first)
 
     def queue_parks_a_broken_file():
-        from backend.ingestion.ingestion_queue import ItemState, MAX_ATTEMPTS
+        from backend.ingestion.ingestion_queue import MAX_ATTEMPTS
         from backend.ingestion.source_watcher import ChangeKind, PendingFile
 
         queue = IngestionQueue(work / "q.jsonl")

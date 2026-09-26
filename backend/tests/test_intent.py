@@ -129,7 +129,6 @@ def test_the_graph_ends_the_turn_when_the_router_has_already_answered():
     Without it the planner runs anyway and overwrites a finished answer
     with a plan for work that is already done.
     """
-    from backend.orchestrator.state import AgentState
     from langgraph.graph import END
 
     import backend.orchestrator.graph as G

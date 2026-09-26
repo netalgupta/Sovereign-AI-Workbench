@@ -50,7 +50,6 @@ from . import vocab
 
 
 def _pid_style(unit: str, year: int, drawing_no: str, out_path: Path) -> None:
-    rng = vocab.rng_for(f"pid::{unit}::{year}")
     fig, ax = plt.subplots(figsize=(11, 8), dpi=150)
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 70)

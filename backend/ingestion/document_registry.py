@@ -37,7 +37,6 @@ a status rather than raising, and the caller can say the true thing.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import date
 from enum import Enum
 from pathlib import Path

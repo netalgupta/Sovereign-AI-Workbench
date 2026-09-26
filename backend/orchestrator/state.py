@@ -17,7 +17,7 @@ reconstruction, and reconstructions drift from what actually happened.
 """
 
 from datetime import datetime, timezone
-from typing import Literal, Optional, Union, Any
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 AgentName = Literal["vision", "code", "reasoning", "math", "retrieval"]

@@ -14,14 +14,13 @@ Enforces:
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Literal, Optional, Any, List
+from typing import Dict, Literal, Optional, Any
 
 from backend.attachments import get_attachment_manager
 from backend.sandbox.manager import get_sandbox_manager

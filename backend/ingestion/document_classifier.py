@@ -211,7 +211,7 @@ def classify_document(text: str, filename: str = "") -> DocumentClass:
     name = Path(filename or "").stem.replace("_", " ").replace("-", " ")
     # No text at all means this is an image that has not been OCR'd.
     text_only_from_name = not haystack.strip()
-    filename_cap = weight_cap = None if text_only_from_name else _FILENAME_WEIGHT
+    filename_cap = None if text_only_from_name else _FILENAME_WEIGHT
 
     scores: dict[str, int] = {}
     evidence: dict[str, list[str]] = {}

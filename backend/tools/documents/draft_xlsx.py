@@ -281,13 +281,11 @@ def draft_xlsx(
 
     # Styles
     title_font = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
-    subtitle_font = Font(name="Calibri", size=10, italic=True, color="4B5563")
     stamp_font = Font(name="Calibri", size=9, italic=True, color="6B7280")
 
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
 
-    bold_font = Font(name="Calibri", size=11, bold=True)
     normal_font = Font(name="Calibri", size=11)
 
     unsourced_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")  # Light amber

@@ -11,7 +11,6 @@ and willing to say "not found" instead of guessing.
 
 import re
 
-import requests
 from pydantic import BaseModel
 
 from backend.models.ollama_client import generate as ollama_generate

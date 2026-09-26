@@ -11,7 +11,6 @@ model has silently stopped answering in the shape we parse.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 from pptx import Presentation
@@ -19,6 +18,15 @@ from pptx import Presentation
 from backend.orchestrator.action_resolver import is_deck_request
 from backend.orchestrator.graph import is_action_approval_request
 from backend.orchestrator.slide_agent import generate_deck, prepare_deck
+
+@pytest.fixture(autouse=True)
+def _outputs_in_tmp(tmp_path, monkeypatch):
+    """Approved writes may only land in OUTPUT_DIR (backend/paths.py); here that is the test's tmp dir."""
+    import backend.paths
+
+    monkeypatch.setattr(backend.paths, "OUTPUT_DIR", tmp_path)
+
+
 
 SPEC = {
     "title": "CCR-1 regeneration cycle 18 ran six hours long",

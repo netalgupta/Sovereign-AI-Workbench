@@ -44,7 +44,6 @@ def rrf_fuse(store: VectorStore, query: str, top_k: int) -> dict[int, float]:
         return {}
 
     faiss_ids = [row[0] for row in all_rows]
-    corpus_texts = [row[1] for row in all_rows]
 
     # Dense: over-fetch by 2x before fusion, exact per CARD 09.
     query_embedding = embed_texts([query])[0]

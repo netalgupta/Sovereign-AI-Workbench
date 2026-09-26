@@ -7,7 +7,6 @@ Zero fabricated data: unknown fields are absent or explicitly marked unknown.
 """
 
 from typing import Any
-from pathlib import Path
 
 
 MODEL_PROVENANCE_LEDGER: dict[str, dict[str, Any]] = {

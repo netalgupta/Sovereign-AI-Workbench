@@ -7,7 +7,6 @@ Explicit Verification for Step 2:
 """
 
 import os
-import shutil
 import time
 import pytest
 from unittest.mock import patch
@@ -15,7 +14,6 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.sandbox.manager import get_sandbox_manager, SandboxManager
-from backend.sandbox.pool import WorkerPool, SESSIONS_HOST_DIR
 
 client = TestClient(app)
 

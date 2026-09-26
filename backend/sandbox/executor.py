@@ -15,7 +15,6 @@ it's produced; callers without one just get the final result.
 
 import asyncio
 import os
-import time
 from typing import Callable, Literal, Optional
 
 from pydantic import BaseModel

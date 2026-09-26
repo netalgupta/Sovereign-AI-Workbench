@@ -59,7 +59,7 @@ from pathlib import Path
 # Where drafted deliverables land. Under the repo rather than a system
 # temp directory: the operator has to be able to find, open and send the
 # file, and a path they cannot navigate to is a file that did not arrive.
-OUTPUT_DIR = Path(__file__).resolve().parents[2] / "outputs"
+from backend.paths import OUTPUT_DIR  # noqa: E402 - the one definition
 
 # Categories that can actually be carried out by this build.
 _EXECUTABLE = {"file write"}
@@ -269,7 +269,6 @@ def _report_line(report: dict) -> str:
 def _resolve_document_draft(request: str, *, session_id: str) -> ResolvedAction:
     """Build the actual draft_docx / draft_xlsx / generate_pdf call this request describes."""
     from backend.api.state import get_state
-    from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
     is_xlsx = is_spreadsheet_request(request)
     is_pdf = is_pdf_request(request)

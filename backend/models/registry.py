@@ -50,8 +50,8 @@ class ModelConfig(BaseModel):
     placement: Placement | None = None
 
 
-def load_registry(path: str = "/models/models.yaml") -> dict[str, ModelConfig]:
-    """Load and validate the model registry YAML at `path`.
+def load_registry(path: str | None = None) -> dict[str, ModelConfig]:
+    """Load and validate the model registry YAML at `path` (default: the repo's models.yaml).
 
     Raises:
         FileNotFoundError: if `path` does not exist. Message is exactly
@@ -60,6 +60,9 @@ def load_registry(path: str = "/models/models.yaml") -> dict[str, ModelConfig]:
         pydantic.ValidationError: if any entry is malformed. Propagated
             unmodified — never caught and suppressed.
     """
+    # The default was "/models/models.yaml" -- the root of the drive.
+    if path is None:
+        path = _DEFAULT_REGISTRY_PATH
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw_entries = yaml.safe_load(f) or []

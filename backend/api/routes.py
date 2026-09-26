@@ -22,9 +22,8 @@ than presenting a stale export as the current corpus.
 from __future__ import annotations
 
 import base64
-import io
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 
 import numpy as np
 import json
@@ -32,6 +31,7 @@ import json
 from fastapi import APIRouter, HTTPException, Query, Response, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
+from backend.api import source_config
 from backend.api.state import get_state
 
 router = APIRouter(prefix="/api")
@@ -580,16 +580,10 @@ class UploadSourcesRequest(BaseModel):
 
 def _untombstone_source(*identifiers: str) -> None:
     """Remove paths, IDs, or tokens from deleted_sources.json so re-adding unblocks them."""
-    import json
-    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+    deleted_file = source_config.DELETED_PATH
     if not deleted_file.exists():
         return
-    try:
-        current = json.loads(deleted_file.read_text(encoding="utf-8"))
-        if not isinstance(current, list):
-            current = []
-    except Exception:
-        current = []
+    current = source_config.load(deleted_file)
 
     to_remove = {str(i).strip().lower() for i in identifiers if i and str(i).strip()}
     for i in list(to_remove):
@@ -612,17 +606,13 @@ def _untombstone_source(*identifiers: str) -> None:
         if not matched_parent:
             updated.append(item)
 
-    try:
-        deleted_file.write_text(json.dumps(updated, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    source_config.save(updated, deleted_file)
 
 
 @router.post("/sources/upload")
 def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
     """Accept uploaded files, write to disk, and chunk & embed them into FAISS."""
     import hashlib
-    import json as _json
 
     state = get_state()
     target_base_dir = Path("MRPL_RAG_Test_Corpus") / "07_User_Uploads"
@@ -647,13 +637,9 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
 
     # Register any top-level uploaded folder as a named corpus source
     if top_folders:
-        config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        config_file = source_config.CONFIG_PATH
         dirs: list[dict] = []
-        if config_file.exists():
-            try:
-                dirs = _json.loads(config_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        dirs = source_config.load(config_file)
         for folder in top_folders:
             folder_path = target_base_dir / folder
             norm_lower = str(folder_path.resolve()).lower()
@@ -669,10 +655,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
                     "isUploadedFolder": True,
                     "enabled": True,
                 })
-        try:
-            config_file.write_text(_json.dumps(dirs, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        source_config.save(dirs, config_file)
 
     from backend.ingestion.ingestion_progress import get_tracker
     import threading
@@ -691,14 +674,9 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
                                   detail=f"{type(exc).__name__}: {exc}")
         tracker.finish(job.job_id)
         # Ensure configured_sources.json reflects the uploaded folder after ingestion
-        import json as _json
-        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _cfg = source_config.CONFIG_PATH
         _dirs = []
-        if _cfg.exists():
-            try:
-                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        _dirs = source_config.load(_cfg)
         # top_folders already registered above — just make sure enabled=True
         for folder in top_folders:
             folder_path = target_base_dir / folder
@@ -707,10 +685,7 @@ def upload_and_ingest_sources(body: UploadSourcesRequest) -> dict:
                 if str(Path(d.get("path", "")).resolve()).lower() == norm:
                     d["enabled"] = True
                     break
-        try:
-            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        source_config.save(_dirs, _cfg)
 
     threading.Thread(target=_run, name=f"upload-ingest-{job.job_id}", daemon=True).start()
 
@@ -766,7 +741,6 @@ def pick_files_endpoint() -> dict:
 def browse_and_add_folder() -> dict:
     """Open native OS directory dialog to choose a folder on disk, register and ingest in background."""
     import hashlib
-    import json
     import threading
     from backend.api.native_picker import pick_folder_gui
 
@@ -784,13 +758,9 @@ def browse_and_add_folder() -> dict:
     except Exception:
         source = None
 
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    config_file = source_config.CONFIG_PATH
     dirs = []
-    if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    dirs = source_config.load(config_file)
 
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
@@ -813,10 +783,7 @@ def browse_and_add_folder() -> dict:
             "isPreset": False,
             "enabled": True,
         })
-    try:
-        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    source_config.save(dirs, config_file)
 
     # Enumerate files for progress tracker
     target_files = sorted(
@@ -836,18 +803,12 @@ def browse_and_add_folder() -> dict:
             tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
         # Re-sync configured_sources after completion
         _dirs2 = []
-        try:
-            _dirs2 = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        _dirs2 = source_config.load(config_file)
         for d in _dirs2:
             if str(Path(d.get("path", "")).resolve()).lower() == norm_lower:
                 d["enabled"] = True
                 break
-        try:
-            config_file.write_text(json.dumps(_dirs2, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        source_config.save(_dirs2, config_file)
 
     threading.Thread(target=_run, name=f"dialog-folder-ingest-{job.job_id}", daemon=True).start()
 
@@ -869,7 +830,6 @@ def browse_and_add_folder() -> dict:
 def browse_and_add_files() -> dict:
     """Open native OS file dialog to choose documents on disk, register and ingest them in background."""
     import hashlib
-    import json
     import threading
     from backend.api.native_picker import pick_files_gui
 
@@ -880,13 +840,9 @@ def browse_and_add_files() -> dict:
     state = get_state()
     saved_items = []
 
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    config_file = source_config.CONFIG_PATH
     dirs = []
-    if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    dirs = source_config.load(config_file)
 
     target_files: list[Path] = []
     for p_str in picked_paths:
@@ -910,10 +866,7 @@ def browse_and_add_files() -> dict:
                 "enabled": True,
             })
 
-    try:
-        config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    source_config.save(dirs, config_file)
 
     # Create progress job and ingest in background
     from backend.ingestion.ingestion_progress import get_tracker
@@ -1146,22 +1099,12 @@ def _get_corpus_data() -> dict:
     without a FastAPI Response argument (which caused a TypeError in callers
     that imported the route function directly).
     """
-    import json
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
-    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
-    deleted_records = set()
-    if deleted_file.exists():
-        try:
-            deleted_records = {s.lower() for s in json.loads(deleted_file.read_text(encoding="utf-8"))}
-        except Exception:
-            deleted_records = set()
+    config_file = source_config.CONFIG_PATH
+    deleted_file = source_config.DELETED_PATH
+    deleted_records = {str(s).lower() for s in source_config.load(deleted_file)}
 
     dirs = []
-    if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    dirs = source_config.load(config_file)
 
     # Prune stale entries whose files/folders no longer exist on disk
     valid_dirs = []
@@ -1181,10 +1124,7 @@ def _get_corpus_data() -> dict:
             dirs_pruned = True
     if dirs_pruned:
         dirs = valid_dirs
-        try:
-            config_file.write_text(json.dumps(dirs, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        source_config.save(dirs, config_file)
 
     # Always ensure preset baseline corpora are preserved alongside user-added sources
     preset_ids = {d.get("id") for d in dirs}
@@ -1294,7 +1234,7 @@ def _get_corpus_data() -> dict:
             "totalSizeBytes": 0,
         }
 
-        def _scan(current_dir: Path, rel_prefix: str, parent: dict):
+        def _scan(current_dir: Path, rel_prefix: str, parent: dict, dir_cfg: dict = dir_cfg):
             try:
                 entries = sorted(current_dir.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
             except Exception:
@@ -1456,7 +1396,6 @@ def get_corpus(response: Response, role: str | None = Query(None, description="R
 def add_source(body: AddSourceRequest) -> dict:
     """Watch a folder or file, chunking and embedding it immediately into the knowledge base in-place."""
     import hashlib
-    import json
     state = get_state()
     target = Path(body.path).resolve()
     if not target.exists():
@@ -1488,8 +1427,6 @@ def add_source(body: AddSourceRequest) -> dict:
     tracker = get_tracker()
     job = tracker.create(str(target), target_files or [target], job_id=body.job_id)
 
-    import hashlib
-    import json
     norm_path = str(target.resolve())
     norm_lower = norm_path.lower()
     hasher = hashlib.sha256(norm_lower.encode("utf-8")).hexdigest()[:10]
@@ -1501,13 +1438,9 @@ def add_source(body: AddSourceRequest) -> dict:
     # The ingestion thread also re-writes on completion (to update enabled
     # state), but the entry must exist for the sidebar to appear without a
     # page reload.
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+    config_file = source_config.CONFIG_PATH
     existing_dirs = []
-    if config_file.exists():
-        try:
-            existing_dirs = json.loads(config_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    existing_dirs = source_config.load(config_file)
     _untombstone_source(norm_path, norm_lower, file_id if target.is_file() else dir_id)
     found = False
     for d in existing_dirs:
@@ -1522,10 +1455,7 @@ def add_source(body: AddSourceRequest) -> dict:
         else:
             existing_dirs.append({"id": file_id, "name": target.name,
                                    "path": norm_path, "isFile": True, "isPreset": False, "enabled": True})
-    try:
-        config_file.write_text(json.dumps(existing_dirs, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    source_config.save(existing_dirs, config_file)
 
     def _run():
         try:
@@ -1537,14 +1467,9 @@ def add_source(body: AddSourceRequest) -> dict:
         # Re-sync configured_sources.json after ingestion (ensures enabled flag
         # is current and any state changes from ingest_path are persisted).
         import hashlib as _hl
-        import json as _json
-        _cfg = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        _cfg = source_config.CONFIG_PATH
         _dirs = []
-        if _cfg.exists():
-            try:
-                _dirs = _json.loads(_cfg.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        _dirs = source_config.load(_cfg)
         _norm = str(target.resolve())
         _norm_lo = _norm.lower()
         _hasher = _hl.sha256(_norm_lo.encode("utf-8")).hexdigest()[:10]
@@ -1562,10 +1487,7 @@ def add_source(body: AddSourceRequest) -> dict:
         elif not _found and target.is_file():
             _dirs.append({"id": _fid, "name": target.name,
                           "path": _norm, "isFile": True, "isPreset": False, "enabled": True})
-        try:
-            _cfg.write_text(_json.dumps(_dirs, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        source_config.save(_dirs, _cfg)
 
     import threading
     threading.Thread(target=_run, name=f"ingest-{job.job_id}", daemon=True).start()
@@ -1597,17 +1519,11 @@ def remove_source(
     name: str | None = Query(None),
 ) -> dict:
     """Remove a source file or directory from active knowledge base and vector store."""
-    import json
     state = get_state()
-    config_file = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
-    deleted_file = Path.cwd() / "backend" / "evaluation" / "deleted_sources.json"
+    config_file = source_config.CONFIG_PATH
+    deleted_file = source_config.DELETED_PATH
 
-    deleted_records = set()
-    if deleted_file.exists():
-        try:
-            deleted_records = {s.lower() for s in json.loads(deleted_file.read_text(encoding="utf-8"))}
-        except Exception:
-            deleted_records = set()
+    deleted_records = {str(s).lower() for s in source_config.load(deleted_file)}
 
     # Collect only specific identifiers: exact IDs and exact resolved full paths.
     # NEVER store generic base names like "docs" or Path(name).name.lower()!
@@ -1627,33 +1543,26 @@ def remove_source(
     # Read config_file to see if it matches any registered entry
     real_path_to_delete = path
     if config_file.exists():
-        try:
-            dirs = json.loads(config_file.read_text(encoding="utf-8"))
-            remaining_dirs = []
-            for d in dirs:
-                d_id = d.get("id", "").lower()
-                d_path_res = str(Path(d.get("path", "")).resolve()).lower()
-                if (
-                    d_id in identifiers
-                    or d_path_res in identifiers
-                    or (id and d_id == id.strip().lower())
-                    or (path and d_path_res == str(Path(path).resolve()).lower())
-                ):
-                    real_path_to_delete = d.get("path", path)
-                    if d_id:
-                        identifiers.add(d_id)
-                    identifiers.add(d_path_res)
-                else:
-                    remaining_dirs.append(d)
-            config_file.write_text(json.dumps(remaining_dirs, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        remaining_dirs = []
+        for d in source_config.load(config_file):
+            d_id = str(d.get("id", "")).lower()
+            d_path_res = str(Path(d.get("path", "")).resolve()).lower()
+            if (
+                d_id in identifiers
+                or d_path_res in identifiers
+                or (id and d_id == id.strip().lower())
+                or (path and d_path_res == str(Path(path).resolve()).lower())
+            ):
+                real_path_to_delete = d.get("path", path)
+                if d_id:
+                    identifiers.add(d_id)
+                identifiers.add(d_path_res)
+            else:
+                remaining_dirs.append(d)
+        source_config.save(remaining_dirs, config_file)
 
     deleted_records.update(identifiers)
-    try:
-        deleted_file.write_text(json.dumps(list(deleted_records), indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    source_config.save(list(deleted_records), deleted_file)
 
     return state.delete_source(real_path_to_delete)
 
@@ -2000,6 +1909,12 @@ def request_approval(body: ApprovalRequestBody) -> dict:
             ),
         )
 
+    # Approved files are written to outputs/ and nowhere else (backend/paths.py).
+    if "output_path" in (body.arguments or {}):
+        from backend.paths import confine_output
+
+        body.arguments = {**body.arguments, "output_path": confine_output(body.arguments["output_path"])}
+
     effect = body.effect
     if body.tool_name == "draft_docx":
         from backend.tools.documents.draft_docx import describe_effect
@@ -2122,7 +2037,6 @@ def list_outputs() -> dict:
     the operator had actually approved. storage/outputs/ is still read for
     files written by earlier builds.
     """
-    import os
 
     from backend.orchestrator.action_resolver import OUTPUT_DIR
 
@@ -2426,7 +2340,6 @@ def chat(body: ChatRequestBody) -> dict:
             if resolved and req.tool_name in ("draft_docx", "draft_xlsx"):
                 kind_name = "Excel Spreadsheet" if req.tool_name == "draft_xlsx" else "Word Document"
                 title_val = req.arguments.get("title") or kind_name
-                output_path_val = output_path or "storage/outputs/"
                 title = f"Confirm {kind_name} Draft ({title_val})"
                 # `detail` is the OPERATOR'S OWN WORDS, and stays that way: it
                 # was overwritten with 'Draft Word Document "<title>" to <path>',
@@ -3039,7 +2952,6 @@ def add_model(body: AddModelRequest) -> dict:
     The registry is reloaded in-process afterwards, so the new model is
     usable immediately. That is the whole point of the demo.
     """
-    import yaml
 
     from backend.models.registry import _DEFAULT_REGISTRY_PATH, load_registry
 

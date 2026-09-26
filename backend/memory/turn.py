@@ -36,7 +36,11 @@ asked and consulted, never what was answered.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -157,8 +161,8 @@ def open_turn(session_id: str, request: str, *, persist: bool = True) -> TurnMem
         # facts and are rejected; nothing is inferred or guessed.
         try:
             get_long_term().remember(request, source_session=session_id)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Long-term memory not updated for this turn' + ": %s: %s", type(exc).__name__, exc)
 
         memory.context_block = "".join(blocks)
     except Exception as exc:  # noqa: BLE001
@@ -199,8 +203,8 @@ def close_turn(
             tool_calls=tool_calls or [],
             entities=entities or [],
         )
-    except Exception:  # noqa: BLE001 - memory must never break a turn
-        pass
+    except Exception as exc:  # noqa: BLE001 - memory must never break a turn
+        logger.warning('Session memory not updated for this turn' + ": %s: %s", type(exc).__name__, exc)
 
 
 def documents_from_chunks(chunks) -> list[str]:

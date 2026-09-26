@@ -231,8 +231,10 @@ def write_section(request: str, section: dict, docs: list[dict], *, writer: str,
     reply_shape = ('{"heading": "...", "paragraphs": ["...", "...", "..."], "sources": ["S1"], '
                    '"contains_estimate": false}' if long_source else
                    '{"heading": "...", "body": "...", "sources": ["S1"], "contains_estimate": false}')
+    # f-string: without it every long-source prompt said "Each paragraph is
+    # {length} long." with the braces, and the length never reached the model.
     paragraph_rule = ("6. Write THREE OR FOUR paragraphs, each on a different part of the material "
-                      "above. Each paragraph is {length} long.\n" if long_source else "")
+                      f"above. Each paragraph is {length} long.\n" if long_source else "")
     prompt = f"""You are writing one section of a report, using ONLY the source documents
 below. Write about what THEY are about, in their own vocabulary.
 

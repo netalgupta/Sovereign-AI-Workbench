@@ -680,7 +680,6 @@ def _alert(prs, ctx, sec_title, sd):
     cols_preview = [t for t in (sd.get("what"), sd.get("impact"), sd.get("action")) if t]
     col_w = (theme.CONTENT_W - 0.9 - 0.4 * (max(len(cols_preview), 1) - 1)) / max(len(cols_preview), 1)
     body_h = max((fit.text_height_in(t, col_w, 15, "regular", 1.25) for t in cols_preview), default=0.6)
-    head_h = fit.text_height_in(sd.get("headline", ""), theme.CONTENT_W - 0.9, 22, "semibold", 1.12)
     # The panel is built from what goes in it, top to bottom: pill 0.35,
     # headline from 0.8, column labels at 1.95, column text from 2.35 for
     # its measured height, then 0.35 of padding.

@@ -15,7 +15,6 @@ Tests every acceptance criterion:
 
 import concurrent.futures
 import io
-import os
 import time
 import pytest
 import docx
@@ -24,8 +23,7 @@ import pptx
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.attachments import get_attachment_manager
-from backend.sandbox.render import get_render_manager, STORAGE_PERMANENT_RENDER, STORAGE_TEMPORARY_RENDER
+from backend.sandbox.render import get_render_manager
 
 client = TestClient(app)
 

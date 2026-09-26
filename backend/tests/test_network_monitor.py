@@ -197,3 +197,30 @@ def test_host_wide_figure_survives_the_mock_without_driving_the_alarm():
 
     assert status["hostExternalCount"] >= 1
     assert status["status"] == "external_detected"
+
+
+def test_an_unparseable_address_counts_as_external_not_local():
+    """Fail closed: this returned False (local) for anything it could not parse."""
+    from backend.audit.network_monitor import _is_ip_external
+    assert _is_ip_external("not-an-ip") is True
+    assert _is_ip_external("fe80::1%12") is False          # link-local with a zone id
+    assert _is_ip_external("8.8.8.8") is True
+    assert _is_ip_external("127.0.0.1") is False
+
+
+def test_the_model_server_is_inside_the_monitored_scope(monkeypatch):
+    """Every model runs in Ollama, a separate process; it was outside the claim."""
+    import psutil
+
+    from backend.audit import network_monitor as NM
+
+    class P:
+        def __init__(self, pid, name):
+            self.pid, self.info = pid, {"name": name}
+
+        def children(self, recursive=True):
+            return []
+
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: [P(4242, "ollama.exe"), P(5151, "chrome.exe")])
+    pids = NM._own_process_tree_pids()
+    assert 4242 in pids and 5151 not in pids

@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_CORPUS_DIR = "MRPL_RAG_Test_Corpus"
 SNAPSHOT_PATH = Path("backend/evaluation/inspection_data.json")
 # The corpus cache this layer writes and reads. Separate from the
@@ -224,8 +226,8 @@ class PipelineState:
                 json.dumps(payload), encoding="utf-8"
             )
             self._write_index()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Corpus cache not written; the next restart re-ingests everything' + ": %s: %s", type(exc).__name__, exc)
 
     def _configured_folders(self) -> list[Path] | None:
         """The enabled source folders, or None if nothing is configured.
@@ -239,13 +241,12 @@ class PipelineState:
         configuration file yet" (a fresh install), [] is "a file that
         enables nothing".
         """
-        config = Path.cwd() / "backend" / "evaluation" / "configured_sources.json"
+        from backend.api import source_config
+
+        config = source_config.CONFIG_PATH
         if not config.exists():
             return None
-        try:
-            entries = json.loads(config.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            return None
+        entries = source_config.load(config)
         return [
             Path(e["path"])
             for e in entries
@@ -258,8 +259,8 @@ class PipelineState:
             import faiss
 
             faiss.write_index(self._store.index, str(CORPUS_INDEX_PATH))
-        except Exception:  # noqa: BLE001 - a missing cache costs time, not truth
-            pass
+        except Exception as exc:  # noqa: BLE001 - a missing cache costs time, not truth
+            logger.warning('Vector index cache not written; the next restart rebuilds it' + ": %s: %s", type(exc).__name__, exc)
 
     def _load_index(self, expected: int) -> bool:
         """Load the saved index, or return False.
@@ -525,7 +526,8 @@ class PipelineState:
                     for folder in folders:
                         try:
                             _s, chunks, _stats = ingest_corpus(str(folder), verbose=False)
-                        except Exception:  # noqa: BLE001 - one bad folder is not fatal
+                        except Exception as exc:  # noqa: BLE001 - one bad folder is not fatal
+                            logger.warning('A source folder failed to ingest and is missing from search' + ": %s: %s", type(exc).__name__, exc)
                             continue
                         for chunk in chunks:
                             # Folders legitimately nest (07_User_Uploads
@@ -784,8 +786,8 @@ class PipelineState:
                         # nothing was ever recorded in the registry.
                         try:
                             self.registry.register(str(f))
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning('Document not recorded in the registry' + ": %s: %s", type(exc).__name__, exc)
                         total_chunks += len(chunks)
                         details.append({
                             "filename": f.name,
@@ -817,8 +819,8 @@ class PipelineState:
                         from backend.graph import auto_extract
 
                         auto_extract.schedule(newly_ingested, reason=f"ingest of {label}")
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning('Knowledge-graph extraction not scheduled; GraphRAG will not include the new documents' + ": %s: %s", type(exc).__name__, exc)
 
                 # PERSIST the updated store so the next boot loads from cache.
                 #
@@ -837,8 +839,8 @@ class PipelineState:
                         chunks_snapshot = list(self._chunks)
                     try:
                         self._write_corpus_cache(chunks_snapshot)
-                    except Exception:  # noqa: BLE001 - a failed cache write costs time, not correctness
-                        pass
+                    except Exception as exc:  # noqa: BLE001 - a failed cache write costs time, not correctness
+                        logger.warning('Corpus cache not written after ingest; the next restart re-ingests' + ": %s: %s", type(exc).__name__, exc)
 
                 return total_chunks, details
             finally:
@@ -900,7 +902,6 @@ class PipelineState:
         """Remove a file or folder from the active corpus, VectorStore, and registry."""
         p = Path(target_path)
         doc_name = p.name
-        norm_path = str(p.resolve()).lower()
 
         # 1. Stop watching if it's a watched directory
         self.watcher.remove_source(target_path)
@@ -934,8 +935,8 @@ class PipelineState:
             if p.exists() and p.is_file() and "07_user_uploads" in str(p.resolve()).lower():
                 p.unlink()
                 file_deleted = True
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Uploaded file could not be deleted from disk' + ": %s: %s", type(exc).__name__, exc)
 
         return {
             "success": True,

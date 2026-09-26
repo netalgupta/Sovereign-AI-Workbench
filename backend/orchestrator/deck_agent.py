@@ -38,7 +38,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 from backend.models.ollama_client import generate as ollama_generate, context_for

@@ -168,13 +168,13 @@ _SYSTEM_PROMPT = (
     "comparison table, matrix, or .xlsx file, or if the request specifies an output "
     "filename ending in .xlsx, you MUST call draft_xlsx with title, sheets (headers, "
     "rows with sources or marked unsourced, live Excel formulas), and output_path "
-    "(e.g. \"storage/outputs/filename.xlsx\").\n"
+    "(e.g. \"outputs/filename.xlsx\").\n"
     "- If asked to draft, create, write, or generate a Word document, text report, memo, "
     "or .docx file, or if the request specifies a .docx filename, call draft_docx with title, "
-    "sections (including source citations), and output_path (e.g. \"storage/outputs/filename.docx\").\n"
+    "sections (including source citations), and output_path (e.g. \"outputs/filename.docx\").\n"
     "- If asked to draft, create, write, generate, or export a PDF document, report, or .pdf file, "
     "call generate_pdf with title, sections (including source citations), and output_path "
-    "(e.g. \"storage/outputs/filename.pdf\").\n"
+    "(e.g. \"outputs/filename.pdf\").\n"
     "- An explicit filename ending in .xlsx is a HARD SIGNAL to call draft_xlsx.\n"
     "- An explicit filename ending in .pdf is a HARD SIGNAL to call generate_pdf.\n"
     "- INSUFFICIENT OR MISSING SOURCE DATA IS NOT A REASON TO SKIP CALLING THE TOOL OR REFUSE THE REQUEST. "
@@ -538,9 +538,14 @@ def run_agent_loop(
                 from backend.audit.approval_gate import ApprovalGate
                 from backend.tools import catalog  # noqa: F401
                 from backend.tools.registry import _REGISTRY
-                from backend.audit.approval_gate import ApprovalGate
 
                 spec = _REGISTRY.get(name)
+                # The file goes to outputs/ whatever path the model chose,
+                # and the operator approves THAT path (backend/paths.py).
+                if "output_path" in arguments:
+                    from backend.paths import confine_output
+
+                    arguments = {**arguments, "output_path": confine_output(arguments["output_path"])}
                 effect = getattr(spec, "description", "") or name
                 if name == "draft_docx":
                     from backend.tools.documents.draft_docx import describe_effect
@@ -930,7 +935,6 @@ def _answer(
 ) -> Iterator[dict]:
     """The turn itself. Split out of run_turn so that memory is opened
     and closed around EVERY path, including the ones that return early."""
-    from backend.observability import turn_log as T
 
     yield {"type": "start", "request": request}
     from backend.orchestrator.model_select import select as select_model
