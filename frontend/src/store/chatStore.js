@@ -248,12 +248,23 @@ export const useChatStore = create((set, get) => ({
       isResolvingApproval: false,
     })
 
-    const paramDetail = action?.proposed_value || 'confirmed'
-    const controller = action?.target || 'requested action'
-    get().addMessage(
-      'assistant',
-      `✅ **Action Authorized by Operator:** Safety gate passed. ${controller} accepted parameter update: **${paramDetail}**. Continuous interlock monitoring active.`
-    )
+    // Say what actually happened. This read "Safety gate passed. <file>
+    // accepted parameter update: confirmed. Continuous interlock monitoring
+    // active." after a SPREADSHEET was written -- control-room language for
+    // an event that never occurred, on the message that closes the approval.
+    const isFileWrite = action?.action_type === 'file write' || /\.(docx|xlsx|pptx|pdf|csv)$/i.test(action?.target || '')
+    let summary
+    if (isFileWrite && action?.target) {
+      summary = `✅ **Approved and written:** \`${action.target}\` is in the outputs folder. The approval is recorded in the audit log.`
+    } else if (action?.current_value && action?.proposed_value) {
+      summary = `✅ **Approved:** ${action.target || action.title || 'the change'} from ${action.current_value} to ${action.proposed_value}. The approval is recorded in the audit log.`
+    } else {
+      summary = `✅ **Approved:** ${action?.title || 'the requested action'}. The approval is recorded in the audit log.`
+    }
+    // The job this approval finished is done; its card must not keep saying
+    // "nothing is written until you approve it".
+    set({ activeJob: null })
+    get().addMessage('assistant', summary)
     return { success: true }
   },
 

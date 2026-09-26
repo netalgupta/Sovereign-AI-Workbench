@@ -31,6 +31,8 @@ const BANNED = [
   ['DCS_SETPOINT_WRITE', 'setpoint label applied to any action'],
   ['Confirm Critical Parameter Modification', 'invented approval title'],
   ['CANONICAL_OUTPUTS', 'built-in sample deliverables'],
+  ['interlock monitoring active', 'invented control-room outcome after a file write'],
+  ['accepted parameter update', 'setpoint language applied to any approval'],
 ]
 
 function sourceFiles(dir) {
