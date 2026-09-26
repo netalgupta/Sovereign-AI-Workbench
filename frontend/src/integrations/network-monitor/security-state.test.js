@@ -63,3 +63,13 @@ test('a non-application payload counts as no live reading', () => {
   assert.equal(s.security, 'checking')
   assert.equal(s.extApp, null)
 })
+test('a socket-read failure is never shown as secure', () => {
+  // The backend's error payload: status "error", externalCount -1.
+  const s = deriveSecurityState({
+    data: { scope: 'application', status: 'error', externalCount: -1, error: 'Socket inspection permission denied' },
+    error: null,
+  })
+  assert.equal(s.isSecure, false)
+  assert.equal(s.security, 'unverified')
+  assert.match(s.headline, /NOT verified/)
+})

@@ -19,89 +19,6 @@ import { showToast } from '../store/toastStore'
 import { useThemeStore } from '../store/themeStore'
 
 /**
- * Initial backend models matching models/models.yaml + embedded backend engines:
- * - Coder Sub-Agent (qwen2.5-coder:7b via Ollama)
- * - Reasoning & Drafting Sub-Agent (qwen2.5:14b via Ollama)
- * - Vision Sub-Agent (qwen2.5vl:7b via Ollama)
- * - Fast Router / Classifier (phi-3.5-mini via Ollama)
- * - Dense Vector Embeddings (BAAI/bge-large-en-v1.5 via sentence-transformers)
- * - Local Voice-Note Transcription (Systran/faster-whisper-base via ctranslate2)
- * - High-Precision OCR (ch_PP-OCRv4 via paddlex)
- */
-const INITIAL_MODELS = [
-  {
-    id: 'coder-model',
-    backend: 'ollama',
-    model: 'qwen2.5-coder:7b',
-    task_tags: ['code_generation', 'code_review', 'debugging'],
-    vram_usage: '4.8 GB',
-    status: 'active',
-    role: 'Code Sub-Agent',
-    engine_type: 'ollama_registry',
-  },
-  {
-    id: 'reasoning-model',
-    backend: 'ollama',
-    model: 'qwen2.5:14b',
-    task_tags: ['summarization', 'drafting', 'approval_notes', 'planning'],
-    vram_usage: '8.5 GB',
-    status: 'active',
-    role: 'Reasoning & Drafting Sub-Agent',
-    engine_type: 'ollama_registry',
-  },
-  {
-    id: 'vision-model',
-    backend: 'ollama',
-    model: 'qwen2.5vl:7b',
-    task_tags: ['ocr', 'image_understanding', 'diagram_reading'],
-    vram_usage: '5.2 GB',
-    status: 'active',
-    role: 'Vision Sub-Agent',
-    engine_type: 'ollama_registry',
-  },
-  {
-    id: 'fast-router',
-    backend: 'ollama',
-    model: 'phi-3.5-mini',
-    task_tags: ['classification', 'routing'],
-    vram_usage: '2.2 GB',
-    status: 'active',
-    role: 'Task Classifier & Verifier',
-    engine_type: 'ollama_registry',
-  },
-  {
-    id: 'bge-large-embeddings',
-    backend: 'sentence-transformers',
-    model: 'BAAI/bge-large-en-v1.5',
-    task_tags: ['dense_embeddings', 'hybrid_search', 'vector_indexing'],
-    vram_usage: '1.3 GB (RAM)',
-    status: 'active',
-    role: 'Dense Vector Embeddings',
-    engine_type: 'embedded',
-  },
-  {
-    id: 'faster-whisper-audio',
-    backend: 'ctranslate2',
-    model: 'Systran/faster-whisper-base',
-    task_tags: ['audio_transcription', 'voice_notes'],
-    vram_usage: '0.5 GB (RAM)',
-    status: 'active',
-    role: 'Local Speech-to-Text',
-    engine_type: 'embedded',
-  },
-  {
-    id: 'paddleocr-engine',
-    backend: 'paddlex',
-    model: 'ch_PP-OCRv4',
-    task_tags: ['ocr_detection', 'ocr_recognition', 'table_extraction'],
-    vram_usage: '0.3 GB (RAM)',
-    status: 'active',
-    role: 'Printed Document OCR',
-    engine_type: 'embedded',
-  },
-]
-
-/**
  * Pre-configured presets matching venue upgrade tier in DEPENDENCIES.md §1:
  * Adding or upgrading a model is an edit to models.yaml + reload, no code changes (FR-4).
  */
@@ -251,7 +168,12 @@ const RBAC_CATEGORIES = [
  */
 export function SettingsPage() {
   const { theme, toggleTheme } = useThemeStore()
-  const [models, setModels] = useState(INITIAL_MODELS)
+  // THE LIVE REGISTRY ONLY. This started from a written-out list naming
+  // qwen2.5:14b as the reasoning model (it is 7b; 14b was dropped as too slow),
+  // and when /api/models could not be reached that stale list stayed up as
+  // if it were live (Review Rule 5). Empty until the backend says otherwise.
+  const [models, setModels] = useState([])
+  const [modelsError, setModelsError] = useState(null)
   const [systemInfo, setSystemInfo] = useState(INITIAL_SYSTEM_INFO)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [rbacTiers, setRbacTiers] = useState(RBAC_TIERS)
@@ -311,8 +233,15 @@ export function SettingsPage() {
         } else if (Array.isArray(modelsData)) {
           setModels(modelsData)
         }
+        setModelsError(null)
+      } else {
+        setModels([])
+        setModelsError(`The backend answered ${modelsRes.status} for /api/models.`)
       }
-    } catch {}
+    } catch (err) {
+      setModels([])
+      setModelsError(`Could not reach the backend (${err?.message || 'network error'}).`)
+    }
 
     try {
       // 3. Fetch live RBAC matrix from backend
@@ -609,6 +538,15 @@ export function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
+                  {models.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-6 text-center text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                        {modelsError
+                          ? `${modelsError} No models are listed rather than a list that may be out of date.`
+                          : 'Reading the model registry…'}
+                      </td>
+                    </tr>
+                  )}
                   {models.map((m) => {
                     const isOllama = m.backend === 'ollama'
                     const isSentenceTransformers = m.backend === 'sentence-transformers'
