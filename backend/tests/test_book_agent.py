@@ -209,3 +209,12 @@ def test_a_book_becomes_overview_chapters_and_coverage_sections(monkeypatch):
     assert headings[0] == "Overview" and headings[-1] == "What this summary covers"
     assert headings[1] == "Chapter 1: Introduction to Cybercrime"
     assert spec["sections"][1]["note"].startswith("Pages ")
+
+
+def test_a_long_stage_says_how_far_it_has_got():
+    """40 minutes of 'Reading 162 stretches' looked exactly like a hang."""
+    said = []
+    out = B._counted(lambda x: x * 2, [3, 1, 2], said.append, "Reading 3 stretches")
+    assert out == [6, 2, 4], "results stay in input order"
+    assert said[-1] == "Reading 3 stretches (3 of 3 done)"
+    assert len(said) == 3

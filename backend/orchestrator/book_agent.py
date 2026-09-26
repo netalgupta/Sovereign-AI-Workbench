@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from backend.orchestrator.deck_agent import _ask_json, _numbers, writer_timeout
@@ -436,6 +436,23 @@ Reply with ONLY this JSON object, each paragraph a complete string in the list:
     return "\n\n".join(_ask_paragraphs(prompt, writer=writer))
 
 
+def _counted(fn, items: list, say, label: str) -> list:
+    """fn over items in parallel, in order, saying how many are done.
+
+    A 437-page book spends 40 minutes reading. With only the stage name on
+    screen ("Reading 162 stretches"), a working job and a hung one looked
+    identical -- and the GPU graph Windows shows by default (3D, not CUDA)
+    reads idle either way. The count is the proof it is moving.
+    """
+    results = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(fn, item): i for i, item in enumerate(items)}
+        for done, future in enumerate(as_completed(futures), 1):
+            results[futures[future]] = future.result()
+            say(f"{label} ({done} of {len(items)} done)")
+    return results
+
+
 # ── the whole thing ─────────────────────────────────────────────────────────
 
 
@@ -467,25 +484,23 @@ def summarise_book(request: str, document: str, chunks: list, *, writer: str, pr
 
     work = [(ch, w) for ch in placed for w in windows(pages, ch.first_page, ch.last_page)]
     say(f"Reading {len(work)} stretches of {len(placed)} chapters")
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        results = list(pool.map(lambda cw: (cw[0], extract_points(cw[0], cw[1], writer=writer)), work))
+    results = _counted(lambda cw: (cw[0], extract_points(cw[0], cw[1], writer=writer)), work, say,
+                       f"Reading {len(work)} stretches of {len(placed)} chapters")
     for ch, points in results:
         ch.points.extend(points)
     for ch in placed:
         ch.points.sort(key=lambda pt: pt["page"])
 
     say(f"Writing {len(placed)} chapter summaries")
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        bodies = list(pool.map(lambda ch: write_chapter(ch, request, writer=writer),
-                               [c for c in placed if c.points]))
+    bodies = _counted(lambda ch: write_chapter(ch, request, writer=writer),
+                      [c for c in placed if c.points], say, f"Writing {len(placed)} chapter summaries")
     for ch, body in zip([c for c in placed if c.points], bodies):
         ch.body = body
 
     say("Checking every chapter against what the book says")
     source_text = "\n".join(pages.values())
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        list(pool.map(lambda ch: check_chapter(ch, source_text, writer=writer),
-                      [c for c in placed if c.body]))
+    _counted(lambda ch: check_chapter(ch, source_text, writer=writer),
+             [c for c in placed if c.body], say, "Checking every chapter against the book")
 
     say("Writing the overview")
     written = [c for c in placed if c.body]
