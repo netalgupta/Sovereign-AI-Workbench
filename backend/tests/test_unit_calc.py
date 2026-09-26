@@ -38,3 +38,13 @@ def test_incompatible_target_unit_raises_explicit_message():
 def test_undefined_unit_raises_could_not_evaluate_message():
     with pytest.raises(ValueError, match="Could not evaluate unit expression"):
         evaluate_unit_expression("5 fakeunitxyz")
+
+
+def test_a_barrel_is_the_42_gallon_oil_barrel():
+    """Pint's own "bbl" is the 31.5-gallon US liquid barrel: 1450 m3/h came
+    out as 291,847 bbl/day instead of 218,885 -- 33% high, unflagged, in the
+    unit a refinery reports throughput in. Found through the chat UI."""
+    result = evaluate_unit_expression("1450 m**3/hr", target_unit="bbl/day")
+    assert result.result_magnitude == pytest.approx(218_885.4, rel=1e-5)
+    assert evaluate_unit_expression("1 barrel", target_unit="litre").result_magnitude == pytest.approx(158.987, rel=1e-5)
+    assert evaluate_unit_expression("1450 m**3/hr to barrel/day").result_magnitude == pytest.approx(218_885.4, rel=1e-5)

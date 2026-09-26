@@ -19,8 +19,14 @@ across calls, so one shared instance is correct and free.
 
 try:
     import pint
-    _ureg = pint.UnitRegistry()
+    # Redefinitions below replace Pint's own meaning on purpose.
+    _ureg = pint.UnitRegistry(on_redefinition="ignore")
     _ureg.define("Nm = meter")
+    # Pint's "barrel"/"bbl" is the 31.5-gallon US liquid barrel. In a
+    # refinery a barrel is ALWAYS the 42-gallon oil barrel, and the
+    # difference is 33%: 1450 m3/h came out as 291,847 bbl/day instead of
+    # 218,885, with nothing to flag it. Found through the chat UI.
+    _ureg.define("barrel = 42 * gallon = bbl")
 except Exception:
     pint = None
     _ureg = None
@@ -40,9 +46,15 @@ def evaluate_unit_expression(
 ) -> UnitCalcResult:
     """Evaluate a unit-aware arithmetic expression, e.g. "1500 kg/hr / (2.5 kg/m**3)".
 
+    For a conversion, give the quantity WITH its units and name the target
+    unit -- "1450 m**3/hr" with target_unit "bbl/day". Never write
+    conversion factors into the expression: the tool knows them, and a
+    factor typed in by hand is the error this tool exists to prevent.
+    A barrel (bbl) is the 42-gallon oil barrel.
+
     Args:
         expression: a Pint-parseable expression combining numbers and
-            units, e.g. "5 meter + 3 centimeter".
+            units, e.g. "5 meter + 3 centimeter" or "1450 m**3/hr".
         target_unit: optional unit to convert the final result into,
             e.g. "m**3/hr". Must be dimensionally compatible with the
             expression's result.

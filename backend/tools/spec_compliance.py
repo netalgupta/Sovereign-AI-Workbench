@@ -146,9 +146,10 @@ def _to_common_units(value: float, value_units: str, limit: float, limit_units: 
         return value, limit
 
     try:
-        from pint import UnitRegistry
+        # The one shared registry, so a unit means the same thing here as in
+        # the unit calculator (a barrel is the 42-gallon oil barrel).
+        from backend.tools.math.unit_calc import _ureg as registry
 
-        registry = UnitRegistry()
         converted = (value * registry(value_units)).to(registry(limit_units))
         return float(converted.magnitude), limit
     except Exception:  # noqa: BLE001 - pint raises many types for this
