@@ -172,7 +172,7 @@ def _run_document(job: OutputJob) -> None:
     job.writer = spec["writer"]
     job.slide_titles = [s["heading"] for s in spec["sections"]]
     job.citations = by_name
-    job._filename = f"MRPL_{_slug(spec['title'])}{KINDS[job.kind][2]}"
+    job._filename = f"{_slug(spec['title'])}{KINDS[job.kind][2]}"
     job.report = {
         "sections": len(spec["sections"]),
         "sources": by_name,
@@ -199,7 +199,7 @@ def _run_spreadsheet(job: OutputJob) -> None:
     job.writer = spec["writer"]
     job.slide_titles = [s["sheet_name"] for s in spec["sheets"]]
     job.citations = spec["documents"]
-    job._filename = f"MRPL_{_slug(spec['title'])}{KINDS[job.kind][2]}"
+    job._filename = f"{_slug(spec['title'])}{KINDS[job.kind][2]}"
     job.report = {
         "sheets": len(spec["sheets"]),
         "rows": sum(len(s["rows"]) for s in spec["sheets"]),

@@ -327,6 +327,9 @@ def test_a_document_job_asks_for_approval_of_what_it_wrote(doc_stubs, kind, tool
     # The approval screen names the file it writes. Without a target it read
     # "Target not resolved by the system" above that very file name.
     assert job.approval["target"] == req.arguments["output_path"].rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+    # The file is named after its subject, not the deployment: a summary of
+    # a cyber-security textbook was saved as "MRPL_Understanding_Cyber…pdf".
+    assert not job.approval["target"].startswith("MRPL_")
     # Nothing is written before approval, so the preview must not say it was.
     assert not any(line.startswith("Written to") for line in job.approval["preview"])
 

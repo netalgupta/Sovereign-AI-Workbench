@@ -65,7 +65,7 @@ def prepare_deck(request: str, session_id: str = "default", max_slides: int | No
     clean = re.sub(r"[^\w-]+", "_", request[:40]).strip("_") or "Briefing"
     return {
         "deck_spec": built["deck_spec"],
-        "filename": f"MRPL_{clean}.pptx",
+        "filename": f"{clean}.pptx",
         "slide_titles": built["slide_titles"],
         "citations": built["documents"],
         "omitted_sections": built["dropped_slides"],
