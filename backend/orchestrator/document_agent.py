@@ -424,7 +424,50 @@ def _bounded(docs: list[dict]) -> list[dict]:
     return [{**d, "text": outline_view([d]), "truncated": True} for d in docs]
 
 
-def build_document_spec(request: str, store, chunks: list, *, max_repairs: int = 1) -> dict:
+def _book_spec(request: str, docs: list[dict], chunks: list, *, writer: str, progress) -> dict | None:
+    """A chapter-by-chapter summary when the one long source is a book.
+
+    None when it is not one (no table of contents, chapters not found): the
+    generic long-source path then runs as before.
+    """
+    if len(docs) != 1 or source_chars(docs) < LONG_SOURCE_CHARS:
+        return None
+    from backend.orchestrator.book_agent import summarise_book
+
+    book = summarise_book(request, docs[0]["document"], chunks, writer=writer, progress=progress)
+    if not book or not book["chapters"]:
+        return None
+    sid = docs[0]["id"]
+    sections = []
+    if book["overview"]:
+        sections.append({"heading": "Overview", "body": book["overview"], "sources": [sid],
+                         "contains_estimate": False, "note": ""})
+    for ch in book["chapters"]:
+        first, last = ch["pages"]
+        sections.append({"heading": f"Chapter {ch['number']}: {ch['title']}", "body": ch["body"],
+                         "sources": [sid], "contains_estimate": False,
+                         "note": f"Pages {first}-{last} of the source"})
+    if book["coverage"]:
+        sections.append({"heading": "What this summary covers", "body": book["coverage"],
+                         "sources": [sid], "contains_estimate": False, "note": ""})
+    removed = [r for ch in book["chapters"] for r in ch["removed"]]
+    return {
+        "title": book["title"],
+        "subtitle": "A chapter-by-chapter summary",
+        "sections": sections,
+        "documents": [docs[0]["document"]],
+        # Sentences taken out by the checks are reported, not hidden.
+        "dropped_sections": removed,
+        "relabelled_figures": [],
+        "timings": {},
+        "writer": writer,
+        "topic": topic_of(request),
+        "missing_chapters": book["missing_chapters"],
+    }
+
+
+def build_document_spec(request: str, store, chunks: list, *, max_repairs: int = 1,
+                        progress=None) -> dict:
     """Corpus in, validated document spec out. Raises NotInCorpus when it cannot."""
     docs = anchor_documents(store, chunks, request,
                             max_chars_per_doc=DOC_SOURCE_BUDGET, max_chars_total=DOC_SOURCE_BUDGET)
@@ -444,6 +487,9 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
             "Nothing was written.")
 
     writer = choose_writer(docs)
+    book = _book_spec(request, docs, chunks, writer=writer, progress=progress)
+    if book is not None:
+        return book
     import time as _time
 
     _t0 = _time.time()

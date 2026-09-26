@@ -166,7 +166,8 @@ def _run_document(job: OutputJob) -> None:
 
     _stage(job, "writing", "Finding the source documents and writing the report")
     store, chunks = get_state().ensure_corpus()
-    spec = build_document_spec(job.request, store, chunks)
+    spec = build_document_spec(job.request, store, chunks,
+                               progress=lambda msg: setattr(job, "detail", msg))
     by_name = spec["documents"]
     job.writer = spec["writer"]
     job.slide_titles = [s["heading"] for s in spec["sections"]]
@@ -223,9 +224,12 @@ def _names_for(source_ids: list, spec: dict) -> list:
 
 
 def _section_for_tool(section: dict, spec: dict) -> dict:
-    return {"heading": section["heading"], "body": section["body"],
-            "sources": _names_for(section["sources"], spec),
-            "contains_estimate": section["contains_estimate"]}
+    out = {"heading": section["heading"], "body": section["body"],
+           "sources": _names_for(section["sources"], spec),
+           "contains_estimate": section["contains_estimate"]}
+    if section.get("note"):
+        out["note"] = section["note"]
+    return out
 
 
 def _slug(text: str) -> str:
