@@ -97,6 +97,39 @@ async def lifespan(app: FastAPI):
             )
         else:
             logger.warning("Could not start sandbox pool: %s: %s", type(exc).__name__, exc)
+
+    # WARM-UP, off the request path. The first question after a restart
+    # took 14.7 s against 4.8-7.0 s warm: the corpus load, the keyword
+    # index build and the embedding model's first use all landed on it.
+    # Done here in a background thread, the server is up at once and the
+    # first question finds everything ready. Ends by loading the chat
+    # model at the standard context, so no request pays a load or a
+    # context-size reload (ollama_client.STANDARD_NUM_CTX).
+    import threading
+
+    def _warm() -> None:
+        import time as _t
+
+        t0 = _t.time()
+        try:
+            from backend.api.state import get_state
+            from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+            store, _chunks = get_state().ensure_corpus()
+            retrieve_with_grounding_check(store, "warm-up query for the keyword index", 1)
+        except Exception as exc:  # noqa: BLE001 - warming must never break startup
+            logger.warning("Warm-up: retrieval not warmed (%s)", exc)
+        try:
+            from backend.models.ollama_client import STANDARD_NUM_CTX, generate
+            from backend.models.registry import resolve_model_name
+
+            generate(resolve_model_name("reasoning-model"), "Reply with OK.", timeout=300,
+                     options={"num_ctx": STANDARD_NUM_CTX, "num_predict": 2})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Warm-up: chat model not preloaded (%s)", exc)
+        logger.warning("Warm-up finished in %.1fs: corpus, keyword index and chat model ready", _t.time() - t0)
+
+    threading.Thread(target=_warm, name="warm-up", daemon=True).start()
     yield
     try:
         from backend.sandbox import pool
