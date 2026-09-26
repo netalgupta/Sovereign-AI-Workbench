@@ -441,3 +441,23 @@ def test_every_kind_files_arguments_its_tool_actually_takes(kind):
              else {"title", "subtitle", "sections", "output_path"} if kind in ("docx", "pdf")
              else {"title", "sheets", "output_path"})
     assert filed <= accepted, f"{J.KINDS[kind][1]} does not take {sorted(filed - accepted)}"
+
+
+@pytest.mark.parametrize("state, expected", [("executed", "written"), ("refused", "declined"), ("pending", "awaiting_approval")])
+def test_a_job_follows_its_approval_to_written_or_declined(monkeypatch, state, expected):
+    """After the file was approved and written, the Artifacts tab still
+    listed the job as 'Waiting for your approval'."""
+    from backend.audit import approval_gate as G
+
+    class FakeGate:
+        def get(self, request_id):
+            assert request_id == "req-1"
+            return type("R", (), {"state": G.ApprovalState(state)})()
+
+    monkeypatch.setattr(G, "ApprovalGate", FakeGate)
+    job = J.OutputJob(job_id="xlsx-t", request="r", session_id="s", kind="xlsx")
+    job.status = "awaiting_approval"
+    job.approval = {"id": "req-1", "target": "Sheet.xlsx"}
+    assert job.public()["status"] == expected
+    if expected == "written":
+        assert "Sheet.xlsx" in job.detail

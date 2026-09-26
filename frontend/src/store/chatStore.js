@@ -265,6 +265,8 @@ export const useChatStore = create((set, get) => ({
     // "nothing is written until you approve it".
     set({ activeJob: null })
     get().addMessage('assistant', summary)
+    // The Artifacts tab lists it now, not on its next poll.
+    if (isFileWrite && typeof window !== 'undefined') window.dispatchEvent(new Event('workbench:outputs-changed'))
     return { success: true }
   },
 

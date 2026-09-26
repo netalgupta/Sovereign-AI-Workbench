@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { Sparkles, Download, CheckCircle2, FileText, FileSpreadsheet, Presentation, Filter, FolderDown } from 'lucide-react'
+import { Download, FileText, FileSpreadsheet, Presentation, Filter, FolderDown, Eye } from 'lucide-react'
 import { OutputJobsList } from './OutputJobsList'
+import { usePreviewStore } from '../../store/previewStore'
+
+// Sent by the approval flow the moment a file is written, so the list
+// shows it at once instead of on the next 10 s poll.
+export const OUTPUTS_CHANGED = 'workbench:outputs-changed'
 
 const ICONS = {
   docx: { icon: FileText, color: '#3b82f6', label: 'DOCX' },
@@ -54,9 +59,11 @@ export default function RealOutputCards({
     }
     fetchOutputs()
     const timer = setInterval(fetchOutputs, 10000)
+    window.addEventListener(OUTPUTS_CHANGED, fetchOutputs)
     return () => {
       active = false
       clearInterval(timer)
+      window.removeEventListener(OUTPUTS_CHANGED, fetchOutputs)
     }
   }, [])
 
@@ -74,6 +81,11 @@ export default function RealOutputCards({
     a.click()
     document.body.removeChild(a)
   }
+
+  const openPreview = usePreviewStore((s) => s.openPreview)
+  // The newest file, if it was written in the last few minutes: the one the
+  // operator just approved, which is what they came to this tab to find.
+  const newest = files.length && Date.now() / 1000 - (files[0].writtenAt || 0) < 300 ? files[0].filename : null
 
   const filtered = files.filter((f) => {
     if (filter === 'all') return true
@@ -174,7 +186,7 @@ export default function RealOutputCards({
                 className="p-5 rounded-xl border flex flex-col justify-between gap-3 shadow-xs transition-all hover:border-zinc-400 dark:hover:border-zinc-600"
                 style={{
                   background: 'var(--color-card-bg)',
-                  borderColor: 'var(--color-border)',
+                  borderColor: file.filename === newest ? 'var(--color-accent)' : 'var(--color-border)',
                 }}
               >
                 <div className="flex items-start gap-3">
@@ -193,8 +205,8 @@ export default function RealOutputCards({
                       {file.filename}
                     </h4>
                     <p className="text-[11px] font-mono mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                      {file.fileSize || `${Math.round((file.sizeBytes || 0) / 1024)} KB`} ·{' '}
-                      {file.citationsCount || 0} verified citation(s)
+                      {typeConfig.label} · {file.fileSize || `${Math.round((file.sizeBytes || 0) / 1024)} KB`}
+                      {file.filename === newest && <span style={{ color: 'var(--color-accent)' }}> · just written</span>}
                     </p>
                   </div>
                 </div>
@@ -204,8 +216,18 @@ export default function RealOutputCards({
                   style={{ borderColor: 'var(--color-border)' }}
                 >
                   <span className="text-[10px] font-mono" style={{ color: 'var(--color-text-muted)' }}>
-                    {file.generatedAt || 'Recent'}
+                    {file.generatedAt || ''}
                   </span>
+                  <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openPreview({ id: file.path, name: file.filename, filename: file.filename, relativePath: file.path, relPath: file.path, path: file.path, type: ext })}
+                    className="px-3 py-1 rounded font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer border"
+                    style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+                  >
+                    <Eye size={12} />
+                    <span>Open</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleDownload(file)}
@@ -218,6 +240,7 @@ export default function RealOutputCards({
                     <Download size={12} />
                     <span>Download</span>
                   </button>
+                  </div>
                 </div>
               </div>
             )

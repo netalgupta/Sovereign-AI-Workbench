@@ -45,6 +45,7 @@ import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
+import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
 
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
@@ -103,6 +104,14 @@ export function ChatPane() {
 
   // Top tabs: Chat / Notebooks / Artifacts
   const [activeTab, setActiveTab] = useState('chat')
+  // A file was written while the operator was elsewhere: the Artifacts tab
+  // carries a dot until they open it.
+  const [newArtifact, setNewArtifact] = useState(false)
+  useEffect(() => {
+    const mark = () => setNewArtifact(true)
+    window.addEventListener(OUTPUTS_CHANGED, mark)
+    return () => window.removeEventListener(OUTPUTS_CHANGED, mark)
+  }, [])
 
   // Code block copy state
   const [copiedCode, setCopiedCode] = useState(false)
@@ -1020,7 +1029,8 @@ export function ChatPane() {
                   type="button"
                   onClick={() => {
                     setActiveTab(tab.id)
-                    if (tab.id !== 'chat') {
+                    if (tab.id === 'artifacts') setNewArtifact(false)
+                    if (tab.id === 'notebooks') {
                       showToast(`${tab.label} module — Coming soon`, 'info')
                     }
                   }}
@@ -1045,6 +1055,9 @@ export function ChatPane() {
                   <span className="relative z-10 flex items-center gap-2">
                     <tab.icon size={13} strokeWidth={2} />
                     <span>{tab.label}</span>
+                    {tab.id === 'artifacts' && newArtifact && activeTab !== 'artifacts' && (
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-accent)' }} aria-label="New file written" />
+                    )}
                   </span>
                 </button>
               )
@@ -1158,8 +1171,11 @@ export function ChatPane() {
       </div>
 
       {/* ── 2. Active Tab Content ──────────────────────────────────────── */}
-      {activeTab !== 'chat' ? (
-        /* Non-functional Stub State for Notebooks / Artifacts */
+      {activeTab === 'artifacts' ? (
+        /* Every file the operator has approved, newest first (outputs/). */
+        <RealOutputCards />
+      ) : activeTab !== 'chat' ? (
+        /* Notebooks: not built yet */
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-fade-in">
           <div
             className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"

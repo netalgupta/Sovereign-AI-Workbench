@@ -2146,18 +2146,20 @@ def list_outputs() -> dict:
             stat = p.stat()
             size_kb = round(stat.st_size / 1024, 1)
             size_display = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 2)} MB"
-            from datetime import date as dt_date
-            mtime_str = dt_date.fromtimestamp(stat.st_mtime).isoformat()
+            from datetime import datetime as dt_datetime
+            written = dt_datetime.fromtimestamp(stat.st_mtime)
 
+            # No citation count: this reported 3 for EVERY document, shown as
+            # "3 verified citation(s)" -- a number nobody counted (Rule 4).
             items.append({
                 "id": p.name,
                 "filename": p.name,
                 "fileType": ext,
                 "fileSize": size_display,
                 "sizeBytes": stat.st_size,
-                "generatedAt": mtime_str,
-                "path": str(p),
-                "citationsCount": 3 if ext in ["docx", "xlsx", "pdf", "pptx"] else 0,
+                "generatedAt": written.strftime("%Y-%m-%d %H:%M"),
+                "writtenAt": stat.st_mtime,
+                "path": str(p.resolve()),
             })
 
     return {"files": items, "count": len(items)}

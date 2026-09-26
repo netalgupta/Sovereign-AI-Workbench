@@ -17,6 +17,8 @@ const KIND_LABEL = { deck: 'Presentation', docx: 'Word document', pdf: 'PDF', xl
 
 const STATE = {
   awaiting_approval: { icon: ShieldQuestion, text: 'Waiting for your approval' },
+  written: { icon: CheckCircle2, text: 'Approved and written — listed below' },
+  declined: { icon: AlertTriangle, text: 'Declined — nothing written' },
   refused: { icon: AlertTriangle, text: 'Refused — nothing written' },
   failed: { icon: AlertTriangle, text: 'Failed' },
 }

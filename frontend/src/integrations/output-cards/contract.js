@@ -26,7 +26,7 @@
  * @property {'docx'|'xlsx'|'pptx'|'pdf'} fileType - File extension / format
  * @property {string} fileSize - Human-readable size (e.g. "184 KB")
  * @property {string} generatedAt - Formatted timestamp (YYYY-MM-DD HH:mm)
- * @property {number} citationsCount - Number of grounded citations
+ * @property {string} generatedAt - When the file was written, 'YYYY-MM-DD HH:MM'
  * @property {string} downloadUrl - File download link
  * @property {string} [previewUrl] - Optional preview render URL
  * @property {'ready'|'generating'|'failed'} [status='ready'] - File readiness state

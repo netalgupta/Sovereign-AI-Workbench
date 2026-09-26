@@ -80,7 +80,30 @@ class OutputJob:
     _spec: dict | None = None
     _filename: str = ""
 
+    def settle(self) -> None:
+        """Follow the approval: a job whose file was written says so.
+
+        The job stopped at 'awaiting_approval' for good -- after the file
+        was approved and written, the Artifacts tab still listed the job as
+        'Waiting for your approval'. The gate is the one place every
+        approval route goes through, so the job reads its outcome there
+        rather than each route remembering to update it.
+        """
+        if self.status != "awaiting_approval" or not self.approval:
+            return
+        try:
+            from backend.audit.approval_gate import ApprovalGate, ApprovalState
+
+            state = ApprovalGate().get(self.approval["id"]).state
+        except Exception:  # noqa: BLE001 - an unreadable ledger leaves the job as it was
+            return
+        if state == ApprovalState.EXECUTED:
+            _stage(self, "written", f"Written: {self.approval.get('target') or 'the approved file'}")
+        elif state == ApprovalState.REFUSED:
+            _stage(self, "declined", "Declined — nothing was written")
+
     def public(self) -> dict:
+        self.settle()
         d = asdict(self)
         d.pop("_spec", None)
         d.pop("_filename", None)
