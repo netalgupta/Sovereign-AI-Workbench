@@ -390,25 +390,41 @@ def _ask_json(prompt: str, *, model_id: str = "reasoning-model", timeout: int = 
     written from a few thousand characters of matched passage, and asking
     for the full 12k window costs KV cache for nothing -- three times over,
     since those sections are written concurrently.
+
+    FREE GENERATION FIRST, JSON MODE ONLY IF THAT DOES NOT PARSE. Measured
+    on the book job's own calls (Ollama's timing breakdown): format=json
+    added 5-7 s of constrained-decoding overhead to every call -- 10.2 s
+    and 13.6 s with it, 5.0 s and 4.5 s without, and the unconstrained
+    replies were valid JSON too. Nearly every background step goes through
+    here, so that overhead was most of a document or book job's time.
     """
-    raw = ollama_generate(
-        resolve_model_name(model_id),
-        prompt,
-        timeout=timeout,
-        format="json",
-        options={"num_ctx": num_ctx or NUM_CTX},
-    )
+    options = {"num_ctx": num_ctx or NUM_CTX}
+    name = resolve_model_name(model_id)
+    parsed = _parse_json_object(ollama_generate(name, prompt, timeout=timeout, options=options))
+    if parsed is not None:
+        return parsed
+    logger.info("Free-form reply did not parse; asking again in JSON mode")
+    return _parse_json_object(ollama_generate(name, prompt, timeout=timeout, format="json", options=options))
+
+
+def _parse_json_object(raw: str | None) -> Any:
+    """The JSON in a model reply: the whole reply, or its outermost {...}."""
+    if not raw:
+        return None
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", raw or "", re.S)
-        if not match:
-            logger.warning("Model reply was not JSON: %r", (raw or "")[:200])
-            return None
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
+        pass
+    # Code fences and a sentence before or after the object are common in
+    # free generation; the object itself is what was asked for.
+    match = re.search(r"\{.*\}", raw, re.S)
+    if not match:
+        logger.warning("Model reply was not JSON: %r", raw[:200])
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
 
 
 _TYPE_MENU = "\n".join(f"- {name}: {meta['use']}" for name, meta in SLIDE_TYPES.items())

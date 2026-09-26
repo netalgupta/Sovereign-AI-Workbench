@@ -699,3 +699,33 @@ def test_the_writer_is_the_fast_model_whatever_the_source_size(monkeypatch):
     assert D.choose_writer([{"text": "x" * 40000}]) == D.WRITER_SMALL
     monkeypatch.setenv("WORKBENCH_DECK_WRITER", D.WRITER_LARGE)
     assert D.choose_writer([{"text": "x"}]) == D.WRITER_LARGE
+
+
+# ── JSON calls: free generation first, JSON mode only as a fallback ────────
+# format=json measured at 5-7 s of extra time per call on the book job.
+
+def test_a_json_reply_is_taken_without_json_mode(monkeypatch):
+    from backend.orchestrator import deck_agent as DA
+    calls = []
+
+    def fake(model, prompt, **k):
+        calls.append(k.get("format"))
+        return 'Here it is:\n```json\n{"points": [{"point": "x", "page": 3}]}\n```'
+
+    monkeypatch.setattr(DA, "ollama_generate", fake)
+    assert DA._ask_json("p") == {"points": [{"point": "x", "page": 3}]}
+    assert calls == [None], "one call, and not in JSON mode"
+
+
+def test_json_mode_is_the_fallback_when_free_text_does_not_parse(monkeypatch):
+    from backend.orchestrator import deck_agent as DA
+    replies = iter(["I think the points are: phishing and vishing.", '{"points": []}'])
+    calls = []
+
+    def fake(model, prompt, **k):
+        calls.append(k.get("format"))
+        return next(replies)
+
+    monkeypatch.setattr(DA, "ollama_generate", fake)
+    assert DA._ask_json("p") == {"points": []}
+    assert calls == [None, "json"]
