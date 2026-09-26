@@ -1,3 +1,46 @@
+# HANDOFF — 2026-09-27 (speed, Artifacts tab, cleanup and critical review)
+
+**Speed** (measured on the RTX 4060 laptop): junk input 29 s -> 0.4 s (no
+model); first question after restart 14.7 -> 7.0 s (warm-up); Excel job
+41 -> 13 s; Word 117 -> 40 s; book reading 11.8 -> 4.0 s per call. Causes:
+Ollama `format=json` (+5-7 s/call), four different num_ctx values (~13 s
+reload each), NUM_PARALLEL=1. **Every machine needs the Ollama variables in
+CLAUDE.md -> VRAM Discipline**, then an Ollama restart.
+
+**Artifacts tab** lists every approved file (newest first, Open/Download),
+refreshes the moment a file is written, and jobs show "written/declined".
+
+**Cleanup**: 18 mock-up PNGs (showing "GPT-4o" and invented readings), dead
+scripts, a stale committed index, the unused PPTX template, ~25 dead
+frontend files and the session notes that were 3/4 of CLAUDE.md.
+
+**Critical review — fixed** (details in commits 7925e3e, 08b4434, eab15dd):
+- Security: approved writes confined to outputs/ (the model chose the path);
+  the network monitor now watches Ollama too and fails closed on bad
+  addresses; the air-gap bar showed green when the backend said it could
+  NOT read sockets.
+- Governance: the audit page showed invented approvals and marked every
+  record SUCCESS (refusals included); tests wrote 96 entries into the real
+  audit trail; audit/ledger/source-list paths followed the working
+  directory; the source list could be wiped by one unreadable read.
+- Bugs: undefined logger in the OCR-failure path; an f-string missing so
+  long-document prompts said "{length}"; the graph tool returned the first
+  node as the answer to "no match" and ignored `depth`; a snapshot graph
+  stood in for the live one.
+
+**Open from the review (deliberately not done now)**:
+- `backend/api/routes.py` is 3,500 lines with two approval flows
+  (/approve+/execute and /resolve). Split into routers per area and keep one
+  approval flow -- after Advay's UI overhaul lands, to avoid conflicts.
+- `backend/audit/audit.jsonl` still holds 96 old pytest entries (2026-09
+  runs, temp-dir paths). It is append-only by design, so they were not
+  deleted; filter them in review or rotate the file deliberately.
+- `test_sandbox_step2::test_criterion_1_infinite_loop_timeout` is flaky under
+  load (8 s polling window); passes alone.
+- frontend/electron/ is a README only (NFR-8 promises a desktop app).
+
+---
+
 # HANDOFF — 2026-09-26 (tested from the chat box, not from the backend)
 
 Every flow was driven through the real chat UI in a browser
