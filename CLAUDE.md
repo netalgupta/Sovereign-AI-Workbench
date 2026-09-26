@@ -2,26 +2,31 @@
 This file is read by Claude Code / Antigravity (or any coding agent) working in this repository. Keep it accurate as the repo evolves — this is what the AI coding agent uses as ground truth for how to work here.
 
 ## Project Summary
-Sovereign On-Premise Agentic AI Workbench for MRPL (PS26117). Fully offline, multi-model, agentic system. Full spec: REQUIREMENTS.md, SYSTEM.md and SIH26117_MRPL_Grounded_Dossier.md at the repo root; TOOLS.md, DEPENDENCIES.md, STAKEHOLDERS.md, OWNERSHIP.md and Technical_Specs/ under docs/. Read those before making architectural changes. The pointer used to say all four were "in this same folder", which was untrue for two of them; docs/ also carried stale copies of the root files (docs/SYSTEM.md still named Qwen2-VL, a tag that does not exist on Ollama and was fixed in the root copy in 3c94963). Those duplicates are deleted. There is now exactly one copy of each file -- link to it, never copy it. docs/OWNERSHIP.md is the tie-breaker when documents disagree about who owns a deliverable.
+Sovereign On-Premise Agentic AI Workbench for MRPL (PS26117). Fully offline, multi-model, agentic system. Full spec: REQUIREMENTS.md, SYSTEM.md and SIH26117_MRPL_Grounded_Dossier.md at the repo root; TOOLS.md, DEPENDENCIES.md, STAKEHOLDERS.md, OWNERSHIP.md and Technical_Specs/ under docs/. Read those before making architectural changes. There is exactly one copy of each file -- link to it, never copy it. docs/OWNERSHIP.md is the tie-breaker when documents disagree about who owns a deliverable. HANDOFF.md holds the latest session's state.
 
-## Repo Structure (target layout)
+## Repo Structure (actual)
 ```
-/backend
-  /orchestrator      — LangGraph agent graph, router, sub-agent dispatch
-  /tools             — one module per tool in TOOLS.md, each with a defined schema
-  /connectors        — SAP connector, document ingestion
-  /sandbox           — Docker sandbox execution wrapper
-  /audit             — audit logging module
-  main.py            — FastAPI entrypoint
-/frontend
-  /electron          — main.js, preload.js (mandatory Electron shell, see FRONTEND.md §4.1)
-  /src/components    — chat, plan graph, network monitor, source viewer, etc.
-/models
-  models.yaml        — model registry config (see DEPENDENCIES.md)
-/deploy
-  docker-compose.yml
-  install.sh / install.bat
-/docs                — this documentation set
+backend/
+  main.py          FastAPI entrypoint, startup warm-up
+  api/             routes.py (every HTTP route), state.py (corpus/index singletons)
+  orchestrator/    path_router + intent (which path answers), agent_loop (tool-calling chat),
+                   graph (non-streaming path), model_select, action_resolver + output_jobs
+                   (deliverables as background jobs), deck/document/book/slide agents
+  tools/           registry.py (schema from type hints) + one module per tool, by category
+  retrieval/       hybrid dense+BM25 search, grounding gate, generation, citations
+  ingestion/       extraction, OCR/ASR, chunking, embeddings, boilerplate
+  graph/           Neo4j GraphRAG
+  audit/           approval gate + append-only audit log
+  sandbox/         Docker (--network none) and process runners
+  models/          registry.py (reads models/models.yaml), ollama_client, local vision, GPU budget
+  memory/ auth/ attachments/ observability/ utils/
+  evaluation/      measurement harnesses; ps_compliance.py checks the PS line by line
+  tests/
+frontend/          Vite + React; src/components/workbench is the app, src/lib/api.js the only
+                   backend client. electron/ is NOT built yet (README only).
+models/models.yaml the only place a model is named (hard constraint #2)
+docs/              specs, TOOLS.md, OWNERSHIP.md, assignments
+MRPL_*_Corpus/     synthetic test corpora
 ```
 
 ## Hard Constraints (never violate these when generating code)
@@ -40,6 +45,16 @@ Sovereign On-Premise Agentic AI Workbench for MRPL (PS26117). Fully offline, mul
 ## VRAM Discipline
 Dev hardware is an RTX 4060 (8GB). Do not write code that assumes all models can be resident in VRAM simultaneously unless explicitly running on venue hardware — load/unload or route sequentially by default; make concurrency configurable, not assumed.
 
+**Every Ollama call asks for the same context size** (`ollama_client.STANDARD_NUM_CTX`, 8192; `context_for()` picks 12288 only when a prompt cannot fit). A different `num_ctx` on the same model is a ~13 s reload. **JSON is asked for without Ollama's `format=json`** (`deck_agent._ask_json` falls back to it): constrained decoding measured 5-7 s extra per call.
+
+Ollama must run with these user environment variables (measured on the 8 GB card; set once per machine, then restart Ollama):
+```
+OLLAMA_NUM_PARALLEL=2        # 4 spills to CPU once the embedding model is on the GPU
+OLLAMA_FLASH_ATTENTION=1
+OLLAMA_KV_CACHE_TYPE=q8_0
+OLLAMA_KEEP_ALIVE=30m        # a cold reload costs ~80 s; 5m (the default) unloads between tasks
+```
+
 ## When Asked to Add a New Tool
 1. Check TOOLS.md — does it already exist under a different name?
 2. Add the implementation under `/backend/tools/<category>/<tool_name>.py`
@@ -53,233 +68,6 @@ Dev hardware is an RTX 4060 (8GB). Do not write code that assumes all models can
 
 ## Demo-Day Priorities
 If time runs short, protect the 🔴-priority rows in TOOLS.md first. 🟡 and ⚪ rows can remain registry-listed (present in the model/tool config, not necessarily polished) without breaking the "boundless, pluggable" architecture claim — see TOOLS.md §I for the exact demo script these priorities are built around.
-
----
-
-# SESSION HANDOFF — 2026-09-10 (Aryan / RAG-GraphRAG validation session)
-
-**This is a point-in-time session handoff, not project policy.** Written before an imminent auto-compaction so the next session (or a fresh context window in this one) can resume without re-deriving state. Branch: `aryan/rag-and-graphrag`.
-
-## What this session was doing
-Building out Aryan's full RAG/AI/ML scope (model registry, math tools, ingestion, OCR/ASR, hybrid retrieval, GraphRAG, generation), then running a real end-to-end validation against a synthetic `MRPL_RAG_Test_Corpus/` (13 docs: DOCX/PDF/XLSX/XLS/PNG), fixing every real bug found along the way — not a demo, an actual working pipeline with tests for everything.
-
-## Files/modules built this session (all under `backend/`)
-- `models/registry.py` — `resolve_model_name()` (registry id -> real Ollama tag)
-- `orchestrator/router.py` — CARD 03, reuses `resolve_model_name` + shared `strip_code_fences`
-- `utils/llm_output.py` — shared `strip_code_fences` (used by router + entity_extraction)
-- `tools/math/{symbolic_calc,unit_calc,thermophysical}.py` — CARD 08/10/11 (SymPy/Pint/CoolProp)
-- `ingestion/model_cache.py` — the fetch-once/offline-forever pattern every model-backed tool uses
-- `ingestion/{embeddings,fetch_models}.py` — bge-large-en-v1.5, forced offline
-- `ingestion/{document_types,text_extraction,chunking,document_ingestion,xlsx_charts,semantic_chunking}.py` — full RAG_SPEC §2 pipeline
-- `tools/vision/{ocr_printed,chart_understanding}.py` — CARD 05 (PaddleOCR), CARD 13 (chart image vision estimate)
-- `tools/audio/voice_transcription.py` — CARD 12 (faster-whisper)
-- `retrieval/{vector_store,hybrid_search,grounded_retrieval,citation_validation,generation}.py` — CARD 09 + RAG_SPEC §3/§4
-- `graph/{entity_extraction,neo4j_client}.py` — GRAPH_SPEC §5/§6
-- `evaluation/` — reusable harness: `ingest_corpus.py`, `build_graph.py`, `extract_corpus.py`, `run_qa_tests.py`, `generate_report.py`, `precision_at_k.py`, `chunk_size_experiment.py`, `run_signature_query.py`, `mrpl_qa_test_set.json`
-
-## Key architecture decisions made
-1. **Fetch-once/offline-forever**: every model-backed tool (embeddings, whisper, PaddleOCR, chart vision) forces offline mode and loads only from a local `models/<category>/` path — never trusts a library's default Hub-reachability check.
-2. **Neo4j MUST use a named Docker volume** (`-v <name>:/data`) + `NEO4J_dbms_usage__report_enabled=false`. Documented in GRAPH_SPEC.md. Learned this the hard way (see "what broke" below).
-3. **Entity extraction (expensive, LLM) is decoupled from graph-loading (cheap, replayable)**: `extract_corpus.py` checkpoints every chunk's extraction to a JSON-Lines file on disk *as it's produced* (flushed per line, so a crash loses at most 1 chunk); `build_graph.py`'s `build_graph_from_extractions()` loads that cache into Neo4j with zero LLM calls. This is the actual fix for "we can't afford to lose 40 minutes of extraction to an environment reset."
-4. **Semantic chunking is opt-in** (`semantic_chunking.py`), never the default — RAG_SPEC §2 locks 512/64 token chunking because retrieval-quality tuning (the 0.35 confidence threshold) assumes it.
-5. **Chart handling is two genuinely different tools**: `xlsx_charts.py` (native Excel charts — exact cached values, zero vision model) vs `chart_understanding.py` (CARD 13, chart *images* — vision model estimate, `is_estimate` hardcoded `True`, never presented with the confidence of a real number).
-6. **Citation validation** strips both invalid numeric citations (`[7]` when only 5 sources exist) and unresolved placeholders (literal `"[N]"` — the model echoing RAG_SPEC §4's own prompt syntax instead of substituting a digit).
-
-## What's confirmed WORKING (verified live, not assumed)
-- Full ingestion: all 13 corpus files, 21 chunks, zero errors (DOCX/PDF/XLSX/XLS/PNG/CSV/TXT/EML/audio all exercised)
-- CARD 05 OCR: correctly reads the deliberately noisy/rotated scanned checklist
-- CARD 12 voice transcription: real TTS-generated fixture, correct transcription incl. domain vocab
-- Hybrid retrieval + RRF fusion: dense-only and sparse-only test cases both pass independently
-- Generation pipeline: 8/8 real QA questions correct on value AND source (before the newest round of fixes below)
-- GraphRAG: signature query (`Mangalore-Hassan`) confirmed **twice**, independently — `segment_found=True`, `related_documents` includes both the PDF and the OCR'd diagram PNG, edge type confirmed via direct Cypher as `REFERENCES` (never `APPLIES_TO`, per §8 — this is hardcoded in `link_document_to_entities`, not a per-run behavior)
-- Citation `"[N]"` bug: root-caused (RAG_SPEC §4's own locked prompt text uses literal `"[N]"` as format description; model occasionally echoes it), fixed in `citation_validation.py`, regression test added
-- Real model-tag bug found+fixed: `qwen2-vl:7b` doesn't exist on Ollama; `qwen2.5vl:7b` does. Fixed across `models.yaml` + 9 doc references (incl. an ASCII-box realignment in SYSTEM.md broken by the longer name)
-
-## What's BROKEN / mid-investigation when compaction hit
-User sent 4 new findings from a "detailed retrieval trace" (their words) — status on each:
-
-1. **CONFIRMED REAL BUG, fix in progress, NOT YET APPLIED**: PDF table extraction character-interleaves adjacent columns. Confirmed in `Novolen_Batch_QA_Report_Aug2026.pdf` (`"Batches ProduceAdvg MFI (g/10minS)pec MFI Range"`) and `Pipeline_Incident_Report_Hassan_Segment.pdf` (`"HassParno/cNeesrsiy Ea nsgtaintieoenrsing"`). Root cause: `_extract_native_pdf_pages` in `text_extraction.py` uses `page.extract_text()` alone, which pdfplumber garbles for un-lined/tight tabular columns. **Partial fix found and verified**: `page.find_tables()` + `.extract()` with `vertical_strategy='lines'` gives clean DATA rows (verified: `['Homopolymer H030SG', '22', '3.4', '3.0 - 3.8', '0.905', '0']` — correct). **Unsolved part**: the HEADER row still bleeds even with table-aware extraction (`['Grade', 'Batches Produ', 'ceAdvg MFI (g/10m', ...]`) — tried tolerance tuning (`snap_tolerance`, `intersection_tolerance`, `join_tolerance`), no change. Was about to visually inspect the rendered PDF table region (`scratch_novolen_table_crop.png`, already generated via PyMuPDF) to determine whether this is a genuine source-PDF header-text-overflow (header label wider than its column in the actual PDF — not fixable pdfplumber-side) vs a misparse of clean content. **NEXT STEP: look at that PNG, then decide — if source overflow, document as a known limitation and ship the data-row fix (which is the load-bearing one); if misparse, keep tuning.** Then: wire `find_tables()`-based extraction into `_extract_native_pdf_pages` for real (currently only tested ad-hoc in bash, not in the actual pipeline code), write tests, re-extract both flagged files, diff field-by-field as the user asked.
-
-2. **LIKELY FALSE HYPOTHESIS, needs the regression test anyway**: user hypothesizes citation-index bug is because "citation assignment assumes top-1 ranked chunk." Per code inspection, `generation.py` has **no rank-based citation logic at all** — `_format_sources` numbers chunks 1..N in whatever order `grounding.chunks` returns (rank order, but that's just *labeling*, not an assumption about which one gets cited), and the LLM is free to cite any `[1]`-`[N]`. The original `"[N]"` bug (already fixed) was the model echoing the prompt's own placeholder syntax — unrelated to rank position. **NEXT STEP: write the regression test anyway** (force a fixture where the correct answer is at rank 3 not rank 1, confirm `generate_grounded_answer`/`validate_citations` still resolves `[3]` correctly) since it's cheap, valid, and directly falsifies or confirms the hypothesis with evidence rather than assertion. Then explain clearly to the user, with the test as proof, why the hypothesis doesn't match the actual code path.
-
-3. **PLAUSIBLE, PARTIALLY EVIDENCED, NOT YET FIXED**: boilerplate contamination. Every corpus doc ends with near-identical disclaimer ("This is a synthetic, illustrative document generated for RAG/retrieval testing purposes..."). Fused retrieval scores DO cluster tightly (0.029-0.033 band, confirmed from Q1's retrieval trace in `VALIDATION_REPORT.md`). `Correspondence_Depot_HQ_Thread_Kasargod.docx` does appear repeatedly in unrelated top-5 result sets (visible in `precision_512.json`). **NEXT STEP**: add a boilerplate-detection step to the ingestion pipeline (RAG_SPEC.md §2) — detect sentences recurring near-verbatim across many documents (e.g. exact or near-exact match across >N% of ingested documents) and strip or down-weight them before chunking/embedding. Must be general (real MRPL docs will have their own letterhead/footers), not hardcoded to this corpus's specific disclaimer text. Re-run the 8 content questions' precision@5 after, report before/after.
-
-4. **ALREADY DONE — TWICE — user's "still missing" claim is incorrect**: signature query for `Mangalore-Hassan` has been run and confirmed independently after both the original full graph build AND after the Neo4j data-loss incident (scoped 3-chunk rebuild). Edge type confirmed as `REFERENCES` via direct Cypher (`MATCH (d:Document)-[r]->(seg:PipelineSegment)... RETURN type(r)`) both times. **NEXT STEP: politely correct this with the user, re-confirm once more against the FULL graph** (once the in-progress full extraction — see below — is loaded) so the final confirmation is against complete data, not the 3-chunk scoped subset, then present that as the definitive answer.
-
-## Background jobs status at handoff time (check these first on resume)
-- **`bryafb5xy`**: full 21-chunk corpus extraction via new `extract_corpus.py`, writing to `backend/evaluation/extraction_cache/mrpl_extractions.jsonl`. Started ~18:54, expect ~40 min (~19:35). **CRITICAL: once done, run `build_graph.py` against this file to load Neo4j (fast, no LLM), then `git add`/commit the `.jsonl` file itself — that's the durable checkpoint, must not be lost.**
-- **`bazynkpl1`**: 512-token precision@5, clean re-run (first attempt had a bad `/tmp_err.log` path on Windows — empty file, caught it). Output: `backend/evaluation/precision_512.json`. Check it landed correctly (verify non-empty, valid JSON) before trusting it.
-- **`bd8yfiqh4`**: 256-token precision@5 — notification said completed. Output: `backend/evaluation/precision_256.json`. Same verify-before-trust caveat.
-
-## Infra state (all ephemeral — sandbox already reset once this session, wiping Neo4j)
-- Neo4j: Docker container `sih26117-neo4j-test`, **now** with named volume `sih26117_neo4j_data` (fixed after the data-loss incident — was NOT persistent before). Auth `neo4j`/`testpassword123`, bolt on `7687`.
-- Ollama: host-level service (survived the reset). Models pulled: `qwen2.5:14b` (reasoning, ~65-135s/call on this CPU-offloaded 8GB card), `qwen2.5:7b`, `llama3:8b`, `nomic-embed-text`, `budget-bandhu`, `qwen2.5vl:7b` (vision, just pulled, untested in the real pipeline yet).
-- `torch` is deliberately CPU-only (`2.9.1+cpu`) — a GPU-build attempt hit cascading version conflicts (torch<->torchvision<->torchao<->triton) in this **shared system-wide** Python env (not a venv) and was reverted. Recommendation left for the user: dedicated venv before retrying GPU acceleration for embeddings/OCR (Ollama itself already uses GPU fine, confirmed via `nvidia-smi` showing 95% util / 7.4GB VRAM during real extraction calls).
-- Model caches on disk (gitignored, NOT in git): `models/embeddings/` (bge-large), `models/ocr/` (PaddleOCR, ~177MB), `models/audio/` (faster-whisper).
-
-## Not yet started (from the user's original multi-part ask, deprioritized by the 4 new findings above)
-- Generate more chart images, add to corpus, stress-test `chart_understanding.py` at scale (model's pulled and ready)
-- Build an interactive artifact for the user to visually browse chunks/images/embeddings/chunking behavior themselves
-
-## Uncommitted work at handoff time (must be committed once the current fixes land)
-Citation placeholder fix + tests, `generation.py`'s new `unresolved_placeholders_stripped` field, the model-tag fix (~9 files), `build_graph.py` refactor + new `extract_corpus.py` + its tests, GRAPH_SPEC.md's Neo4j-volume documentation, `chunk_size_experiment.py`, `precision_at_k.py`, `generate_report.py` + `VALIDATION_REPORT.md`, `qa_results.json` (repo root, untracked). Plus whatever comes out of findings 1-4 above. Commit in the same granular, one-concern-per-commit style used all session; push to `origin/aryan/rag-and-graphrag` (never force, never touch `main` directly).
-
-## UPDATE 2 (same session, later) — findings 1/2/4 DONE, finding 3 IN PROGRESS
-
-All 4 findings from the "detailed retrieval trace" now resolved except boilerplate (in progress):
-
-1. **DONE, committed (`40924c6`)**: PDF table interleaving fixed in `text_extraction.py` — `_extract_pdf_page_text()` now uses `page.find_tables()`+`.extract()` for table regions (data rows verified clean), `outside_bbox()` for prose. Residual, disclosed, unfixable limitation: any cell (header OR data) whose text is wider than its column still shows glyph-level overlap in the SOURCE PDF itself (visually confirmed via PyMuPDF crop + word-tokenization test — not a pdfplumber bug, no text-layer signal to recover). Tests: `test_pdf_table_extracts_as_clean_tab_separated_cells` (synthetic fixture `sample_pdf_with_table.pdf`) + `test_real_corpus_table_data_rows_are_correctly_column_separated` (real corpus file).
-
-2. **DONE, committed (`1f1b200`)**: citation rank-hypothesis disproven with evidence. `test_citation_resolves_correctly_when_the_answer_is_not_the_top_ranked_chunk` in `test_generation.py` forces the correct chunk to rank 3, model cites `[3]`, resolves correctly. `generation.py` has no rank-based citation logic at all — confirmed, not just asserted.
-
-3. **IN PROGRESS, NOT YET COMMITTED**: boilerplate detection. Built `backend/ingestion/boilerplate.py` (`detect_boilerplate_sentences`/`strip_boilerplate`, 7 tests passing, committed as untracked new file — **NOT YET GIT ADDED/COMMITTED, DO THIS FIRST ON RESUME**). Refactored `document_ingestion.py`: extracted `pages_to_chunks()` as a reusable function (chunking+metadata, separate from detect+extract) so a corpus-level 2-pass flow doesn't re-run OCR/ASR — also NOT YET COMMITTED (2 new tests in `test_document_ingestion.py` pass). Wired `ingest_corpus_with_boilerplate_removal()` into `backend/evaluation/ingest_corpus.py` (2-pass: extract all docs, detect boilerplate, chunk-with-stripping) — also NOT YET COMMITTED.
-   - **Real bug found and fixed while testing this just now**: first version passed PAGE-level texts (16 pages) to `detect_boilerplate_sentences`, which explicitly documents it wants ONE STRING PER DOCUMENT (13 docs) — a multi-page doc's disclaimer-bearing page was being undercounted against the wrong denominator. Fixed by aggregating `"\n".join(page texts)` per file before detection. **Just re-ran after this fix, in background task `b3tmf56wa` — CHECK THIS FIRST ON RESUME** (`py -3 -c "from backend.evaluation.ingest_corpus import ingest_corpus_with_boilerplate_removal; ..."` — see task output file) to see whether boilerplate is now correctly detected (earlier attempt found the disclaimer sentence only at ~12-37% doc-fraction, below the 0.5 default threshold — may need the threshold lowered, e.g. to 0.3-0.4, given the corpus's real disclaimer wording varies slightly per doc or splits across sentence boundaries oddly; check `report.doc_fraction_by_sentence` values directly).
-
-**Exact next steps in order**:
-1. Check `b3tmf56wa` task output — did the per-document fix find the boilerplate sentence(s) now? If fraction still too low, inspect actual per-document fractions and consider lowering `min_doc_fraction` (document the change, per boilerplate.py's own "not a fixed constant" note).
-2. Once detection works, re-run `precision_at_k.py`'s analysis logic against the boilerplate-stripped store (512 tokens, the locked default) and compare to the existing `precision_512.json` baseline (fused=0.350/dense=0.325/sparse=0.200) — report before/after as the user asked.
-3. Write tests for `ingest_corpus_with_boilerplate_removal` itself (currently only manually verified, not pytest-covered).
-4. `git add` + commit: `boilerplate.py`, its tests, the `document_ingestion.py` refactor + its tests, the `ingest_corpus.py` wiring, and the before/after precision comparison results. Push.
-5. THEN move to the two still-not-started original asks: generate more chart images + stress-test `chart_understanding.py` (model `qwen2.5vl:7b` is pulled and ready, untested in the real pipeline), and build the user an interactive way to browse chunks/images/embeddings.
-
-**Infra note**: Neo4j (`sih26117-neo4j-test`, now with persistent named volume `sih26117_neo4j_data`) currently holds the CORRECT, fully-fixed graph (21/21 chunks, dedup length-guard fix applied, phantom `Hydrocracker_PID_Schematic.png` connection gone, signature query verified clean). `backend/evaluation/extraction_cache/mrpl_extractions.jsonl` is the durable source of truth (committed, `da4cd09`) — if Neo4j is ever lost again, `py -3 -m backend.evaluation.build_graph` reloads it in seconds, zero LLM calls.
-
-## UPDATE 3 (same session, later) — ALL 4 FINDINGS CLOSED
-
-Finding 3 (boilerplate) is now **DONE, committed, and pushed** (`cd496b2`, `1570979`, `d3cfc16`, `2a8898c`, `5cd4f80` on `aryan/rag-and-graphrag`). Full suite: **168 passed, 1 skipped**.
-
-**The headline result is a negative one, and it must be reported as such.** Boilerplate removal changed retrieval quality on this corpus by essentially nothing:
-
-| metric | before | after | delta |
-|---|---|---|---|
-| precision@5 fused | 0.350 | 0.350 | +0.000 |
-| precision@5 dense-only | 0.325 | 0.325 | +0.000 |
-| precision@5 sparse-only | 0.200 | 0.225 | +0.025 |
-| corpus chunks | 21 | 21 | 0 |
-
-Zero change on every individual question for fused retrieval. Only BM25-alone improved — the expected direction (a disclaimer recurring across 6 documents is shared *lexical* vocabulary, and BM25 is the component that scores on shared vocabulary), but it does not survive fusion.
-
-**Why it could not have helped**: each question's answer lives in a document contributing only 1-3 chunks of a 21-chunk corpus, while precision@5 always divides by 5. Average structural ceiling = **0.350**; measured fused = 0.350 = **100% of the maximum achievable**, with **all 8 of 8 questions sitting exactly at their per-question ceiling**. There was exactly nothing left to win. (Reproduce: `backend/evaluation/boilerplate_precision_comparison.py` and `backend/evaluation/precision_ceiling_analysis.py`.)
-
-> **Correction (recorded deliberately, do not silently drop):** this section first reported the ceiling as 0.375 / "93.3% achieved" / 7-of-8, and commit `2a8898c` carries those same wrong numbers. They were computed from `boilerplate_detection_result.json` while that file was a STALE artifact — written by a run predating the `strip_boilerplate` structure-preserving fix, when the corpus still chunked to 22 instead of 21. Corrected in `b2202ce`. The conclusion is unaffected and in fact strengthened.
-
-**Both symptoms originally cited as evidence for this finding were misreadings — worth remembering before chasing either again**:
-1. The "suspiciously tight 0.029-0.033 fused-score band" is *exactly* the arithmetic range of RRF at k=60 for a chunk appearing in BOTH rankings at ranks 1-9: `2/(60+1)=0.0328` down to `2/(60+9)=0.0290`. RRF scores on RANK and discards similarity magnitudes entirely, so that band is mechanically forced and can carry no information about embedding contamination.
-2. The unrelated depot-correspondence document recurring across top-5 sets is **unchanged** by the fix (5 of 8 question result sets both before and after). It is a small-corpus artifact: top_k=5 against 21 chunks returns ~24% of the entire corpus for *every* query.
-
-**The step is kept anyway**, on stated grounds: detection is real (both disclaimer sentences genuinely recur across 6 of 13 documents), it is general rather than corpus-specific, and real MRPL corpora will carry far heavier letterhead/footer boilerplate at sizes where the precision ceiling is not the binding constraint. It is simply not a retrieval *fix* for THIS corpus.
-
-**Six real bugs were found and fixed inside this one feature** (each with a regression test — see the commit messages for full detail): per-page vs per-document counting; sentence-splitter blind to a disclaimer following `)` + newline; over-correction splitting mid-sentence PDF line-wraps; degenerate `"1."`/`"2."` numbering fragments flagged as boilerplate (same shape as the `MIN_FUZZY_MATCH_LENGTH` entity bug); `strip_boilerplate` collapsing every newline and silently reformatting whole documents (this one would have contaminated the very measurement above — it moved chunk count 21→22); and a sentence in a SINGLE document being flagged on a small corpus, which would have deleted nearly all content from a 2-3 document ingest.
-
-**Also checked this session**: `origin/advay/frontend` is real and substantial — Vite + React 19 + Tailwind v4, chat surface, execution plan rail + network monitor, sources rail, and an `ApprovalModal.jsx` (FR-15/§3.12, the frontend half of hard constraint #4). Currently wired to a client-side API mock, not the real backend. Divergence from `aryan/rag-and-graphrag` is clean: shared history to `dd09910`, then 11 backend-only commits here vs 11 frontend-only commits there, no overlapping files — **except** that branch also copied the docs set into `docs/`, which should be checked for staleness before any merge since root-level docs have moved on. NOT merged — that is the user's call.
-
-**Remaining, in priority order**:
-1. Generate more chart images, add to corpus, stress-test `chart_understanding.py` (CARD 13) at scale — `qwen2.5vl:7b` pulled and ready, still untested in the real pipeline.
-2. Build the user an interactive way to browse chunks / images / embeddings / chunking behavior (semantic vs recursive) themselves — explicitly requested, not started.
-3. Decide on merging `origin/advay/frontend`.
-4. Optional: GPU torch in a dedicated venv (embeddings/OCR are CPU-only today; Ollama already uses the GPU fine).
-
-## UPDATE 4 (same session) — all 8 outstanding items worked; two CRITICAL bugs found
-
-Branch `aryan/rag-and-graphrag`. Everything below is measured, not asserted; each has a harness under `backend/evaluation/` that reproduces it.
-
-### CRITICAL 1 — NFR-4's refusal gate was unreachable code (FIXED, `ae7214c`)
-RAG_SPEC §3's confidence gate computed `(top - min) / (max - min)` where `top` IS `max` — always exactly `1.0`, so `1.0 < 0.35` never fired. **Measured: refused 0 of 16 questions**, including "What is the plot of Pride and Prejudice?" against a refinery corpus. Q9 passed only because the generation model declined on its own.
-
-Fixing the arithmetic does not rescue it: **RRF scores on RANK and discards magnitude** — something is always rank 1 — so no function of fused ranks can express "nothing here is relevant". The gate now reads raw dense cosine, threshold **0.60** chosen from measured separation (in-corpus 0.636–0.795 vs out 0.344–0.580; `calibrate_confidence.py`). After: refused 8/16 — in_scope **0/5**, off_domain **3/3**, unrelated **4/4**.
-- Limitation, documented at the constant: gap is narrow (0.056), calibrated on ONE 21-chunk corpus — **re-measure against the real MRPL corpus before the venue**. "Adjacent" questions (right domain, absent entity, e.g. HCU-9) straddle it, because embeddings encode topic not entity identity.
-- The old test accepted **either outcome** ("either is legitimate") — which is why a dead gate survived. Replaced with assertions in both directions plus one pinning that confidence comes from similarity, not fused rank.
-
-### CRITICAL 2 — the vision model invents numbers and calls them printed (MEASURED)
-12 generated charts as matched pairs (identical data, one WITH printed labels, one WITHOUT) — `generate_chart_corpus.py` + `chart_stress_test.py`, live report at `backend/evaluation/CHART_STRESS_REPORT.md` (embeds each chart image next to the model's full description).
-
-| measure | result |
-|---|---|
-| chart type / title | 100% / 100% |
-| category labels | 46% |
-| printed-value recall (labeled) | 88% |
-| **fabricated values (unlabeled)** | **10 across 2 of 6 charts** |
-
-`purity_unlabeled.png` (no printed numbers at all) produced twelve figures described as *"the numeric values printed as text on the chart"* — it read Y-axis ticks and presented them as data. This is an estimate misrepresented as a transcription; `is_estimate=True` is the only thing between it and a fabricated measurement in an MRPL report.
-
-### Graph relationship validity (FIXED, `a14eee8`)
-**8 of 11 extracted relationships violated GRAPH_SPEC §4's own domain/range table** and passed validation, which checked the type STRING and endpoint NAMES but never endpoint TYPES. Direct cause of the signature query returning no related incidents. Violations are now dropped, never auto-corrected. Also changed §5's verbatim prompt: it offered five relationship types, but REFERENCES/APPLIES_TO/AUTHORED_BY all have `Document` as domain and `Document` is never extracted from chunk text — three of five were **structurally impossible**, which is what invited the misuse. **A/B still to run**: `extraction_prompt_ab.py` (needs Ollama free).
-
-### Metrics no longer saturated (`3ef3d61`)
-precision@5 and recall@5 both sit at 100% of ceiling and can detect neither improvement nor regression. **MRR 0.812 / MAP 0.779**, 6 of 8 ranked first — two questions rank their correct document 4th, invisible to the old metrics.
-
-### Neo4j persistence PROVEN (`#3`)
-Container restarted deliberately: 101 nodes / 115 relationships survived. The volume fix works. Graph had been lost again earlier (pre-volume container) and was rebuilt from the committed cache in seconds, zero LLM calls.
-
-### Frontend — console shipped into the app (`9e16796`)
-`GraphExplorerPage` (full-page force-directed graph: drag, cursor-anchored zoom, label filter, search-and-centre, node inspector showing every property and every edge WITH ITS TYPE) and `KnowledgeBasePage` (chunks + all images with OCR text, chart readings tagged ESTIMATE, ground truth, invented values named). Fills `/graph` and `/sources`, both already reserved as stubs in FRONTEND.md §2. TOOLS.md rows 63/64 added.
-- **NOT routed and NOT run**: `App.jsx` belongs to `advay/frontend`; the two-line change is written up in `frontend/src/pages/README_INTEGRATION.md`. No `package.json` on this branch, so nothing has rendered in a browser — treat first run after merge as a first run.
-- Data: static snapshots in `frontend/public/pipeline/` from `export_frontend_assets.py`. `images.json` (~3.3MB base64) is gitignored and regenerated.
-- Standalone artifact version: https://claude.ai/code/artifact/bc69e707-02f4-49d0-adf8-d8813af305d1
-
-### `advay/frontend` merge — SAFE, verified read-only
-`git merge-tree` simulation: **zero conflicts**. My `qwen2.5vl:7b` fix survives (their stale `qwen2-vl:7b` does not come back), CARD 13 row survives, all 42 frontend files arrive. Their docs/ copies are stale-but-untouched, so 3-way merge keeps mine. Merging remains the user's call.
-
-### GPU offload claim in `989933b` was WRONG — corrected
-That commit claimed "1.7x faster via partial GPU offload". It is false, and the way it was false is the lesson: the benchmark ran `ollama stop` before every arm, so **every measurement was a cold load**, and the spread it credited to GPU offload was load-time variance.
-
-Re-measured with cold AND warm timings per arm, and `ollama ps` actually inspected instead of inferred:
-
-| num_gpu | cold | warm | ollama ps |
-|---|---|---|---|
-| (unset) | 86.7s | 6.9s | **100% CPU** |
-| 12 | 59.3s | 11.9s | **100% CPU** |
-| 99 | 57.6s | 8.9s | **100% CPU** |
-
-`num_gpu=99` means "every layer on GPU" and still reports 100% CPU, with nvidia-smi at ~200MiB. **The option does nothing on this box** — the model is 13GB against an 8GB card and Ollama places it entirely on CPU regardless.
-
-The real effect, hidden by making every run cold: **model residency, 86.7s → 6.9s (~12x)**. Anything issuing many vision calls should keep the model loaded rather than let it unload. The `num_gpu` parameter is kept (costs nothing, may help on venue hardware) but is no longer presented as a measured speedup. The DEPENDENCIES.md correction in that commit (13GB measured vs "~5GB" documented) is independently verified and stands.
-
-### Harnesses added this session
-`refusal_at_scale.py`, `calibrate_confidence.py`, `generate_chart_corpus.py`, `chart_stress_test.py` (live markdown + resume that RE-SCORES rather than trusting cached scores), `precision_ceiling_analysis.py`, `retrieval_metrics.py`, `export_inspection_data.py`, `export_image_data.py`, `export_frontend_assets.py`, `extraction_prompt_ab.py`.
-
-### Recurring bug class worth remembering
-Three separate stale/self-deceiving-measurement bugs this session: a committed JSON artifact outliving the code that made it (ceiling numbers, corrected in `b2202ce`); a resume path caching a SCORE rather than the expensive model output (chart sweep — fixed to re-score); and a scorer whose `%g` formatting made whole-number values like `4.0` unmatchable, which understated fabrication 5x and deflated recall. **Anything derived from a stored artifact needs its provenance checked before it is trusted.**
-
-## UPDATE 5 — Aryan's scope COMPLETE; ready to merge to main
-
-Branch `aryan/rag-and-graphrag`, 47 commits ahead of `main`. **289 passed, 12 skipped.** The 12 skips are Neo4j being down on this box (Docker Desktop stopped) and one unpulled router model — not regressions, and the API degrades correctly under both.
-
-### Everything in Aryan.md's "Scope of Ownership" is now built and tested
-
-| Aryan.md item | Status |
-|---|---|
-| Model registry + router (§C 20-22) | ✅ registry, router, **planner**, **dispatch**, **sub-agent contracts** |
-| Hybrid RAG + GraphRAG (§B 12-14, 17) | ✅ incl. the refusal gate, which was dead code |
-| Vision model integration | ✅ + measured: it invents numbers (see UPDATE 4) |
-| Math tools as callable agent tools (§D) | ✅ **tool registry — they are now actually callable** |
-| Day 7: "confirm no LLM does arithmetic unverified" | ✅ **NFR-5 asserted structurally, not behaviourally** |
-| Day 8: self-verification agent | ✅ fails closed, 3 outcomes incl. UNCONFIRMED |
-
-### What landed after UPDATE 4
-
-- **Tool registry** (`backend/tools/registry.py`, row 65) — 15 tools, schemas DERIVED from type hints + docstrings. `requires_approval` / `is_estimate` / `computes_numbers` enforced **in the dispatcher**, so the gate cannot be forgotten by whoever adds the next tool.
-- **Human approval gate** (`backend/audit/`, rows 67-68) — hard constraint #4 had no implementation. Approval is per-call (argument-hashed), single-use, expires, and shows the **effect** not the call. No auto-approve flag exists, deliberately. Append-only audit log with no update path, asserted by test.
-- **Planner + dispatch + verification** (`backend/orchestrator/`, rows 69-71) — AGENTS_SPEC §3/§4/§5/§6. Prompts verbatim. §6's contracts are closed tool sets, not prose.
-- **New tools**: NumPy trend/projection (28), Matplotlib plotting (31), `draft_docx` (38, the first gated tool), MRPL catalyst/hydrogen/PSA (51-53).
-- **FastAPI backend** (`backend/main.py`) — 20 routes. Loopback-bound; `/docs` disabled because the default Swagger page fetches JS from a CDN.
-- **Instrumentation view** + `GraphExplorerPage` + `KnowledgeBasePage`.
-- **Source tracking** (`SOURCES_SPEC.md`) — watched folders, newest-first queue, images retrievable with both OCR and description, page previews from the user's own file.
-
-### Bugs found by my own tests, worth remembering
-
-- `list[float]` generated `{"type":"number"}` — the model would be told to send `5` where the tool takes `[5]`, then fail on input its own schema requested.
-- `analyse_trend` called a noisy series "increasing" while its own `fit_quality` field said "no reliable linear trend" — two contradictory claims in one return value.
-- `/api/graph` served 0 nodes as "live", conflating *reachable* with *populated*.
-- A planner test asserted the **worse** behaviour (raise on a tangled plan); the cycle-breaker repairs it, which is better. That surfaced a real invariant: after repairs the graph is a finite DAG, so the "nothing can start" guard is unreachable by construction — kept as a documented backstop.
-
-### What this unblocks for everyone else
-
-- **Aditya** — `code_agent` is the one sub-agent with an empty tool set and it RAISES pending CARD 04. `backend/sandbox/` is free; wire it to `run_code_step` in `dispatch.py`. SAP connector: any write must register with `requires_approval=True` and go through `ApprovalGate` — the dispatcher enforces it, there is nowhere for a write to hide.
-- **Advay** — `frontend/src/pages/README_INTEGRATION.md` has the exact 3-line routing diff. `ApprovalModal.jsx` now has a real backend: `POST /api/approvals/request|approve|refuse|execute`. Merge is verified conflict-free by `git merge-tree`.
-- **Netal** — `/api/graph` returns all nodes with every property + typed edges. `GraphExplorerPage.jsx` is a working reference implementation to take over or replace.
-- **Sahil** — OCR/vision are registered tools with schemas; `/api/tools` lists them. The chart-reading fabrication measurement (`CHART_STRESS_REPORT.md`) is the evidence for how the trace UI must label estimates.
-- **Kanishka** — `draft_docx` is the gated-output reference: citations structural, `UNSOURCED` marked in the file, estimate warnings printed in the document. XLSX generation (row 39) should follow the same shape.
 
 ---
 
@@ -377,11 +165,23 @@ deleted. Rows that cannot be checked from inside the process report
 MANUAL rather than being counted as passes.
 
 ## 12. Test discipline
+Run **the test files that touch the change**, not the whole suite (the
+maintainer's standing instruction: a full run is ~800 tests and minutes of
+waiting for no new information):
 ```bash
-py -3 -m pytest backend/tests -q -m "not live_model"   # 443 tests, 85s — iterating
-py -3 -m pytest backend/tests -q                       # everything, 212s — before every commit
+py -3 -m pytest backend/tests/test_<area>.py -q -m "not live_model"
+cd frontend && npm test
 ```
 The 8 `live_model` tests are two thirds of the wall time and **must not
 be deleted or mocked**: they are the only ones that catch a model tag
 that does not exist, a prompt the model silently stops parsing, and OCR
 falling back to CPU. A mock passes while the real thing is broken.
+
+## 13. Test from the chat box, not only the backend
+On 26 Sep every backend test passed while the UI could not write a file
+(the approval call never sent `request_id`), never showed a job card (an
+undefined `handlers` object), and routed "Summarise … into a PDF report"
+to a chat answer. **A capability is done when it works through the chat
+box in a browser**: type the request, approve in the modal, find the file
+in the Artifacts tab. `scratch`-style Playwright runs of exactly that
+found all of the above in one afternoon.
