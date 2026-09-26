@@ -1119,6 +1119,27 @@ export function MessageBubble({ message }) {
       className="flex flex-col gap-4 px-2"
       style={{ maxWidth: '92%' }}
     >
+      {/* 0. Which model answered, and why. The problem statement asks to SEE
+          model auto-selection across task types; a coding request and a
+          document question now each say which model they ran on. */}
+      {message.route?.model && (
+        <div
+          className="flex items-center gap-1.5 text-[11px] -mb-2"
+          title={message.route.model_reason || ''}
+          style={{ color: 'var(--color-text-muted)' }}
+        >
+          <span
+            className="px-1.5 py-0.5 rounded border font-mono"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+          >
+            {message.route.model}
+          </span>
+          <span>
+            auto-selected for {String(message.route.task || '').replace(/_/g, ' ')}
+          </span>
+        </div>
+      )}
+
       {/* 1. Reasoning tree directly at top */}
       <ErrorBoundary fallback={(err) => (
         <div className="text-[11px] font-mono text-[var(--color-text-faint)] py-1">

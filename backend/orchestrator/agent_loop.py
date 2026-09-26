@@ -931,11 +931,21 @@ def _answer(
     from backend.observability import turn_log as T
 
     yield {"type": "start", "request": request}
+    from backend.orchestrator.model_select import select as select_model
+
+    selection = select_model(request)
     yield {
         "type": "route",
         "path": decision.path,
         "reason": decision.reason,
         "tools_expected": decision.tools_expected,
+        # MODEL AUTO-SELECTION, visible. The problem statement's expected
+        # demo is "model auto selection across at least two different task
+        # types"; the turn now says which model it chose and why.
+        "task": selection.task,
+        "model_id": selection.model_id,
+        "model": selection.model,
+        "model_reason": selection.reason,
     }
 
     if decision.path == "approval":
@@ -1103,6 +1113,10 @@ def _answer(
         }
         return
 
+    if selection.task == "code_generation" and decision.path in ("agentic", "direct"):
+        yield from _run_code(request, selection, session_id=session_id)
+        return
+
     if decision.path == "agentic" or decision.path == "arithmetic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
@@ -1121,6 +1135,79 @@ def _answer(
     yield from _run_direct(
         request, decision, active_documents=active_documents, memory=memory
     )
+
+
+def _run_code(request: str, selection, *, session_id: str) -> Iterator[dict]:
+    """A coding task: written by the code model, run in the sandbox, verified.
+
+    The SAME function the graph path uses (code_generation.run_generated_code),
+    so the two chat paths cannot disagree about how code is written or what
+    counts as verified (review rule 6). Before this, a code request on the
+    streaming path was written by the chat model inside the tool loop -- one
+    model for everything, which is the thing the problem statement asks us
+    not to be.
+    """
+    import time
+
+    from backend.orchestrator.code_generation import CodeGenerationError, run_generated_code
+    from backend.orchestrator.state import PlanStep
+
+    step = PlanStep(step_id="code", description=request, assigned_agent="code")
+    yield {"type": "plan", "path": "code", "steps": [{
+        "step_id": "code", "description": f"Write the program with {selection.model}, run it in the sandbox",
+        "assigned_agent": "code", "status": "running", "depends_on": [],
+    }]}
+    yield {"type": "tool_call", "id": "code-1", "name": "run_generated_code",
+           "arguments": {"task": request, "model": selection.model}}
+    started = time.time()
+    try:
+        event = run_generated_code(step, request, session_id=session_id, model_id=selection.model_id)
+    except CodeGenerationError as exc:
+        reply = f"**The code model did not return a program.** {exc}"
+        yield {"type": "tool_result", "id": "code-1", "status": "failed", "output": {"error": str(exc)},
+               "seconds": round(time.time() - started, 1)}
+        yield {"type": "text_delta", "text": reply}
+        yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1,
+               "seconds": round(time.time() - started, 1), "citations": []}
+        return
+    except Exception as exc:  # noqa: BLE001 - the sandbox being down is said, not hidden
+        reply = (f"**The program could not be run:** {type(exc).__name__}: {exc}. The sandbox "
+                 "(Docker) must be running for code to execute; nothing was run outside it.")
+        yield {"type": "tool_result", "id": "code-1", "status": "failed", "output": {"error": reply},
+               "seconds": round(time.time() - started, 1)}
+        yield {"type": "text_delta", "text": reply}
+        yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1,
+               "seconds": round(time.time() - started, 1), "citations": []}
+        return
+
+    output = event.output or {}
+    code = (event.input_params or {}).get("code", "")
+    seconds = round(time.time() - started, 1)
+    yield {"type": "tool_result", "id": "code-1", "status": event.status,
+           "output": {**output, "code": code, "model": selection.model}, "seconds": seconds}
+
+    verified = event.status == "done"
+    lines = [
+        f"**{'Verified' if verified else 'Not verified'}** — written by `{selection.model}` "
+        f"(chosen for {selection.task.replace('_', ' ')}), run in the offline sandbox.",
+        "",
+        "```python",
+        code.strip(),
+        "```",
+        "",
+        "**Output:**",
+        "```",
+        (output.get("stdout") or "").strip() or "(no output)",
+        "```",
+    ]
+    if output.get("stderr"):
+        lines += ["", "**Errors:**", "```", str(output["stderr"]).strip()[:1500], "```"]
+    if output.get("verification"):
+        lines += ["", f"_{output['verification']}_"]
+    reply = "\n".join(lines)
+    yield {"type": "text_delta", "text": reply}
+    yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1, "seconds": seconds,
+           "citations": [], "model": selection.model, "task": selection.task}
 
 
 def _emit_plan(request: str, decision) -> Iterator[dict]:
