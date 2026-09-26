@@ -596,6 +596,8 @@ Rules:
 3. If the sources do not give a value for a cell, put an empty string "" there. NEVER
    estimate, infer or invent a figure -- an empty cell reads as unknown, a plausible one
    reads as measured.
+3a. A value of 0 IS a value the source gives. Write "0", never "": an empty cell tells
+   the reader the source is silent, and a source that says 0 is not silent.
 4. Every row lists the source ids its values come from.
 
 Reply with ONLY this JSON object:
@@ -605,6 +607,62 @@ Reply with ONLY this JSON object:
     if not isinstance(data, dict) or not isinstance(data.get("sheets"), list):
         return None
     return [s for s in data["sheets"] if isinstance(s, dict)] or None
+
+
+def _source_table_rows(docs: list[dict]) -> list[tuple[str, list[str]]]:
+    """Every tab-separated row in the sources, with the document it is in."""
+    rows = []
+    for d in docs:
+        for line in d["text"].splitlines():
+            if "\t" in line:
+                rows.append((d["id"], [f.strip() for f in line.split("\t")]))
+    return rows
+
+
+def fill_from_source_tables(headers: list[str], rows: list[dict], docs: list[dict]) -> int:
+    """Empty cells whose value IS printed in a source table, copied in.
+
+    Measured on the Novolen QA report: the table prints 0 off-spec batches
+    for three grades, the model wrote "" for all three on every run -- with
+    and without being told that 0 is a value -- and the file then told the
+    reader those cells "could not be sourced". The source was not silent.
+
+    Nothing is inferred. A sheet row is matched to the source row with the
+    same first cell; the source column behind each sheet column is learned
+    from the cells the model DID fill (they must agree across rows); an
+    empty cell is filled only from that column of that row.
+    """
+    table = _source_table_rows(docs)
+    by_key: dict[str, tuple[str, list[str]]] = {}
+    for doc_id, fields in table:
+        if fields and fields[0]:
+            by_key.setdefault(fields[0].lower(), (doc_id, fields))
+    matched = [(r, by_key.get(r["cells"][0].strip().lower())) for r in rows if r["cells"] and r["cells"][0].strip()]
+    matched = [(r, m) for r, m in matched if m]
+    if not matched:
+        return 0
+    column_of: dict[int, int] = {}
+    for j in range(1, len(headers)):
+        votes = {}
+        for r, (_doc, fields) in matched:
+            value = r["cells"][j].strip() if j < len(r["cells"]) else ""
+            if value:
+                hits = [i for i, f in enumerate(fields) if f == value]
+                if len(hits) == 1:
+                    votes[hits[0]] = votes.get(hits[0], 0) + 1
+        # One source column, and no filled cell pointing anywhere else.
+        if len(votes) == 1:
+            column_of[j] = next(iter(votes))
+    filled = 0
+    for r, (doc_id, fields) in matched:
+        for j, i in column_of.items():
+            if j < len(r["cells"]) and not r["cells"][j].strip() and i < len(fields) and fields[i]:
+                r["cells"][j] = fields[i]
+                if doc_id not in r["sources"]:
+                    r["sources"].append(doc_id)
+                r["is_unsourced"] = False
+                filled += 1
+    return filled
 
 
 def validate_sheet(sheet: Any, docs: list[dict]) -> tuple[dict | None, str]:
@@ -637,8 +695,10 @@ def validate_sheet(sheet: Any, docs: list[dict]) -> tuple[dict | None, str]:
                      "is_unsourced": not row_sources or not any(clean)})
     if not rows:
         return None, "no rows the sources support"
+    filled = fill_from_source_tables(headers, rows, docs)
     return {"sheet_name": str(sheet.get("sheet_name") or "Sheet1").strip()[:31],
-            "headers": headers, "rows": rows, "emptied_cells": emptied}, ""
+            "headers": headers, "rows": rows, "emptied_cells": emptied,
+            "filled_from_source": filled}, ""
 
 
 def build_spreadsheet_spec(request: str, store, chunks: list) -> dict:

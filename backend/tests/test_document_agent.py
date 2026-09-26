@@ -337,3 +337,40 @@ def test_every_section_asks_for_the_same_context_window():
     windows = {D._context_bucket(len(f"prompt of {i} characters" * i) // 3 + 1024) for i in range(1, 400)}
     assert windows <= set(D.CONTEXT_BUCKETS)
     assert len(windows) <= 3, "a handful of buckets, not a window per prompt"
+
+
+# ── a zero printed in a source table is a value ────────────────────────────
+
+_NOVOLEN = [{"id": "S1", "document": "Novolen_Batch_QA_Report_Aug2026.pdf", "text": (
+    "Grade\tBatches Produ\tceAdvg MFI (g/10m\tinS)pec MFI Rang\teDensity (g/cm3)\tOff-Spec Batch\n"
+    "Homopolymer H030SG\t22\t3.4\t3.0 - 3.8\t0.905\t0\n"
+    "Homopolymer H110F\t16\t11.2\t10.0 - 12.0\t0.905\t1\n"
+    "Random Copolymer RP340\t12\t3.9\t3.5 - 4.5\t0.900\t0\n"
+    "Impact Copolymer HP500\t9\t0.8\t0.6 - 1.0\t0.900\t0")}]
+
+
+def test_a_zero_the_source_table_prints_is_copied_not_called_unsourced():
+    """Measured: the model wrote "" for every 0 off-spec count, on every run,
+    and the file then said those cells 'could not be sourced'."""
+    model_rows = [
+        ["Homopolymer H030SG", "3.4", "3.0 - 3.8", "0.905", ""],
+        ["Homopolymer H110F", "11.2", "10.0 - 12.0", "0.905", "1"],
+        ["Random Copolymer RP340", "3.9", "3.5 - 4.5", "0.900", ""],
+        ["Impact Copolymer HP500", "0.8", "0.6 - 1.0", "0.900", ""],
+    ]
+    sheet, why = D.validate_sheet({"sheet_name": "MFI", "headers": ["Grade", "Avg MFI", "Spec", "Density", "Off-Spec"],
+                                   "rows": [{"cells": c, "sources": ["S1"]} for c in model_rows]}, _NOVOLEN)
+    assert sheet, why
+    assert [r["cells"][4] for r in sheet["rows"]] == ["0", "1", "0", "0"]
+    assert sheet["filled_from_source"] == 3
+    assert not any(r["is_unsourced"] for r in sheet["rows"])
+
+
+def test_a_column_the_filled_cells_do_not_pin_down_is_left_empty():
+    """No source column is guessed: with no filled cell to learn from, an
+    empty column stays empty -- and a row the table does not have is untouched."""
+    rows = [["Homopolymer H030SG", ""], ["Unknown Grade X", ""]]
+    sheet, _ = D.validate_sheet({"headers": ["Grade", "Something"],
+                                 "rows": [{"cells": c, "sources": ["S1"]} for c in rows]}, _NOVOLEN)
+    assert [r["cells"][1] for r in sheet["rows"]] == ["", ""]
+    assert sheet["filled_from_source"] == 0
