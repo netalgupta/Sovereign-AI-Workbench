@@ -199,7 +199,8 @@ export function ApprovalModal({
             {action.description ||
               'This action requires your authorisation before it can run.'}
           </p>
-          {action.detail && (
+          {/* Quoted once: a job's description already opens with it. */}
+          {action.detail && !(action.description || '').includes(action.detail) && (
             <p
               className="text-[11px] leading-relaxed mt-1 font-mono"
               style={{ color: 'var(--color-text-muted)' }}
@@ -318,7 +319,10 @@ export function ApprovalModal({
               </div>
             </div>
           </div>
-        ) : (
+        ) : !(Array.isArray(action.preview) && action.preview.length > 0) && (
+          // Only when there is truly nothing resolved to show. A file write
+          // lists exactly what it writes above; this box used to follow that
+          // list and say nothing had been resolved.
           <div
             className="mt-3.5 p-3 rounded-xl text-left border text-[11px] leading-relaxed"
             style={{

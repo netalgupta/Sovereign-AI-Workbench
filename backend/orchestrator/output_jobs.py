@@ -298,6 +298,11 @@ def request_approval(job: OutputJob) -> dict:
         "id": req.request_id,
         "title": f"Confirm {label}",
         "action_type": "file write",
+        # The file this writes. The other approval path always sent a
+        # target; this one did not, so the approval screen for a finished
+        # deck or report said "Target not resolved by the system" directly
+        # above the file name it was about to write.
+        "target": output_path.name,
         "description": req.effect,
         "detail": job.request,
         "executable": True,

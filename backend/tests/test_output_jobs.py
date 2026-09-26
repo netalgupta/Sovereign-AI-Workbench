@@ -324,6 +324,11 @@ def test_a_document_job_asks_for_approval_of_what_it_wrote(doc_stubs, kind, tool
     assert "34 hours" in section["body"]
     assert any("1 section(s) written" in line for line in job.approval["preview"])
     assert any("1 dropped for lack of a source" in line for line in job.approval["preview"])
+    # The approval screen names the file it writes. Without a target it read
+    # "Target not resolved by the system" above that very file name.
+    assert job.approval["target"] == req.arguments["output_path"].rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+    # Nothing is written before approval, so the preview must not say it was.
+    assert not any(line.startswith("Written to") for line in job.approval["preview"])
 
 
 def test_a_spreadsheet_job_keeps_unsourced_cells_empty(doc_stubs):

@@ -243,7 +243,7 @@ def deck_preview(output_path: Path, titles: list[str], citations: list[str], omi
         preview.append(quality_line(quality))
     if report:
         preview.append(_report_line(report))
-    preview.append(f"Written to {output_path.parent}")
+    preview.append(f"Saved to {output_path.parent} when you approve")
     return preview
 
 
@@ -341,7 +341,7 @@ def _resolve_pdf(
         f"{len(documents)} source document(s): {', '.join(documents)}",
         "Every section names the document its claims came from; a section "
         "without one is marked [UNSOURCED] in the file itself",
-        f"Written to {OUTPUT_DIR}",
+        f"Saved to {OUTPUT_DIR} when you approve",
     ]
 
     return ResolvedAction(
@@ -376,7 +376,7 @@ def _resolve_word(
         f"{len(documents)} source document(s): {', '.join(documents)}",
         "Every section names the document its claims came from; a section "
         "without one is marked UNSOURCED in the file itself",
-        f"Written to {OUTPUT_DIR}",
+        f"Saved to {OUTPUT_DIR} when you approve",
     ]
 
     return ResolvedAction(
@@ -444,7 +444,7 @@ def _resolve_spreadsheet(
         f"{len(documents)} source document(s): {', '.join(documents)}",
         "Every row names the document its claims came from; a row "
         "without one is marked UNSOURCED in the file itself",
-        f"Written to {OUTPUT_DIR}",
+        f"Saved to {OUTPUT_DIR} when you approve",
     ]
 
     return ResolvedAction(

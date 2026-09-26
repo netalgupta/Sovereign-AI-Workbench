@@ -243,6 +243,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
     onToolResult,
     onThought,
     onTextDelta,
+    onDeckJob,
     onApprovalRequired,
     onDone,
     onError,
@@ -294,10 +295,20 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
             if (line.startsWith('data: ')) {
               const rawJson = line.slice(6).trim()
               if (!rawJson) continue
+              // Only the PARSE is guarded. A handler that throws used to be
+              // caught here too and logged as a "JSON parse error": the
+              // deck_job case called onDeckJob on an object that did not exist, so
+              // every deck, report and spreadsheet started from the chat
+              // got no progress card and no Review button, silently.
+              let event
               try {
-                const event = JSON.parse(rawJson)
-                receivedAnyEvent = true
-
+                event = JSON.parse(rawJson)
+              } catch (parseErr) {
+                console.warn('[SSE] JSON parse error:', parseErr, rawJson)
+                continue
+              }
+              receivedAnyEvent = true
+              {
                 switch (event.type) {
                   case 'start':
                     onStart?.(event)
@@ -324,7 +335,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                     onTextDelta?.(event.text || '')
                     break
                   case 'deck_job':
-                    handlers.onDeckJob?.(event)
+                    onDeckJob?.(event)
                     break
                   case 'approval_required':
                     onApprovalRequired?.(event)
@@ -338,8 +349,6 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                   default:
                     break
                 }
-              } catch (parseErr) {
-                console.warn('[SSE] JSON parse error:', parseErr, rawJson)
               }
             }
           }
