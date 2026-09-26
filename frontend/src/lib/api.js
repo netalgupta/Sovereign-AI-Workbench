@@ -14,6 +14,7 @@
  *     session_id: string,
  *   }
  */
+import { errorText } from './errorText'
 
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,7 @@ export async function resolveApproval(requestId, confirmed = true, operator = 'o
       return { ok: true, status: data.status || (confirmed ? 'approved' : 'refused'), ...data }
     }
     const errData = await res.json().catch(() => ({}))
-    const errorMsg = errData.detail || errData.message || `Backend returned HTTP ${res.status}`
+    const errorMsg = errorText(errData, `Backend returned HTTP ${res.status}`)
     return { ok: false, status: 'error', error: errorMsg }
   } catch (err) {
     console.warn('[API] /api/approvals/resolve error:', err)

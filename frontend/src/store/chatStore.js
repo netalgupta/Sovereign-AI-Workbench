@@ -14,6 +14,7 @@
 
 import { create } from 'zustand'
 import { now } from '../lib/formatTime'
+import { errorText } from '../lib/errorText'
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -201,7 +202,7 @@ export const useChatStore = create((set, get) => ({
         approveResult = await approveRes.json()
       } else {
         const errData = await approveRes.json().catch(() => ({}))
-        const errMsg = errData.detail || errData.message || `Approval backend returned HTTP ${approveRes.status}`
+        const errMsg = errorText(errData, `Approval backend returned HTTP ${approveRes.status}`)
         set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
         return { success: false, error: errMsg }
       }
@@ -218,11 +219,14 @@ export const useChatStore = create((set, get) => ({
         const execRes = await fetch('/api/approvals/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: execToken }),
+          // request_id AND token: the endpoint requires both. Only the token was
+          // sent, so every approval from this screen got a 422 and no file was
+          // ever written -- since the day this was wired up.
+          body: JSON.stringify({ request_id: action.id, token: execToken }),
         })
         if (!execRes.ok) {
           const errData = await execRes.json().catch(() => ({}))
-          const errMsg = errData.detail || errData.message || `Execute backend returned HTTP ${execRes.status}`
+          const errMsg = errorText(errData, `Execute backend returned HTTP ${execRes.status}`)
           set({ approvalError: errMsg, isApprovalModalOpen: true, isResolvingApproval: false })
           return { success: false, error: errMsg }
         }
