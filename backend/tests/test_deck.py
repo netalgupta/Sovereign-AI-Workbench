@@ -747,3 +747,10 @@ def test_a_json_call_asks_for_the_standard_context_by_default(monkeypatch):
     monkeypatch.setattr(DA, "ollama_generate", lambda m, p, **k: seen.append(k["options"]["num_ctx"]) or '{"a": 1}')
     DA._ask_json("short prompt")
     assert seen == [C.STANDARD_NUM_CTX]
+
+
+def test_a_deliverable_is_titled_by_its_subject_not_the_instruction():
+    """Measured: a deck saved as 'Make_a_presentation_on_the_CCR-1…', a sheet
+    titled 'sheet comparing the average MFI…'."""
+    assert D.topic_of("Make a presentation on the CCR-1 regeneration cycle 18 inspection findings.").startswith("CCR-1")
+    assert not D.topic_of("Make an Excel sheet comparing the average MFI of each grade.").lower().startswith("sheet")

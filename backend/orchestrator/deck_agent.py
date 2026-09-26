@@ -128,7 +128,7 @@ SLIDE_TYPES: dict[str, dict[str, Any]] = {
 # slide-type names from that document's text.
 _DELIVERABLE_WORD = (
     r"(?:power\s*point|pptx|ppt|presentation|slide\s*deck|deck|slides?|briefing|"
-    r"excel|xlsx|spread\s*sheet|spreadsheet|workbook|comparison|matrix|table|"
+    r"excel|xlsx|spread\s*sheet|spreadsheet|sheet|workbook|comparison|matrix|table|"
     r"pdf|docx|word|document|report|memo|approval\s+note|note|summary|file)"
 )
 _DELIVERABLE_PHRASE = re.compile(

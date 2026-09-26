@@ -62,7 +62,12 @@ def prepare_deck(request: str, session_id: str = "default", max_slides: int | No
     logger.info("Preparing deck for %r", request)
     built = build_deck_spec(request, store, chunks)
 
-    clean = re.sub(r"[^\w-]+", "_", request[:40]).strip("_") or "Briefing"
+    # Named after the subject, like every other deliverable. This used the
+    # raw request, so a deck was saved as "Make_a_presentation_on_the_CCR-1…".
+    from backend.orchestrator.deck_agent import topic_of
+
+    subject = (topic_of(request) or request).rstrip(" .")
+    clean = re.sub(r"[^\w-]+", "_", subject[:60]).strip("_") or "Briefing"
     return {
         "deck_spec": built["deck_spec"],
         "filename": f"{clean}.pptx",
