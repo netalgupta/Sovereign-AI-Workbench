@@ -14,6 +14,7 @@ import { AuditLog } from './integrations/audit-log'
 import { NetworkMonitor } from './integrations/network-monitor'
 
 import { GlobalSourcePreviewModal } from './components/workbench/GlobalSourcePreviewModal'
+import { LandingPage } from './pages/LandingPage'
 
 /**
  * PageTransition helper for smooth, professional 160ms ease-out page route animations.
@@ -43,7 +44,9 @@ export default function App() {
     <AppShell>
       <AnimatePresence mode="wait" initial={false}>
         <Routes location={location} key={location.pathname}>
-          <Route path="/" element={<PageTransition><WorkbenchPage /></PageTransition>} />
+          <Route path="/" element={<PageTransition><LandingPage /></PageTransition>} />
+          <Route path="/chat" element={<PageTransition><WorkbenchPage /></PageTransition>} />
+          <Route path="/workbench" element={<PageTransition><WorkbenchPage /></PageTransition>} />
           <Route path="/plan/:sessionId" element={<PageTransition><PlanStubPage /></PageTransition>} />
           <Route path="/sources" element={<PageTransition><SourcesPage /></PageTransition>} />
           <Route path="/graph" element={<PageTransition><GraphExplorerPage /></PageTransition>} />

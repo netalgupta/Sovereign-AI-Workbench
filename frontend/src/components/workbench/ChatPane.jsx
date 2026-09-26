@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   MoreHorizontal,
   Paperclip,
@@ -93,7 +93,10 @@ export function ChatPane() {
   const setActiveJob = useChatStore((s) => s.setActiveJob)
   const openApprovalModal = useChatStore((s) => s.openApprovalModal)
   const [searchParams, setSearchParams] = useSearchParams()
-  const [draft, setDraft] = useState('')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const initialQueryHandledRef = useRef(false)
+  const [draft, setDraft] = useState(() => location.state?.initialQuery || '')
   const [isPending, setIsPending] = useState(false)
 
   // Files queued in the composer tray (§3.13). Each item's status/progress
@@ -947,6 +950,19 @@ export function ChatPane() {
       setAttachments([])
     }
   }
+
+  const submitInitialQuery = useEffectEvent(() => {
+    initialQueryHandledRef.current = true
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
+    handleSend()
+  })
+
+  useEffect(() => {
+    const initialQuery = location.state?.initialQuery
+    if (typeof initialQuery !== 'string' || !initialQuery.trim() || initialQueryHandledRef.current) return
+
+    submitInitialQuery()
+  }, [location.pathname, location.search, location.state])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
