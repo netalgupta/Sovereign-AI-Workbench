@@ -35,7 +35,7 @@
   # ollama ps. 14b is 9.0 GB and needs num_gpu=99 to avoid a CPU split,
   # leaving no room for any other model to be resident.
   model: qwen2.5:7b
-  task_tags: [summarization, drafting, approval_notes, planning]
+  task_tags: [summarization, drafting, approval_notes, planning, calculation, question_answering]
 
 - id: vision-model
   backend: ollama

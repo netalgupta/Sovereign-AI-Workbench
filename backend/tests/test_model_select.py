@@ -17,8 +17,14 @@ from backend.orchestrator import model_select as M
     ("Fix this script so it reads the CSV properly", "code_generation"),
     ("Run a SQL query to count the batches", "code_generation"),
     ("Summarise the CCR-1 inspection findings", "summarization"),
-    ("What does SOP-114 say about nitrogen blanketing?", "summarization"),
-    ("Draft an approval note on the Hassan incident", "summarization"),
+    ("What does SOP-114 say about nitrogen blanketing?", "question_answering"),
+    ("Draft an approval note on the Hassan incident", "drafting"),
+    ("Make an Excel sheet comparing the average MFI of each grade", "drafting"),
+    # Measured in the chat UI: this was labelled "summarization" on screen.
+    ("Convert a flow of 1450 cubic metres per hour to barrels per day and show the working.", "calculation"),
+    ("How much hydrogen does 12 t/h of feed need at 1.8 wt%?", "calculation"),
+    ("What is the plot of Pride and Prejudice?", "question_answering"),
+    ("Summarise the Cyber Security book into a 10 to 20 page PDF report.", "summarization"),
 ])
 def test_the_request_decides_the_task(request_text, task):
     assert M.task_of(request_text)[0] == task
@@ -95,3 +101,12 @@ def test_a_document_question_is_routed_to_the_document_model():
     s = M.select("Summarise the CCR-1 inspection findings")
     assert s.task == "summarization" and s.model_id == M.model_for_task("summarization")
     assert decide_path("Summarise the CCR-1 inspection findings").path != "approval"
+
+
+def test_every_task_the_selector_names_has_a_model_tagged_for_it():
+    """A task no model is tagged for silently falls back to the default --
+    the label on screen would then name a task the registry never chose for."""
+    tagged = {t for cfg in M._registry().values() for t in cfg.task_tags}
+    for request in ("Convert 5 bar to kPa", "What is PSA?", "Draft a memo on the outage",
+                    "Summarise the SOP", "Write a Python script that adds two numbers"):
+        assert M.task_of(request)[0] in tagged, request

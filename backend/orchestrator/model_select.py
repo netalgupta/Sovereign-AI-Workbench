@@ -30,6 +30,22 @@ _CODE = re.compile(
 )
 
 
+# A request for a number to be worked out. It runs on the tool-calling
+# model with the maths tools; the label matters because it is on screen.
+_CALC = re.compile(
+    r"\b(convert|calculate|compute|work out|how (?:many|much)|percentage|mass balance)\b"
+    r"|\d[\d,.]*\s*[x×*/+^-]\s*\d",
+    re.I,
+)
+# A request for a deliverable to be written.
+_DRAFT = re.compile(
+    r"\b(draft|write|prepare|create|make|generate)\b[^.?!]{0,60}"
+    r"\b(note|memo|letter|report|deck|presentation|slides?|sheet|spreadsheet|excel|word|docx|pdf|circular)\b",
+    re.I,
+)
+_SUMMARY = re.compile(r"\b(summari[sz]e|summary|overview|key (?:findings|points)|tl;?dr)\b", re.I)
+
+
 @dataclass(frozen=True)
 class Selection:
     task: str          # a models.yaml task tag
@@ -57,10 +73,22 @@ def model_for_task(task: str, *, default: str = "reasoning-model") -> str:
 
 
 def task_of(request: str) -> tuple[str, str]:
-    """The task a request is, and why."""
-    if _CODE.search(request or ""):
+    """The task a request is, and why.
+
+    The task is shown on every answer ("auto-selected for ..."), so it has
+    to be true: a unit conversion was labelled "summarization" because
+    code was the only other task this knew.
+    """
+    text = request or ""
+    if _CODE.search(text):
         return "code_generation", "asks for a program to be written and run"
-    return "summarization", "a question or document task, answered from the sources"
+    if _DRAFT.search(text):
+        return "drafting", "asks for a document to be written"
+    if _SUMMARY.search(text):
+        return "summarization", "asks for a summary"
+    if _CALC.search(text):
+        return "calculation", "asks for a number to be worked out, by the maths tools"
+    return "question_answering", "a question, answered from the sources or general knowledge"
 
 
 def select(request: str) -> Selection:
