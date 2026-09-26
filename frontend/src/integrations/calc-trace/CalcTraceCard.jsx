@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 import { Calculator, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Clock, Variable } from 'lucide-react'
-import { CANONICAL_CALC_TRACE } from './contract'
 
 /**
  * CalcTraceCard — Calculation Trace Viewer delivered by Kanishka (CARD 08 / FRONTEND.md §3.8 / row 41).
@@ -12,13 +11,13 @@ import { CANONICAL_CALC_TRACE } from './contract'
  * When isVerified === false, renders explicit unverified warning (CLAUDE.md Hard Constraint #3).
  */
 export default function CalcTraceCard({
-  expression = CANONICAL_CALC_TRACE.expression,
-  steps = CANONICAL_CALC_TRACE.steps,
-  finalResult = CANONICAL_CALC_TRACE.finalResult,
-  isVerified = CANONICAL_CALC_TRACE.isVerified,
-  timestamp = CANONICAL_CALC_TRACE.timestamp,
-  unit = CANONICAL_CALC_TRACE.unit,
-  variables = CANONICAL_CALC_TRACE.variables,
+  expression = '',
+  steps = [],
+  finalResult = '',
+  isVerified = false,
+  timestamp = '',
+  unit = '',
+  variables = [],
 }) {
   const [isExpanded, setIsExpanded] = useState(true)
 

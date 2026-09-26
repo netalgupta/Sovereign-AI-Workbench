@@ -108,8 +108,8 @@ def test_prepare_deck_refuses_a_topic_the_corpus_does_not_cover(monkeypatch):
 
 
 def test_deck_length_is_not_capped(monkeypatch):
-    """max_slides is accepted and ignored: capping padded thin decks and
-    dropped findings from rich ones."""
+    """No slide cap: capping padded thin decks and dropped findings from
+    rich ones. (The ignored max_slides parameter itself is gone.)"""
     import backend.orchestrator.slide_agent as S
 
     captured = {}
@@ -120,7 +120,7 @@ def test_deck_length_is_not_capped(monkeypatch):
                 "documents": ["Inspection_Report_CCR1.pdf"], "dropped_slides": []}
 
     monkeypatch.setattr(S, "build_deck_spec", fake_build)
-    prepared = S.prepare_deck("CCR-1 findings", max_slides=2)
+    prepared = S.prepare_deck("CCR-1 findings")
 
     assert len(prepared["slide_titles"]) == 7
     assert "max_slides" not in captured["kw"]

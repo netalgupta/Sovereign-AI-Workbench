@@ -39,16 +39,15 @@ logger = logging.getLogger("pptx.slide_agent")
 __all__ = ["prepare_deck", "generate_deck", "NotInCorpus"]
 
 
-def prepare_deck(request: str, session_id: str = "default", max_slides: int | None = None) -> dict[str, Any]:
+def prepare_deck(request: str, session_id: str = "default") -> dict[str, Any]:
     """Plan and validate a deck for `request`. No file is written.
+
+    Deck length follows the material; there is deliberately no slide cap
+    (it padded thin decks or silently dropped findings from rich ones).
 
     Args:
         request: the operator's own words.
         session_id: for logging only.
-        max_slides: accepted for compatibility and IGNORED. Deck length
-            follows the material: a thin source makes a short deck, a
-            rich one a long deck. Capping it either padded thin decks or
-            silently dropped findings from rich ones.
 
     Returns what the approval card needs: the spec, the slide titles, the
     source documents, and anything left out for lack of a source.

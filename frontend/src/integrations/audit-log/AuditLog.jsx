@@ -1,31 +1,52 @@
 import React, { useState, useEffect } from 'react'
 import { ClipboardList, Download, Search, Filter, CheckCircle2, XCircle, Clock, ShieldCheck, RefreshCw } from 'lucide-react'
-import { CANONICAL_AUDIT_ENTRIES } from './contract'
 
 const STATUS_CONFIG = {
   SUCCESS: { icon: CheckCircle2, color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' },
   DENIED: { icon: XCircle, color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' },
   FAILED: { icon: XCircle, color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' },
   PENDING: { icon: Clock, color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
+  APPROVED: { icon: CheckCircle2, color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' },
+  REJECTED: { icon: XCircle, color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' },
+  RECORDED: { icon: Clock, color: '#6b7280', bg: 'rgba(107, 114, 128, 0.12)' },
 }
 
-const ACTION_TYPES = [
-  'ALL',
-  'APPROVAL_GRANT',
-  'EXECUTE',
-  'WRITE',
-  'INGEST',
-  'SAP_SYNC',
-  'SEND',
-  'REJECT',
-]
+// The backend's own event types (backend/audit/audit_log.py AuditEvent), and
+// the status each one IS. Every record used to be shown as SUCCESS -- a
+// refused approval and a failed write included -- because the page read a
+// `status` field the log does not have and defaulted it.
+const EVENT_STATUS = {
+  APPROVAL_REQUESTED: 'PENDING',
+  APPROVAL_GRANTED: 'APPROVED',
+  APPROVAL_REFUSED: 'REJECTED',
+  TOOL_EXECUTED: 'SUCCESS',
+  TOOL_FAILED: 'FAILED',
+  CALCULATION: 'RECORDED',
+  CORRECTION: 'RECORDED',
+}
+
+export function toAuditRow(e, idx) {
+  const event = String(e.event || '').toUpperCase()
+  return {
+    id: `${e.request_id || 'entry'}-${idx}`,
+    requestId: e.request_id || '',
+    timestamp: e.timestamp ? String(e.timestamp).replace('T', ' ').replace(/\+00:00$/, ' UTC') : '',
+    actionType: event,
+    toolOrComponent: e.details?.tool_name || e.actor || '',
+    user: e.actor || '',
+    status: EVENT_STATUS[event] || 'RECORDED',
+    summary: e.summary || '',
+  }
+}
+
+const ACTION_TYPES = ['ALL', ...Object.keys(EVENT_STATUS)]
 
 /**
  * AuditLog — Full sovereign audit trail viewer delivered by Kanishka (FRONTEND.md §3.10 / row 45).
  * Connects directly to GET /api/audit and GET /api/approvals to surface immutable compliance records.
  */
 export default function AuditLog({
-  entries: initialEntries = CANONICAL_AUDIT_ENTRIES,
+  entries: initialEntries = [],
   onExportCsv,
   onFilterChange,
   onEntryClick,
@@ -34,29 +55,29 @@ export default function AuditLog({
   const [query, setQuery] = useState('')
   const [actionFilter, setActionFilter] = useState('ALL')
   const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState(null)
 
+  // THE REAL TRAIL OR NOTHING. This defaulted to built-in entries -- an
+  // "Operator authorized HCU fresh feed rate increase from 100% to 115%" by a
+  // named teammate -- kept them when the backend was empty or unreachable,
+  // and filled missing fields with a current time and a made-up operator.
   const fetchLiveAudit = async () => {
     try {
       setIsLoading(true)
-      const res = await fetch('/api/audit')
-      if (res.ok) {
-        const data = await res.json()
-        if (Array.isArray(data.entries) && data.entries.length > 0) {
-          // Normalize backend entries into the audit viewer format
-          const formatted = data.entries.map((e, idx) => ({
-            id: e.id || e.entry_id || `AUD-${idx + 1}`,
-            timestamp: e.timestamp || new Date().toISOString().replace('T', ' ').slice(0, 19),
-            actionType: (e.action_type || e.action || 'EXECUTE').toUpperCase(),
-            toolOrComponent: e.component || e.tool_name || e.tool || 'WorkbenchEngine',
-            user: e.user || e.operator || 'operator@refinery.local',
-            status: (e.status || (e.approved ? 'SUCCESS' : 'SUCCESS')).toUpperCase(),
-            summary: e.summary || e.description || e.details || 'Audited sovereign operation',
-          }))
-          setEntries(formatted)
-        }
+      const res = await fetch('/api/audit?limit=1000')
+      if (!res.ok) {
+        setLoadError(`The backend answered ${res.status} for /api/audit.`)
+        setEntries([])
+        return
       }
-    } catch {
-      // Keep existing entries on fetch error
+      const data = await res.json()
+      const rows = Array.isArray(data.entries) ? data.entries.map(toAuditRow) : []
+      rows.reverse() // newest first
+      setEntries(rows)
+      setLoadError(null)
+    } catch (err) {
+      setLoadError(`Could not reach the backend (${err?.message || 'network error'}).`)
+      setEntries([])
     } finally {
       setIsLoading(false)
     }
@@ -260,12 +281,16 @@ export default function AuditLog({
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-zinc-400 text-xs">
-                    No matching audit records found.
+                    {loadError
+                      ? `${loadError} Nothing is shown rather than records that may not exist.`
+                      : entries.length === 0
+                        ? 'The audit log is empty: nothing has been approved, refused, written or calculated yet.'
+                        : 'No matching audit records found.'}
                   </td>
                 </tr>
               ) : (
                 filtered.map((e) => {
-                  const statusInfo = STATUS_CONFIG[e.status] || STATUS_CONFIG.SUCCESS
+                  const statusInfo = STATUS_CONFIG[e.status] || STATUS_CONFIG.RECORDED
                   const StatusIcon = statusInfo.icon
 
                   return (

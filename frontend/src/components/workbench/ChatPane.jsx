@@ -43,7 +43,6 @@ import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool } f
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
-import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
 import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
 

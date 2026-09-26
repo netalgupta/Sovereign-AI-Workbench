@@ -60,36 +60,3 @@ export function validateProps(props) {
   }
   return true
 }
-
-export const CANONICAL_CALC_TRACE = {
-  expression: 'Delta_T_bed = (Q_rxn * Feed_Rate) / (m_dot * C_p)',
-  steps: [
-    {
-      stepNumber: 1,
-      description: 'Fetch current fresh feed rate and heat of reaction constants',
-      intermediateFormula: 'Q_rxn = 418.4 kJ/mol, Feed_Rate = 115.0%',
-      result: '48.118 MW heat release',
-    },
-    {
-      stepNumber: 2,
-      description: 'Evaluate adiabatic temperature rise against hydrogen quench limit',
-      intermediateFormula: 'Delta_T = 48.118 MW / (120 kg/s * 2.8 kJ/kg*K)',
-      result: '143.2°C temperature delta',
-    },
-    {
-      stepNumber: 3,
-      description: 'Verify maximum peak bed temperature does not breach 435.0°C interlock',
-      intermediateFormula: 'T_bed_peak = 280.0°C + 143.2°C = 423.2°C < 435.0°C',
-      result: '11.8°C safety margin',
-    },
-  ],
-  finalResult: '423.2°C (11.8°C margin)',
-  isVerified: true,
-  timestamp: '2026-09-10 14:23:05',
-  unit: '°C',
-  variables: {
-    Feed_Rate: '115%',
-    Quench_Rate: '24.2 Nm³/m³',
-    Base_T: '280°C',
-  },
-}

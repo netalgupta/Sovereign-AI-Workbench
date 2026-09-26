@@ -16,6 +16,13 @@ TWO THINGS THE SUITE MUST NOT DO TO A DEVELOPER'S MACHINE.
    data, unless WORKBENCH_TEST_ALLOW_NEO4J_WIPE=1 says wiping is fine.
    Against an empty database they run as before, and clearing it
    afterwards leaves it as they found it.
+
+3. Write to the real audit trail. Any test that approved, refused or
+   executed something without naming its own log appended to
+   backend/audit/audit.jsonl -- the append-only governance record the
+   demo shows. MEASURED: 96 of its 932 entries were pytest runs, with
+   temp-directory paths. The default audit log and approval ledger now
+   live in each test's tmp directory.
 """
 
 from __future__ import annotations
@@ -42,3 +49,12 @@ def wipeable_neo4j_client(uri: str, user: str, password: str):
                 "run it anyway (rebuild afterwards: py -3 -m backend.evaluation.build_graph)."
             )
     return client
+
+
+@pytest.fixture(autouse=True)
+def _audit_trail_in_tmp(tmp_path, monkeypatch):
+    """Default AuditLog / ApprovalGate files go to tmp, never to the real trail."""
+    import backend.paths
+
+    monkeypatch.setattr(backend.paths, "REPO_ROOT", tmp_path)
+    (tmp_path / "backend" / "audit").mkdir(parents=True, exist_ok=True)
