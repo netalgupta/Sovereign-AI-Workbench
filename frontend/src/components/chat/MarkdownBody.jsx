@@ -12,6 +12,7 @@
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { plainMath } from '../../lib/plainMath'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -244,7 +245,7 @@ export function MarkdownBody({ content }) {
           td: Td,
         }}
       >
-        {content}
+        {plainMath(content)}
       </ReactMarkdown>
     </div>
   )

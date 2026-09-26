@@ -186,6 +186,8 @@ _SYSTEM_PROMPT = (
     "- Say what you are about to do in one short sentence, then do it.\n"
     "- After a tool returns, say what it gave you before moving on.\n"
     "- Never do arithmetic yourself; call the calculation tool.\n"
+    "- Write working and formulas as plain text (1450 m3/h x 24 h = 34,800 m3), "
+    "never LaTeX: the chat does not render it.\n"
     "- Name the source document when you use a retrieved passage.\n"
     "- When you have enough, give the final answer and stop.\n"
     "- If a tool call fails twice, stop calling it and say what is "
