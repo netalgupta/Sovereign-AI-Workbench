@@ -98,7 +98,8 @@ MRPL_RAG_Test_Corpus/07_User_Uploads/*
 !MRPL_RAG_Test_Corpus/07_User_Uploads/.gitkeep
 /*.png
 
-# Runtime temporary attachment/rendered caches and scratchpad
-storage/attachments/
-storage/rendered/
+# Runtime data: attachments, rendered previews, generated outputs, the
+# audit log and quarantined files. Outputs and the audit log can carry
+# confidential document text, so none of it belongs in git (Review Rule 8).
+storage/
 scratch/
