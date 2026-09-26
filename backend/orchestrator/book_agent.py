@@ -52,8 +52,12 @@ WINDOW_CHARS = 7000
 # Calls in flight at once (Ollama serves them from one resident model).
 WORKERS = 5
 # Points handed to one chapter-writing call; beyond this the chapter is
-# written in consecutive parts.
-POINTS_PER_WRITE = 70
+# written in consecutive parts. At 70, a chapter of 98 points came out as
+# 1,500 characters: one call asked for "3 to 5 paragraphs" compresses
+# whatever it is given to that length, so the reading was thrown away.
+POINTS_PER_WRITE = 35
+# The contents list is read whole up to this; a real one runs ~20k chars.
+TOC_MAX_CHARS = 32000
 
 _SECTION_NUMBER = re.compile(
     r"(?:(?:Figure|Fig\.|Table|Box)\s+(\d{1,2})\.\d{1,2}"
@@ -96,18 +100,34 @@ def pages_of(chunks: list, document: str) -> dict[int, str]:
     return {p: "\n".join(t for _i, t in sorted(parts)) for p, parts in sorted(by_page.items())}
 
 
+_CONTENTS_HEADER = re.compile(r"cont[ae]nt|\bonts\b", re.I)
+
+
 def contents_pages(pages: dict[int, str]) -> list[int]:
-    """Front-matter pages that look like a table of contents."""
+    """Front-matter pages that are the table of contents.
+
+    A contents page carries "Contents" in its running header, so only the
+    top of the page is looked at. Matching the word anywhere took in the
+    copyright page and the list of figures ("export contents option"),
+    which pushed the real contents past the read limit and lost the last
+    chapters. A single page between two contents pages is one too -- its
+    header was misread by OCR ("x|xX onts").
+    """
     limit = max(12, int(max(pages or [0]) * FRONT_MATTER_SHARE))
-    found = [p for p, t in pages.items() if p <= limit and re.search(r"\bcont[ae]nt", t, re.I)]
-    return found
+    found = [p for p, t in sorted(pages.items())
+             if p <= limit and _CONTENTS_HEADER.search(" ".join(t.split())[:40])]
+    filled = set(found)
+    for a, b in zip(found, found[1:]):
+        if b - a == 2:
+            filled.add(a + 1)
+    return sorted(filled)
 
 
 def read_contents(pages: dict[int, str], *, writer: str) -> tuple[str, list[Chapter]]:
     """The book's title and its chapters, from its own table of contents."""
     toc = contents_pages(pages)
     first = "\n".join(pages.get(p, "") for p in sorted(pages)[:3])[:2500]
-    toc_text = "\n".join(pages[p] for p in toc)[:14000]
+    toc_text = "\n".join(pages[p] for p in toc)[:TOC_MAX_CHARS]
     if not toc_text.strip():
         return "", []
     prompt = f"""Below are the title pages and the table of contents of a book, from OCR of a scan
@@ -125,7 +145,7 @@ spelling. Keep the chapters in order.
 
 Reply with ONLY this JSON object:
 {{"title": "...", "chapters": [{{"number": 1, "title": "..."}}]}}"""
-    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=8192)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
     if not isinstance(data, dict):
         return "", []
     chapters: list[Chapter] = []
@@ -278,17 +298,49 @@ REQUEST THE SUMMARY SERVES: {request}
 POINTS:
 {listing}
 
-Write 3 to 5 paragraphs of clear, connected prose that explain what the chapter teaches,
-in its own terms. Group related points; keep definitions, section numbers, cases and
-figures exactly as given. Do not add anything the points do not say. Do not mention
-"points", "the text", "the passage" or page numbers. No headings, no bullet points.
+Write 3 or 4 paragraphs of clear, connected prose that explain what these points teach,
+in the chapter's own terms. Cover every point; group related ones; keep definitions,
+section numbers, cases and figures exactly as given. Do not add anything the points do
+not say. Do not mention "points", "the text", "the passage" or page numbers. No headings,
+no bullet points.
 
-Reply with ONLY this JSON object:
+Reply with ONLY this JSON object, each paragraph a complete string in the list:
 {{"paragraphs": ["...", "..."]}}"""
-        data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
-        raw = data.get("paragraphs") if isinstance(data, dict) else None
-        parts.extend(" ".join(str(p).split()) for p in (raw or []) if str(p).strip())
+        parts.extend(_ask_paragraphs(prompt, writer=writer))
     return "\n\n".join(parts)
+
+
+def _paragraphs_in(data) -> list[str]:
+    """The prose paragraphs in a model's JSON reply.
+
+    Normally under "paragraphs". A model sometimes breaks the shape -- it
+    has returned {"paragraphs": [""], "<the book's title>": "<the whole
+    overview>"}, turning a quoted title in the prompt into a key -- and the
+    prose was then thrown away. Long string values elsewhere in the reply
+    are taken instead.
+    """
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("paragraphs")
+    items = raw if isinstance(raw, list) else [raw] if isinstance(raw, str) else []
+    out = [" ".join(str(p).split()) for p in items if isinstance(p, str) and p.strip()]
+    if out:
+        return out
+    for value in data.values():
+        values = value if isinstance(value, list) else [value]
+        out.extend(" ".join(v.split()) for v in values if isinstance(v, str) and len(v.strip()) >= 200)
+    return out
+
+
+def _ask_paragraphs(prompt: str, *, writer: str) -> list[str]:
+    """Paragraphs of prose, asked for twice before giving up."""
+    for _attempt in range(2):
+        data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
+        paragraphs = _paragraphs_in(data)
+        if paragraphs:
+            return paragraphs
+        logger.warning("No paragraphs in the reply; asking again")
+    return []
 
 
 def _sentences(text: str) -> list[str]:
@@ -365,8 +417,10 @@ Reply with ONLY this JSON object:
 def write_overview(title: str, chapters: list[Chapter], request: str, *, writer: str) -> str:
     """An overview of the whole book, from the checked chapter summaries."""
     digest = "\n\n".join(f"Chapter {c.number}, {c.title}:\n{c.body[:2200]}" for c in chapters if c.body)
-    prompt = f"""Write the opening overview of a summary of the book "{title}", for a reader deciding
-whether and where to read it. Use ONLY the chapter summaries below.
+    prompt = f"""Write the opening overview of a book summary, for a reader deciding whether and where to
+read the book. Use ONLY the chapter summaries below.
+
+BOOK TITLE: {title}
 
 REQUEST THE SUMMARY SERVES: {request}
 
@@ -377,11 +431,9 @@ Write 3 or 4 paragraphs: what the book is about and who it is for, how its argum
 develops across the chapters, and the ideas a reader should take away. Do not add facts
 the summaries do not contain. No headings, no bullet points.
 
-Reply with ONLY this JSON object:
+Reply with ONLY this JSON object, each paragraph a complete string in the list:
 {{"paragraphs": ["...", "..."]}}"""
-    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
-    paragraphs = data.get("paragraphs") if isinstance(data, dict) else None
-    return "\n\n".join(" ".join(str(p).split()) for p in (paragraphs or []) if str(p).strip())
+    return "\n\n".join(_ask_paragraphs(prompt, writer=writer))
 
 
 # ── the whole thing ─────────────────────────────────────────────────────────

@@ -43,6 +43,24 @@ def test_section_and_figure_numbers_vote_for_their_chapter():
     assert not votes[21] and not votes[22]
 
 
+def test_contents_pages_are_found_by_their_header_not_by_the_word_anywhere():
+    """Measured on the real book: the copyright page and the list of figures
+    ("export contents option") were read as contents, pushing chapters 9-11
+    past the read limit; page 7's header was OCR'd as "onts" and missed."""
+    pages = {p: "Body text of chapter one. " * 40 for p in range(1, 200)}
+    pages[3] = "CYBER SECURITY Copyright 2011 Wiley. All rights reserved. Table of contents follows."
+    pages.update({p: f"Contents x{p} {p}.1 Some Section 12" for p in (4, 5, 6, 8, 9)})
+    pages[7] = "x|xX onts 4.3 Phishing 131"
+    pages[10] = "oxviii List of Figures Figure 11.58 Autopsy: export contents option."
+    assert B.contents_pages(pages) == [4, 5, 6, 7, 8, 9]
+
+
+def test_a_single_misread_page_inside_the_contents_is_kept():
+    pages = {p: "text " * 100 for p in range(1, 200)}
+    pages.update({4: "Contents i", 5: "garbled header 2.1 Section", 6: "xx Contents"})
+    assert B.contents_pages(pages) == [4, 5, 6]
+
+
 # ── what each chapter reads ─────────────────────────────────────────────────
 
 
@@ -53,6 +71,38 @@ def test_every_page_of_a_chapter_is_read_and_blank_pages_are_skipped():
     assert set(range(20, 40)) - {25} <= read, "every page with text is read"
     assert all("[page 25]" not in text for _, _, text in wins)
     assert all(len(text) < B.WINDOW_CHARS + 2000 for _, _, text in wins)
+
+
+def test_a_long_chapter_is_written_in_parts_so_its_reading_is_not_compressed_away(monkeypatch):
+    """Measured: 98 points written in one call came out as 1,508 characters."""
+    calls = []
+
+    def fake(prompt, **_k):
+        calls.append(prompt)
+        return {"paragraphs": ["A paragraph of the chapter."]}
+
+    monkeypatch.setattr(B, "_ask_json", fake)
+    ch = B.Chapter(number=1, title="Introduction", first_page=1, last_page=40)
+    ch.points = [{"point": f"Point number {i} about cybercrime law.", "page": i // 3 + 1} for i in range(98)]
+    B.write_chapter(ch, "summarise", writer="reasoning-model")
+    assert len(calls) >= 3
+
+
+def test_prose_is_kept_when_the_model_puts_it_under_the_wrong_key():
+    """Measured on the real overview call: the whole overview came back under
+    a key named after the book's title, with "paragraphs": [""]."""
+    overview = "delves into the multifaceted world of cybercrime, " * 8
+    data = {"paragraphs": [""], "Understanding Cyber Crimes": overview}
+    assert B._paragraphs_in(data) == [" ".join(overview.split())]
+    assert B._paragraphs_in({"paragraphs": ["One.", " ", "Two."]}) == ["One.", "Two."]
+    assert B._paragraphs_in({"paragraphs": [""], "note": "short"}) == []
+
+
+def test_an_empty_reply_is_asked_again(monkeypatch):
+    replies = iter([{"paragraphs": [""]}, {"paragraphs": ["The book covers cybercrime."]}])
+    monkeypatch.setattr(B, "_ask_json", lambda *_a, **_k: next(replies))
+    ch = B.Chapter(number=1, title="Intro", first_page=1, last_page=2, body="Chapter text.")
+    assert B.write_overview("A Book", [ch], "summarise", writer="reasoning-model") == "The book covers cybercrime."
 
 
 # ── what survives the checks ────────────────────────────────────────────────
