@@ -423,3 +423,14 @@ def test_real_requests_still_reach_the_model(text):
 def test_the_reply_runs_no_model_and_says_how_to_ask():
     reply = _I.unclear_reply("sdfg")
     assert "For example" in reply and "?" in reply
+
+
+@pytest.mark.parametrize("text, path", [
+    # A bare topic is one lookup: it went agentic, 14.7 s against ~5 s direct.
+    ("nitrogen blanketing procedure", "direct"),
+    ("hydrocracker catalyst", "direct"),
+    ("MFI of H030SG", "direct"),            # a digit inside a grade is a name, not a number
+    ("12 bar pressure", "agentic"),         # a standalone number may need computing
+])
+def test_a_bare_topic_goes_to_one_lookup(text, path):
+    assert decide_path(text).path == path

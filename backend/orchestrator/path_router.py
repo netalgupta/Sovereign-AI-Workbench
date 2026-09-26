@@ -50,6 +50,7 @@ tool-selection gamble. Those are not symmetric.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -119,6 +120,20 @@ def decide_path(request: str) -> PathDecision:
             "Single-intent lookup — one retrieval and a grounded answer. "
             "The direct path has the citation and refusal scaffolding and "
             "gives better answers here.",
+            False,
+        )
+
+    # A bare topic ("phishing", "nitrogen blanketing") names one thing to
+    # look up and asks for no work. It went to the agentic path -- 14.7 s
+    # against ~5 s direct -- because is_simple_lookup keys on question
+    # shape, and a topic has none.
+    words = text.split()
+    # A standalone number suggests work to do; a digit inside a tag or
+    # grade ("H030SG", "HCU-2") is just a name.
+    if len(words) <= 3 and not re.search(r"(?<![A-Za-z0-9-])\d+(?:\.\d+)?(?![A-Za-z0-9])", text):
+        return PathDecision(
+            "direct",
+            "A bare topic — one retrieval and a grounded answer about it.",
             False,
         )
 
