@@ -1,3 +1,40 @@
+# HANDOFF — 2026-09-26 (tested from the chat box, not from the backend)
+
+Every flow was driven through the real chat UI in a browser
+(`scratchpad/ui_run/ui_run.py`: types the request, clicks Authorize, records
+a clip). The backend had passing tests for each of these; the UI did not
+work for most of them. **Test from the chat box before calling anything done.**
+
+| flow, asked in the chat | before today | now |
+|---|---|---|
+| grounded question | worked | worked (3.4 g/10min, cited) |
+| document question the corpus can't answer | — | says the records don't cover it (HCU-9) |
+| unit conversion | **0.403 bbl/day** (should be 218,885), raw LaTeX, chip said "summarization" | 218,885 via the tool, plain maths, chip says "calculation" |
+| code | worked | worked, Docker sandbox verified |
+| Excel / Word deliverable | **no card, no approval, file never written** | card → modal → Authorize → file written, cited |
+| "Summarise the book into a PDF report" | answered in chat, **no PDF** | book job (chapter by chapter) |
+
+Bugs found this way, each with a test that fails on the previous commit:
+- `bbl` in Pint is the 31.5-gal US barrel, not the 42-gal oil barrel: 33% error, silent (`4e9cc5b`).
+- The model wrote its own conversion factors into the unit tool (`4e9cc5b`).
+- `api.js` dispatched `deck_job` to an undefined `handlers`; the error was swallowed as a "JSON parse error" (`b43bd5c`).
+- `/api/approvals/execute` was called without `request_id` since it was wired up — every UI approval got a 422; the 422's list-shaped `detail` then blanked the whole app (`35298cf`).
+- Approval modal said "Target not resolved" above the file it named; "Written to" before approval (`b43bd5c`).
+- The model writes `""` for a `0` in a source table and the file called it unsourced; now copied from the table (`65c5a77`).
+- "Summarise … into a PDF report" skipped the approval path because of a read exemption for "summar…" (`9dcedc7`).
+- Book: contents read found 8 of 12 chapters; the overview came back under a key named after the book title and was discarded; chapters compressed 98 points into 1.5k chars (`d80d711`).
+- The task chip under each answer only knew "code" and "summarization" (`c8870a1`).
+
+General questions ("plot of Pride and Prejudice") are answered from general
+knowledge and labelled as such, by design. The refusal is for questions
+ABOUT the documents that they do not cover. The pitch copy says this.
+
+Pitch material (not in the repo): playbook at
+https://claude.ai/artifact/SwTzntqCd5jbZ38vT3ExAo ; inspiration deck
+`SIH26117_Idea_Inspiration.pptx` in Downloads.
+
+---
+
 # HANDOFF — 2026-09-24 (deliverables, quality, and the two team merges)
 
 Branch `main`, pushed. Fast suite at last full run:
