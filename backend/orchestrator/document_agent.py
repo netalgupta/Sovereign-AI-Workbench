@@ -406,8 +406,9 @@ def validate_section(section: Any, docs: list[dict], *, min_body: int = MIN_BODY
             "contains_estimate": bool(section.get("contains_estimate"))}, ""
 
 
-# Context sizes we ask Ollama for. Anything else forces a reload.
-CONTEXT_BUCKETS = (4096, 8192, 12288)
+# Context sizes we ask Ollama for. Anything else forces a reload -- and
+# the chat path asks for 8192, so 4096 here was a reload per turn.
+CONTEXT_BUCKETS = (8192, 12288)
 
 
 def _context_bucket(tokens: int) -> int:

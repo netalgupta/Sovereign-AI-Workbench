@@ -41,7 +41,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from backend.models.ollama_client import generate as ollama_generate
+from backend.models.ollama_client import generate as ollama_generate, context_for
 from backend.models.registry import resolve_model_name
 
 logger = logging.getLogger("pptx.deck_agent")
@@ -153,7 +153,6 @@ MIN_RELATIVE_SCORE = 0.55
 MAX_DOCS = 3
 MAX_CHARS_PER_DOC = 7000
 MAX_CHARS_TOTAL = 16000
-NUM_CTX = 12288
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 # A value that can stand as a headline figure: optional comparator, a
 # number, optional unit or percent. "34", "84%", "> 410 °C", "1,450 m3/h".
@@ -398,7 +397,8 @@ def _ask_json(prompt: str, *, model_id: str = "reasoning-model", timeout: int = 
     replies were valid JSON too. Nearly every background step goes through
     here, so that overhead was most of a document or book job's time.
     """
-    options = {"num_ctx": num_ctx or NUM_CTX}
+    # The standard window unless this prompt cannot fit in it (ollama_client.context_for).
+    options = {"num_ctx": num_ctx or context_for(len(prompt))}
     name = resolve_model_name(model_id)
     parsed = _parse_json_object(ollama_generate(name, prompt, timeout=timeout, options=options))
     if parsed is not None:

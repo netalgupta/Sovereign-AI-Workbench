@@ -40,6 +40,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
+from backend.models.ollama_client import context_for
 from backend.orchestrator.deck_agent import _ask_json, _numbers, writer_timeout
 
 logger = logging.getLogger("documents.book")
@@ -145,7 +146,7 @@ spelling. Keep the chapters in order.
 
 Reply with ONLY this JSON object:
 {{"title": "...", "chapters": [{{"number": 1, "title": "..."}}]}}"""
-    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=context_for(len(prompt)))
     if not isinstance(data, dict):
         return "", []
     chapters: list[Chapter] = []
@@ -335,7 +336,7 @@ def _paragraphs_in(data) -> list[str]:
 def _ask_paragraphs(prompt: str, *, writer: str) -> list[str]:
     """Paragraphs of prose, asked for twice before giving up."""
     for _attempt in range(2):
-        data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
+        data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=context_for(len(prompt)))
         paragraphs = _paragraphs_in(data)
         if paragraphs:
             return paragraphs
@@ -392,7 +393,7 @@ unsupported.
 
 Reply with ONLY this JSON object:
 {{"unsupported": [3, 7]}}"""
-    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=12288)
+    data = _ask_json(prompt, model_id=writer, timeout=writer_timeout(writer), num_ctx=context_for(len(prompt)))
     raw = data.get("unsupported") if isinstance(data, dict) else None
     try:
         bad = {int(n) for n in (raw or [])}

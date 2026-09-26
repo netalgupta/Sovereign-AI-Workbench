@@ -729,3 +729,21 @@ def test_json_mode_is_the_fallback_when_free_text_does_not_parse(monkeypatch):
     monkeypatch.setattr(DA, "ollama_generate", fake)
     assert DA._ask_json("p") == {"points": []}
     assert calls == [None, "json"]
+
+
+def test_one_context_size_unless_the_prompt_cannot_fit():
+    """Ollama reloads a model on any num_ctx change (~13 s measured). Chat,
+    verifier and jobs asked for four different sizes."""
+    from backend.models import ollama_client as C
+    assert C.GENERATION_NUM_CTX == C.SHORT_PROMPT_NUM_CTX == C.STANDARD_NUM_CTX
+    assert C.context_for(9000) == C.STANDARD_NUM_CTX          # a normal job prompt
+    assert C.context_for(30000) == C.LONG_NUM_CTX             # a whole table of contents
+
+
+def test_a_json_call_asks_for_the_standard_context_by_default(monkeypatch):
+    from backend.models import ollama_client as C
+    from backend.orchestrator import deck_agent as DA
+    seen = []
+    monkeypatch.setattr(DA, "ollama_generate", lambda m, p, **k: seen.append(k["options"]["num_ctx"]) or '{"a": 1}')
+    DA._ask_json("short prompt")
+    assert seen == [C.STANDARD_NUM_CTX]

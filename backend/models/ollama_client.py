@@ -143,7 +143,26 @@ DEFAULT_NUM_GPU = int(os.environ.get("WORKBENCH_NUM_GPU", "99"))
 # room to spare. The VRAM argument for a tight window is moot in any
 # case: a 7B generation model and the verifier do not co-reside on an
 # 8 GB card at any context size, so shaving the KV cache bought nothing.
-GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", "6144"))
+#
+# ONE CONTEXT SIZE, NOT FOUR. Ollama reloads a model whenever a request
+# asks for a different num_ctx than the one loaded -- measured at ~13 s
+# per reload (a warm 5.1 s answer took 18.0 s straight after a job had
+# left the model at 8192). Chat asked for 6144, the verifier 3072, jobs
+# 8192 and 12288, so a question asked during a background job paid a
+# reload each way. Everything now asks for STANDARD_NUM_CTX, and only a
+# prompt that genuinely does not fit asks for LONG_NUM_CTX
+# (context_for). With OLLAMA_NUM_PARALLEL=2, 8192 is 6.3 GB, 100% GPU;
+# 12288 already spills 11% to CPU, so it is the exception, not a bucket.
+STANDARD_NUM_CTX = 8192
+LONG_NUM_CTX = 12288
+
+
+def context_for(prompt_chars: int, answer_tokens: int = 1024) -> int:
+    """The context a prompt of this many characters needs: standard unless it cannot fit."""
+    return STANDARD_NUM_CTX if prompt_chars // 3 + answer_tokens <= STANDARD_NUM_CTX else LONG_NUM_CTX
+
+
+GENERATION_NUM_CTX = int(os.environ.get("WORKBENCH_GEN_CTX", str(STANDARD_NUM_CTX)))
 
 DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 
@@ -166,7 +185,9 @@ DEFAULT_TIMEOUT = int(os.environ.get("WORKBENCH_LLM_TIMEOUT", "600"))
 # grounding and verifying prose style. 3072 covers that; the router,
 # which really does send a short prompt, is unaffected by the extra
 # headroom because unused context is not allocated per request.
-SHORT_PROMPT_NUM_CTX = int(os.environ.get("WORKBENCH_SHORT_CTX", "3072"))
+# Now the standard size too: the verifier runs on the same qwen2.5:7b as
+# chat, and a different num_ctx on the same model is a reload.
+SHORT_PROMPT_NUM_CTX = int(os.environ.get("WORKBENCH_SHORT_CTX", str(STANDARD_NUM_CTX)))
 
 
 # Deterministic by default.
