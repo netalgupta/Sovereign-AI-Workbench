@@ -50,7 +50,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Intent:
-    kind: str          # greeting | capability | arithmetic | closing | document
+    kind: str          # greeting | capability | arithmetic | closing | unclear | document
     reason: str
     needs_corpus: bool
 
@@ -178,7 +178,79 @@ def classify(request: str) -> Intent:
             False,
         )
 
+    if not domain and is_unclear(text):
+        return Intent("unclear", "No question or request to act on — answered instantly, no model.", False)
+
     return Intent("document", "Treated as a question about the sources.", True)
+
+
+# NOTHING TO ANSWER, SO NO MODEL. A one-word insult and a keyboard mash
+# ("sdfg dfg dsg") each took ~29 s on the 7B tool-calling path, only to
+# reply "please clarify". A fixed sentence says the same thing instantly.
+#
+# Two shapes, both vetoed by any plant word (checked by the caller) and
+# by anything that looks like a request (a question mark, a digit, a
+# request verb):
+#   - one or two bare words ("hmm", "asdf qwerty", a lone insult)
+#   - words that are mostly unpronounceable (no vowel: "sdfg", "dfg")
+_REQUEST_WORD = re.compile(
+    r"\b(what|why|how|when|where|which|who|show|list|find|give|tell|explain|summari[sz]e|"
+    r"compare|draft|write|make|create|generate|convert|calculate|compute|run|read|open|"
+    r"search|define|help|plot|chart|translate)\b",
+    re.I,
+)
+
+
+_KEYBOARD_ROWS = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
+
+
+def _is_mash(word: str) -> bool:
+    """A token no language has: no vowel ("sdfg"), or a run along a keyboard row ("asdf")."""
+    w = word.lower()
+    if len(w) < 3:
+        return False
+    if not re.search(r"[aeiouy]", w):
+        return True
+    return any(w in row or w in row[::-1] for row in _KEYBOARD_ROWS)
+
+
+def is_unclear(text: str, vocabulary: frozenset | None = None) -> bool:
+    """True when the message carries no question or task a model could act on."""
+    if not re.search(r"[A-Za-z0-9]", text):
+        return bool(text.strip())          # only punctuation or symbols: "???"
+    if "?" in text or re.search(r"\d", text) or _REQUEST_WORD.search(text):
+        return False
+    words = re.findall(r"[A-Za-z']+", text)
+    mash = [w for w in words if _is_mash(w)]
+    if mash and len(mash) * 2 >= len(words):
+        return True
+    if len(words) <= 2:
+        # One or two plain words. A term the loaded documents use is a topic
+        # ("phishing") and goes to search; anything else ("hmm", a lone
+        # insult) has nothing to search for. Before the index is built the
+        # vocabulary is unknown, and a bare word is treated as unclear --
+        # the cost is one rephrase, against ~29 s on the model.
+        if vocabulary is None:
+            try:
+                from backend.retrieval.lexical import cached_vocabulary
+
+                vocabulary = cached_vocabulary()
+            except Exception:  # noqa: BLE001 - the check must never break a turn
+                vocabulary = None
+        if vocabulary is not None:
+            return not any(w.lower() in vocabulary for w in words)
+        return True
+    return False
+
+
+def unclear_reply(text: str) -> str:
+    return (
+        "I didn't find a question or a task in that. I can answer from your "
+        "documents with citations, run a calculation, write and run code, or "
+        "draft a Word, Excel, PDF or PowerPoint file for your approval.\n\n"
+        "For example: *What does SOP-114 say about nitrogen blanketing?* or "
+        "*Convert 1450 m3/h to barrels per day.*"
+    )
 
 
 GREETING_REPLY = (

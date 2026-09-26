@@ -138,6 +138,16 @@ def get_index(rows: list[tuple[int, str]]) -> _Index:
         return _cache
 
 
+def cached_vocabulary() -> frozenset | None:
+    """The indexed corpus's terms, if the index is already built; never builds it.
+
+    For the instant intent check, which must stay sub-millisecond: a bare
+    word the corpus uses ("phishing") is a topic worth searching; one it
+    never uses is not.
+    """
+    return _cache.vocabulary if _cache is not None else None
+
+
 def reset_cache() -> None:
     """Drop the cached index. For tests and after a corpus rebuild."""
     global _cache

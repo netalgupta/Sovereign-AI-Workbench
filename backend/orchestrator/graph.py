@@ -534,15 +534,17 @@ def router_node(state: AgentState) -> dict[str, Any]:
         GREETING_REPLY,
         capability_reply,
         classify,
+        unclear_reply,
     )
 
     intent = classify(req)
 
-    if intent.kind in ("greeting", "closing", "capability"):
+    if intent.kind in ("greeting", "closing", "capability", "unclear"):
         reply_for = {
             "greeting": GREETING_REPLY,
             "closing": CLOSING_REPLY,
             "capability": capability_reply,
+            "unclear": lambda: unclear_reply(req),
         }[intent.kind]
         return {
             "draft_output": reply_for() if callable(reply_for) else reply_for,

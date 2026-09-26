@@ -387,3 +387,39 @@ def test_the_fallback_plan_claims_only_the_work_that_runs():
     # The math step appears only when there is arithmetic to evaluate,
     # decided by the same local matcher the math branch itself uses.
     assert [s.assigned_agent for s in with_math] == ["retrieval", "math"]
+
+
+# ── nothing to answer: instant, no model ───────────────────────────────────
+# Measured in the chat UI: a one-word insult and "sdfg dfg dsg" each took
+# ~29 s on the 7B tool-calling path, only to reply "please clarify".
+
+from backend.orchestrator import intent as _I  # noqa: E402
+
+_VOCAB = frozenset({"phishing", "catalyst", "attackers", "techniques", "nitrogen"})
+
+
+@pytest.mark.parametrize("text", [
+    "sdfg dfg dsg", "asdf qwerty zxcv", "???", "hmm", "blah", "xyzzy",
+])
+def test_a_message_with_nothing_to_answer_is_instant(text):
+    assert _I.is_unclear(text, _VOCAB)
+    assert _I.classify(text).kind in ("unclear", "closing", "greeting")
+    assert not _I.classify(text).needs_corpus
+
+
+@pytest.mark.parametrize("text", [
+    "phishing",                                 # a word the documents use: a topic
+    "What is phishing?",
+    "Summarise the SOP",
+    "phishing techniques used by attackers",
+    "Convert 5 bar to kPa",
+    "Tell me about the Hassan incident",
+    "Nitrogen blanketing procedure",
+])
+def test_real_requests_still_reach_the_model(text):
+    assert not _I.is_unclear(text, _VOCAB)
+
+
+def test_the_reply_runs_no_model_and_says_how_to_ask():
+    reply = _I.unclear_reply("sdfg")
+    assert "For example" in reply and "?" in reply

@@ -936,6 +936,9 @@ def _answer(
     from backend.orchestrator.model_select import select as select_model
 
     selection = select_model(request)
+    # An instant reply runs no model, so it must not name one: the chip
+    # read "qwen2.5:7b auto-selected" over fixed sentences.
+    instant = decision.path in ("greeting", "closing", "capability", "unclear")
     yield {
         "type": "route",
         "path": decision.path,
@@ -944,10 +947,10 @@ def _answer(
         # MODEL AUTO-SELECTION, visible. The problem statement's expected
         # demo is "model auto selection across at least two different task
         # types"; the turn now says which model it chose and why.
-        "task": selection.task,
-        "model_id": selection.model_id,
-        "model": selection.model,
-        "model_reason": selection.reason,
+        "task": None if instant else selection.task,
+        "model_id": None if instant else selection.model_id,
+        "model": None if instant else selection.model,
+        "model_reason": None if instant else selection.reason,
     }
 
     if decision.path == "approval":
@@ -1091,17 +1094,19 @@ def _answer(
     yield from _emit_plan(request, decision)
 
     # Instant paths: no retrieval, no model, no planner.
-    if decision.path in ("greeting", "closing", "capability"):
+    if decision.path in ("greeting", "closing", "capability", "unclear"):
         from backend.orchestrator.intent import (
             CLOSING_REPLY,
             GREETING_REPLY,
             capability_reply,
+            unclear_reply,
         )
 
         reply = {
             "greeting": GREETING_REPLY,
             "closing": CLOSING_REPLY,
             "capability": capability_reply(),
+            "unclear": unclear_reply(request),
         }[decision.path]
         yield {"type": "text_delta", "text": reply}
         yield {
@@ -1238,7 +1243,7 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     # An instant path still emits a plan -- the Plan Graph should not go
     # blank because the answer was cheap -- but it describes the one
     # thing that actually happens.
-    if decision.path in ("greeting", "closing", "capability", "arithmetic"):
+    if decision.path in ("greeting", "closing", "capability", "arithmetic", "unclear"):
         steps = [{
             "step_id": decision.path,
             "description": decision.reason,
