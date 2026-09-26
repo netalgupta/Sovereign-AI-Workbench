@@ -265,3 +265,32 @@ def test_inline_verification_still_runs_when_enabled(monkeypatch):
     # fail for a reason that has nothing to do with the wiring it
     # exists to check.
     assert isinstance(state.verification_result.passed, bool)
+
+
+# ── a file format named as the destination is a write ──────────────────────
+
+import pytest as _pytest  # noqa: E402
+
+from backend.orchestrator.graph import classify_action_request as _classify  # noqa: E402
+
+
+@_pytest.mark.parametrize("request_text", [
+    # Measured through the chat UI: answered in chat, no PDF was ever made.
+    "Summarise the Cyber Security book into a 10 to 20 page PDF report.",
+    "Summarise the CCR inspection findings as a Word document",
+    "Turn the CCR inspection report into a Word approval note",
+    "Put the MFI comparison in an Excel sheet",
+    "Compare the four grades in a slide deck",
+])
+def test_a_named_output_format_is_gated_whatever_the_verb(request_text):
+    assert _classify(request_text) == "file write"
+
+
+@_pytest.mark.parametrize("request_text", [
+    "Summarise the SOP",
+    "What is in the PDF report?",
+    "Compare the MFI values in the Excel sheet",
+    "Describe the process shown in the P&ID",
+])
+def test_reads_stay_ungated(request_text):
+    assert _classify(request_text) is None

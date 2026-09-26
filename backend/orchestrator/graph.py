@@ -158,6 +158,15 @@ _WRITE_ACTION_PATTERNS = [
 ]
 _COMPILED_WRITE_ACTIONS = [(re.compile(p, re.I), label) for p, label in _WRITE_ACTION_PATTERNS]
 
+# "into a 10-20 page PDF report", "as a Word document", "in an Excel sheet":
+# a new file of that format is the destination. "in THE Excel sheet" reads
+# from an existing one, so the article must be a/an.
+_FORMAT_DESTINATION = re.compile(
+    r"\b(?:into|as|in|to)\s+(?:a|an)\s+(?:[\w-]+\s+){0,5}?"
+    r"(?:pdf|word|docx|excel|xlsx|spreadsheet|powerpoint|pptx|deck|slide\s*deck|presentation)\b",
+    re.I,
+)
+
 
 def classify_action_request(msg: str) -> str | None:
     """The kind of gated action this message commands, or None.
@@ -172,6 +181,15 @@ def classify_action_request(msg: str) -> str | None:
     # A question is a request for information, not an instruction to act.
     if text.endswith("?"):
         return None
+    # A FILE FORMAT NAMED AS THE DESTINATION is a file write whatever verb
+    # opens the request. Measured through the chat UI: "Summarise the Cyber
+    # Security book into a 10 to 20 page PDF report" hit the "summar" read
+    # exemption below, was answered in chat, and no PDF was ever made --
+    # likewise "Turn the CCR report into a Word approval note" and "Put
+    # the MFI comparison in an Excel sheet". This runs before that
+    # exemption, which is for reads.
+    if _FORMAT_DESTINATION.search(text):
+        return "file write"
     if re.match(
         r"^(what|why|how|when|where|which|who|can you|could you|should we|"
         r"would you|is it|are there|do we|does the|explain|tell me about|"
