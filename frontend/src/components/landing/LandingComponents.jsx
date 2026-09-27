@@ -95,10 +95,10 @@ export function SuggestedActions({ onQuery, onRoute, disabled }) {
 }
 
 function statusTone(value, positiveValues = []) {
-  if (!value || value === 'CHECKING') return 'pending'
+  if (!value || value === 'CHECKING') return 'muted'
   if (positiveValues.some((positive) => value.startsWith(positive))) return 'ready'
-  if (value.includes('UNAVAILABLE') || value.includes('OFFLINE') || value.includes('DETECTED')) return 'attention'
-  return 'pending'
+  if (value.includes('DETECTED')) return 'attention'
+  return 'muted'
 }
 
 export function SystemStatus({ status }) {
@@ -107,7 +107,7 @@ export function SystemStatus({ status }) {
     { label: 'KNOWLEDGE BASE', value: status.knowledge, positive: ['READY'] },
     { label: 'KNOWLEDGE GRAPH', value: status.graph, positive: ['CONNECTED', 'LOCAL SNAPSHOT'] },
     { label: 'LOCAL MODELS', value: status.models, positive: ['RUNTIME READY'] },
-    { label: 'NETWORK', value: status.network, positive: ['NO OUTBOUND'] },
+    { label: 'NETWORK', value: status.network, positive: ['ISOLATED'] },
   ]
 
   return (

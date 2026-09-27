@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { Moon, Sun } from 'lucide-react'
 import { HeroVisual } from '../components/landing/HeroVisual'
 import {
   AmbientBackground,
@@ -33,6 +34,13 @@ export function LandingPage() {
   const [query, setQuery] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [isLeaving, setIsLeaving] = useState(false)
+  const [theme, setTheme] = useState(() => {
+    try {
+      return window.localStorage.getItem('mrpl_landing_theme') === 'light' ? 'light' : 'dark'
+    } catch {
+      return 'dark'
+    }
+  })
   const [introVisible, setIntroVisible] = useState(() => {
     try {
       return window.localStorage.getItem(landingConfig.introStorageKey) !== '1'
@@ -51,6 +59,14 @@ export function LandingPage() {
       // The intro still works when browser storage is unavailable.
     }
   }, [introVisible])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('mrpl_landing_theme', theme)
+    } catch {
+      // The selected theme still applies for this page view.
+    }
+  }, [theme])
 
   useEffect(() => {
     let active = true
@@ -87,7 +103,7 @@ export function LandingPage() {
       }
       if (network.status === 'fulfilled') {
         next.network = network.value.is_air_gapped === true
-          ? 'NO OUTBOUND CONNECTIONS'
+          ? 'ISOLATED · NO OUTBOUND'
           : network.value.is_air_gapped === false
             ? 'CONNECTION DETECTED'
             : 'STATUS UNKNOWN'
@@ -124,7 +140,7 @@ export function LandingPage() {
   const awake = isFocused || query.length > 0 || isLeaving
 
   return (
-    <main className={`landing-page${awake ? ' is-active' : ''}${isLeaving ? ' is-leaving' : ''}`}>
+    <main className={`landing-page${awake ? ' is-active' : ''}${isLeaving ? ' is-leaving' : ''}`} data-theme={theme}>
       <AmbientBackground />
       <div className="landing-topline">
         <Link className="landing-brand" to="/" aria-label="MRPL sovereign intelligence home">
@@ -136,6 +152,16 @@ export function LandingPage() {
           <span>PRIVATE INSTANCE</span>
           <span className="landing-instance-divider" />
           <span>NETWORK MONITORED</span>
+          <button
+            className="landing-theme-toggle"
+            type="button"
+            onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-pressed={theme === 'light'}
+          >
+            {theme === 'dark' ? <Sun size={14} strokeWidth={1.6} /> : <Moon size={14} strokeWidth={1.6} />}
+          </button>
         </div>
       </div>
 
