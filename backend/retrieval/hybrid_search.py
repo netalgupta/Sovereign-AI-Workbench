@@ -27,7 +27,13 @@ class RetrievedChunk(BaseModel):
     score: float
 
 
-def rrf_fuse(store: VectorStore, query: str, top_k: int) -> dict[int, float]:
+def rrf_fuse(
+    store: VectorStore,
+    query: str,
+    top_k: int,
+    allowed_ids: set[int] | None = None,
+    query_embedding=None,
+) -> dict[int, float]:
     """Reciprocal Rank Fusion over the WHOLE corpus, not just each
     ranking's top-k. Returns {faiss_id: fused_score} for every faiss_id
     that appears in either ranking.
@@ -44,10 +50,24 @@ def rrf_fuse(store: VectorStore, query: str, top_k: int) -> dict[int, float]:
         return {}
 
     faiss_ids = [row[0] for row in all_rows]
+    if query_embedding is None:
+        query_embedding = embed_texts([query])[0]
 
-    # Dense: over-fetch by 2x before fusion, exact per CARD 09.
-    query_embedding = embed_texts([query])[0]
-    dense_hits = store.dense_search(query_embedding, top_k=min(top_k * 2, len(faiss_ids)))
+    # RANK WITHIN THE CHAT'S SOURCES when some are switched off.
+    #
+    # The filter used to run AFTER ranking: take the corpus-wide top k,
+    # then drop chunks from switched-off files. With 5 of 69 files on,
+    # most of those k slots belonged to files that were off, so the
+    # answer got 0-2 passages instead of the 5 best from the files the
+    # operator chose -- fewer sources on meant a WORSE answer. Now both
+    # rankings only ever contain allowed chunks. The flat index makes an
+    # exhaustive dense pass cheap (a few thousand inner products).
+    if allowed_ids is not None:
+        everything = store.dense_search(query_embedding, top_k=len(faiss_ids))
+        dense_hits = [hit for hit in everything if hit[0] in allowed_ids][: top_k * 2]
+    else:
+        # Dense: over-fetch by 2x before fusion, exact per CARD 09.
+        dense_hits = store.dense_search(query_embedding, top_k=min(top_k * 2, len(faiss_ids)))
     dense_rank = {faiss_id: rank for rank, (faiss_id, _score) in enumerate(dense_hits, start=1)}
 
     # Sparse: BM25Okapi over NORMALISED tokens, and a cached index.
@@ -69,7 +89,9 @@ def rrf_fuse(store: VectorStore, query: str, top_k: int) -> dict[int, float]:
         sparse_order = []
     else:
         sparse_order = sorted(
-            range(len(faiss_ids)), key=lambda i: bm25_scores[i], reverse=True
+            (i for i in range(len(faiss_ids)) if allowed_ids is None or faiss_ids[i] in allowed_ids),
+            key=lambda i: bm25_scores[i],
+            reverse=True,
         )
     sparse_rank = {faiss_ids[i]: rank for rank, i in enumerate(sparse_order, start=1)}
 

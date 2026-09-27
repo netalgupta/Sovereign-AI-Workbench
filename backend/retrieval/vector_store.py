@@ -157,6 +157,22 @@ class VectorStore:
             scores, ids = self.index.search(query, top_k)
             return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
 
+    def faiss_ids_for_documents(self, names) -> set[int]:
+        """Every chunk id belonging to the named documents (a chat's switched-on sources)."""
+        names = list(names)
+        if not names:
+            return set()
+        with self._rw:
+            ids: set[int] = set()
+            for start in range(0, len(names), 500):  # SQLite's bound-parameter limit
+                batch = names[start:start + 500]
+                cursor = self._conn.execute(
+                    f"SELECT faiss_id FROM chunks WHERE source_document IN ({','.join('?' * len(batch))})",
+                    batch,
+                )
+                ids.update(int(r[0]) for r in cursor.fetchall())
+            return ids
+
     def get_neighbours(
         self, source_document: str, chunk_index: int, window: int = 1
     ) -> list["StoredChunk"]:

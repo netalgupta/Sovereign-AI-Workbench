@@ -200,18 +200,45 @@ def retrieve_with_grounding_check(
     rows = store.all_chunk_texts()
     search_query = build_search_query(query, rows)
 
-    fused = rrf_fuse(store, search_query, top_k)
+    # The chat's switched-on sources, as chunk ids, BEFORE ranking (see
+    # rrf_fuse): the search is confined to them, so a chat with five
+    # files on gets the best passages from those five.
+    allowed = set(active_documents) if active_documents is not None else None
+    if allowed is not None and not allowed:
+        return GroundedRetrievalResult(
+            found=False,
+            chunks=[],
+            reason=(
+                "Every source is switched off in the Sources panel, so there "
+                "is nothing to search. Re-enable at least one document."
+            ),
+        )
+    allowed_ids = store.faiss_ids_for_documents(allowed) if allowed is not None else None
+
+    # Embedded once and shared with the fusion: it was computed twice per question.
+    query_embedding = embed_texts([search_query])[0]
+    fused = rrf_fuse(store, search_query, top_k, allowed_ids=allowed_ids, query_embedding=query_embedding)
     if not fused:
         return GroundedRetrievalResult(
-            found=False, chunks=[], reason="No documents in the corpus matched this query."
+            found=False,
+            chunks=[],
+            reason=(
+                "Nothing in the switched-on sources matched this query."
+                if allowed is not None
+                else "No documents in the corpus matched this query."
+            ),
         )
 
     # Confidence is measured on raw dense similarity, NOT on the fused
     # score — see CONFIDENCE_THRESHOLD's comment for why no function of
     # RRF output can express "nothing here is relevant". bge vectors are
     # L2-normalized, so the stored inner product IS cosine similarity.
-    query_embedding = embed_texts([search_query])[0]
-    dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
+    # With a source filter, only the switched-on files' similarity counts:
+    # a switched-off document must not be what admits the answer.
+    if allowed_ids is not None:
+        dense_hits = [h for h in store.dense_search(query_embedding, top_k=len(rows)) if h[0] in allowed_ids][:top_k]
+    else:
+        dense_hits = store.dense_search(query_embedding, top_k=min(top_k, len(fused)))
     best_similarity = max((score for _fid, score in dense_hits), default=0.0)
 
     # EXCLUDED SOURCES ARE EXCLUDED, not merely hidden.
@@ -233,18 +260,6 @@ def retrieve_with_grounding_check(
     # list, which means "the user switched everything off". Collapsing
     # those two would turn a deliberate exclusion into a silent
     # search-everything.
-    allowed = set(active_documents) if active_documents is not None else None
-
-    if allowed is not None and not allowed:
-        return GroundedRetrievalResult(
-            found=False,
-            chunks=[],
-            reason=(
-                "Every source is switched off in the Sources panel, so there "
-                "is nothing to search. Re-enable at least one document."
-            ),
-        )
-
     threshold = confidence_threshold()
 
     # THE GATE IS HYBRID, because the retriever is.

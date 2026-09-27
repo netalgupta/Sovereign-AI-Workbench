@@ -278,6 +278,22 @@ body {
   border-radius: var(--radius-xs);
 }
 
+/* ── Chat composer: ONE surface ─────────────────────────────────────────────
+   The global ring above drew an orange box around the textarea INSIDE the
+   composer's own border -- a box within a box, with the text pressed to its
+   edge. The composer shows focus as a whole instead: accent border and a
+   soft halo. Only this field loses its ring; every other control keeps it. */
+#chat-composer-input:focus-visible {
+  outline: none;
+}
+.composer-shell {
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-input-border)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent), var(--shadow-md) !important;
+}
+
 /* ── Selection ────────────────────────────────────────────────────────────── */
 ::selection {
   background: var(--color-accent-tint);

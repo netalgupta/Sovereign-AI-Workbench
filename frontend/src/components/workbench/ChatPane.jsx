@@ -1104,7 +1104,7 @@ export function ChatPane() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 2 }}
               transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-              className={`relative flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-[var(--shadow-md)] ${
+              className={`composer-shell relative flex items-end gap-3 px-4 py-3 rounded-xl transition-fast shadow-[var(--shadow-md)] ${
                 isCodeOrMarkdown ? 'ring-1 ring-[var(--color-accent-border)]' : ''
               }`}
               style={{

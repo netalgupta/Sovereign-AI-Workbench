@@ -164,3 +164,39 @@ def test_nothing_is_named_when_the_best_match_is_enabled_or_no_filter(monkeypatc
     assert G.switched_off_matches(object(), "q", 5, ["README.md"]) == []
     assert G.switched_off_matches(object(), "q", 5, None) == []
     assert G.switched_off_note([]) == ""
+
+
+# ── ranking happens WITHIN the switched-on sources ─────────────────────────
+
+def test_a_chat_with_few_sources_on_gets_the_best_passages_from_them():
+    """The filter ran after a corpus-wide top-k: with a few files on, most
+    of the k slots went to switched-off files and were thrown away, so
+    fewer sources on meant FEWER passages in the answer."""
+    import numpy as np
+
+    from backend.ingestion.embeddings import embed_texts
+
+    texts = []
+    # six near-duplicate hydrocracker chunks in a switched-off document ...
+    for i in range(6):
+        texts.append(("Hydrocracker_SOP_old.pdf", i,
+                      f"Hydrocracker catalyst changeout step {i}: isolate the reactor and purge with nitrogen."))
+    # ... and three weaker but relevant ones in the only switched-on document
+    for i in range(3):
+        texts.append(("Hydrocracker_Notes.pdf", i,
+                      f"Notes {i}: hydrocracker catalyst changeout needs reactor isolation and a permit."))
+    chunks = [
+        IngestedChunk(text=t, metadata=ChunkMetadata(source_document=d, document_type="pdf", page_number=1,
+                                                     chunk_index=i, ingestion_date="2026-01-01"))
+        for d, i, t in texts
+    ]
+    emb = np.asarray(embed_texts([c.text for c in chunks]), dtype="float32")
+    store = VectorStore(dim=emb.shape[1])
+    store.add_chunks(chunks, emb)
+
+    result = retrieve_with_grounding_check(store, "hydrocracker catalyst changeout procedure", top_k=3,
+                                           active_documents=["Hydrocracker_Notes.pdf"])
+    assert result.found
+    docs = [c.source_document for c in result.chunks]
+    assert set(docs) == {"Hydrocracker_Notes.pdf"}
+    assert len(docs) == 3  # all three, not whatever survived a corpus-wide top 3
