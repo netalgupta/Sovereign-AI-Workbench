@@ -164,8 +164,11 @@ _SYSTEM_PROMPT = (
     "catalyst life are RECORDED IN DOCUMENTS. They are not computed from "
     "physics, so never reach for a property-lookup tool to find them.\n\n"
     "TOOL DISAMBIGUATION & DOCUMENT CREATION RULES:\n"
-    "- If asked to build, draft, create, or generate a spreadsheet, Excel file, "
-    "comparison table, matrix, or .xlsx file, or if the request specifies an output "
+    "- A FILE TOOL (draft_xlsx, draft_docx, generate_pdf) IS ONLY FOR A REQUEST THAT ASKS "
+    "FOR A FILE. 'Compare X and Y', 'total them', 'list the grades' ask for an answer: "
+    "search, use the calculation tool, and answer in chat. Never create a file nobody asked for.\n"
+    "- If asked to build, draft, create, or generate a spreadsheet, Excel file "
+    "or .xlsx file, or if the request specifies an output "
     "filename ending in .xlsx, you MUST call draft_xlsx with title, sheets (headers, "
     "rows with sources or marked unsourced, live Excel formulas), and output_path "
     "(e.g. \"outputs/filename.xlsx\").\n"
@@ -177,8 +180,8 @@ _SYSTEM_PROMPT = (
     "(e.g. \"outputs/filename.pdf\").\n"
     "- An explicit filename ending in .xlsx is a HARD SIGNAL to call draft_xlsx.\n"
     "- An explicit filename ending in .pdf is a HARD SIGNAL to call generate_pdf.\n"
-    "- INSUFFICIENT OR MISSING SOURCE DATA IS NOT A REASON TO SKIP CALLING THE TOOL OR REFUSE THE REQUEST. "
-    "You MUST ALWAYS call draft_xlsx to generate the requested file structure. "
+    "- WHEN A SPREADSHEET WAS ASKED FOR, missing source data is not a reason to skip it: "
+    "call draft_xlsx for the requested file structure. "
     "For any requested values or cells that cannot be found in the sources, leave the cell value empty "
     "and mark it unsourced (is_unsourced: true). NEVER fabricate, guess, infer, or invent numeric figures "
     "(such as MFI values, flow rates, temperatures) to fill cells.\n\n"
@@ -402,8 +405,10 @@ def run_agent_loop(
                                "status": "done"|"failed", "seconds": float}
         {"type": "approval_required", "id": str, "name": str,
                                "arguments": dict, "effect": str}
-        {"type": "done",       "reply": str, "tool_calls": int,
-                               "iterations": int, "seconds": float}
+        {"type": "llm_call",   "iteration": int, "model": str, "prompt_tokens": int|None,
+                               "output_tokens": int|None, "seconds": float, "t_ms": int}
+        {"type": "done",       "reply": str, "tool_calls": int, "iterations": int,
+                               "seconds": float, "usage": {prompt_tokens, output_tokens, llm_calls}}
         {"type": "error",      "message": str}
 
     Yields rather than returns so a caller can stream. Callers that just
@@ -447,6 +452,9 @@ def run_agent_loop(
 
     final_reply_chunks: list[str] = []
     tool_call_count = 0
+    # Per-turn model usage, for the agent map: what each model call read and
+    # wrote, measured by Ollama itself (its final frame carries the counts).
+    usage = {"prompt_tokens": 0, "output_tokens": 0, "llm_calls": 0}
 
     seen_searches: dict[str, int] = {}
     tools_used: set[str] = set()
@@ -456,9 +464,12 @@ def run_agent_loop(
         tool_calls: list[dict] = []
 
         t_llm_start = time.perf_counter()
+        llm_stats: dict = {}
         try:
             for frame in _stream_once(model, messages, tools, timeout=DEFAULT_TIMEOUT):
                 message = frame.get("message") or {}
+                if frame.get("done"):
+                    llm_stats = frame
 
                 chunk = message.get("content") or ""
                 if chunk:
@@ -471,6 +482,21 @@ def run_agent_loop(
                     break
             t_llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
             T.kv(f"iteration {iteration} step: llm_call (ms)", t_llm_ms)
+            prompt_tokens = llm_stats.get("prompt_eval_count")
+            output_tokens = llm_stats.get("eval_count")
+            usage["llm_calls"] += 1
+            usage["prompt_tokens"] += prompt_tokens or 0
+            usage["output_tokens"] += output_tokens or 0
+            yield {
+                "type": "llm_call",
+                "iteration": iteration,
+                "model": model,
+                # None when Ollama did not report them -- never estimated.
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "seconds": round(t_llm_ms / 1000, 2),
+                "t_ms": round((time.perf_counter() - started) * 1000),
+            }
         except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as exc:
             t_llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
             T.error(f"iteration {iteration} step: llm_call TIMEOUT after {t_llm_ms}ms: {exc}")
@@ -589,6 +615,7 @@ def run_agent_loop(
                     "tool_calls": tool_call_count,
                     "iterations": iteration,
                     "seconds": round(time.perf_counter() - started, 2),
+                    "usage": usage,
                     "awaiting_approval": True,
                 }
                 return
@@ -734,6 +761,7 @@ def run_agent_loop(
         "tool_calls": tool_call_count,
         "iterations": iteration,
         "seconds": round(time.perf_counter() - started, 2),
+        "usage": usage,
         "awaiting_approval": False,
     }
 
@@ -1357,6 +1385,9 @@ def _run_direct(
     from backend.api.state import get_state
     from backend.retrieval.generation import generate_grounded_answer
 
+    from backend.models import ollama_client as _oc
+
+    _oc.last_call.stats = None
     try:
         store, _ = get_state().ensure_corpus()
         answer = generate_grounded_answer(
@@ -1394,6 +1425,13 @@ def _run_direct(
         "status": "done",
         "seconds": round(time.perf_counter() - started, 2),
     }
+
+    # The model call inside generate_grounded_answer, for the agent map. A
+    # refusal makes none, and then none is reported.
+    stats = getattr(_oc.last_call, "stats", None)
+    if stats:
+        yield {"type": "llm_call", "iteration": 1, **stats,
+               "t_ms": round((time.perf_counter() - started) * 1000)}
 
     reply = answer.answer_text
     yield {"type": "text_delta", "text": reply}

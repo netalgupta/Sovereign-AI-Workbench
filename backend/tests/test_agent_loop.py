@@ -158,3 +158,33 @@ def test_the_grounded_prompt_fits_the_context_window_with_headroom():
         f"silently removes the grounding instructions and the first sources. "
         f"Raise WORKBENCH_GEN_CTX or retrieve fewer chunks."
     )
+
+
+# ── the agent map: every model call reports what it read and wrote ─────────
+
+def test_each_model_call_reports_its_tokens_and_the_turn_totals_them(monkeypatch):
+    from backend.orchestrator import agent_loop as AL
+
+    def fake_stream(model, messages, tools, timeout=90):
+        yield {"message": {"content": "The answer is in the SOP."}, "done": False}
+        yield {"message": {}, "done": True, "prompt_eval_count": 1866, "eval_count": 202}
+
+    monkeypatch.setattr(AL, "_stream_once", fake_stream)
+    events = list(AL.run_agent_loop("What does SOP-114 require?"))
+    calls = [e for e in events if e["type"] == "llm_call"]
+    assert len(calls) == 1
+    assert calls[0]["prompt_tokens"] == 1866 and calls[0]["output_tokens"] == 202
+    assert calls[0]["model"] and calls[0]["seconds"] >= 0 and calls[0]["t_ms"] >= 0
+    done = [e for e in events if e["type"] == "done"][-1]
+    assert done["usage"] == {"prompt_tokens": 1866, "output_tokens": 202, "llm_calls": 1}
+
+
+def test_counts_ollama_did_not_report_are_absent_not_estimated(monkeypatch):
+    from backend.orchestrator import agent_loop as AL
+
+    def fake_stream(model, messages, tools, timeout=90):
+        yield {"message": {"content": "ok"}, "done": True}
+
+    monkeypatch.setattr(AL, "_stream_once", fake_stream)
+    calls = [e for e in AL.run_agent_loop("hello there, what is PSA?") if e["type"] == "llm_call"]
+    assert calls and calls[0]["prompt_tokens"] is None and calls[0]["output_tokens"] is None

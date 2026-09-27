@@ -77,6 +77,7 @@ def verify_models_available(
 # already requires.
 # ---------------------------------------------------------------------
 import os
+import threading
 
 # CHECKED, NOT TRUSTED. Setting OLLAMA_HOST to a remote address used to
 # send every model call in the product off the premises -- silently, no
@@ -219,6 +220,12 @@ def short_prompt_options() -> dict:
     return {"num_gpu": DEFAULT_NUM_GPU, "num_ctx": SHORT_PROMPT_NUM_CTX}
 
 
+# What Ollama reported for the most recent generate() on THIS thread, for
+# callers that report usage (the agent map) without threading it through
+# every signature. Reset it before a call you intend to read.
+last_call = threading.local()
+
+
 def generate(
     model_name: str,
     prompt: str,
@@ -258,4 +265,11 @@ def generate(
         timeout=timeout or DEFAULT_TIMEOUT,
     )
     response.raise_for_status()
-    return response.json()["response"]
+    data = response.json()
+    last_call.stats = {
+        "model": model_name,
+        "prompt_tokens": data.get("prompt_eval_count"),
+        "output_tokens": data.get("eval_count"),
+        "seconds": round((data.get("total_duration") or 0) / 1e9, 2),
+    }
+    return data["response"]

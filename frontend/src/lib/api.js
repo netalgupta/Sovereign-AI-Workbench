@@ -245,6 +245,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
     onThought,
     onTextDelta,
     onDeckJob,
+    onLlmCall,
     onApprovalRequired,
     onDone,
     onError,
@@ -334,6 +335,9 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
                     break
                   case 'text_delta':
                     onTextDelta?.(event.text || '')
+                    break
+                  case 'llm_call':
+                    onLlmCall?.(event)
                     break
                   case 'deck_job':
                     onDeckJob?.(event)

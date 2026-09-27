@@ -303,6 +303,22 @@ export const useChatStore = create((set, get) => ({
   },
 
   /**
+   * Record one model call (the agent map): model, tokens Ollama reported,
+   * duration. Counts Ollama did not report stay null, never estimated.
+   * @param {string} messageId
+   * @param {object} callEvent
+   */
+  addLlmCall: (messageId, callEvent) => {
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId) return m
+        const calls = Array.isArray(m.llmCalls) ? m.llmCalls : []
+        return { ...m, llmCalls: [...calls, { ...callEvent, receivedAt: Date.now() }] }
+      }),
+    }))
+  },
+
+  /**
    * Append a thought or process reasoning event to a message's trace.
    * @param {string} messageId
    * @param {string} thoughtText

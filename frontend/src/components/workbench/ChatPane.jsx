@@ -45,6 +45,7 @@ import { MessageBubble } from '../chat/MessageBubble'
 import { NetworkMonitorBar } from '../../integrations/network-monitor'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
 import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
+import { AgentMapButton } from '../../integrations/agent-map/AgentMap'
 
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
@@ -80,6 +81,7 @@ export function ChatPane() {
   const addMessage = useChatStore((s) => s.addMessage)
   const updateMessage = useChatStore((s) => s.updateMessage)
   const addToolCallEvent = useChatStore((s) => s.addToolCallEvent)
+  const addLlmCall = useChatStore((s) => s.addLlmCall)
   const addThoughtEvent = useChatStore((s) => s.addThoughtEvent)
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
   const finishStreaming = useChatStore((s) => s.finishStreaming)
@@ -844,8 +846,9 @@ export function ChatPane() {
           updateMessage(msgId, { memory: memEv })
         },
         onRoute: (routeEv) => {
-          updateMessage(msgId, { route: routeEv })
+          updateMessage(msgId, { route: routeEv, startedAt: startTime })
         },
+        onLlmCall: (callEv) => addLlmCall(msgId, callEv),
         onToolCall: (call) => {
           // Mark the plan step for this tool as running when the call starts.
           // We match by tool name → assigned_agent heuristic: any step
@@ -863,6 +866,7 @@ export function ChatPane() {
             input_params: call.arguments,
             reasoning: call.reasoning,
             status: 'running',
+            startedAt: Date.now(),
           })
         },
         onToolResult: (resEv) => {
@@ -878,6 +882,7 @@ export function ChatPane() {
             output: resEv.output,
             status: resEv.status || 'done',
             seconds: resEv.seconds,
+            endedAt: Date.now(),
           })
         },
         onThought: (thoughtEv) => {
@@ -926,6 +931,8 @@ export function ChatPane() {
             citations: normCitations,
             plan: doneEv.plan || [],
             verification: doneEv.verification || null,
+            usage: doneEv.usage || null,
+            endedAt: Date.now(),
             elapsedSeconds:
               doneEv.seconds ??
               Number(((Date.now() - startTime) / 1000).toFixed(1)),
@@ -1126,6 +1133,8 @@ export function ChatPane() {
               </Link>
             )
           })()}
+          {/* Live agent map beside the Plan DAG (integrations/agent-map). */}
+          <AgentMapButton />
 
           {/* Dedicated Live Sockets Telemetry Button (Relocated from bottom strip) */}
           <Link
