@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { chatPath } from '../lib/nav'
 import {
   ArrowLeft,
   GitBranch,
@@ -14,7 +16,20 @@ import { PlanGraphView } from '../components/plan/PlanGraphView'
 
 export function PlanStubPage() {
   const { sessionId } = useParams()
-  const plan = useChatStore((s) => s.plan) || []
+  // /plan/<id> is that chat's plan: open the chat it names.
+  const openSession = useChatStore((s) => s.openSession)
+  const currentSessionId = useChatStore((s) => s.sessionId)
+  useEffect(() => {
+    if (sessionId) openSession(sessionId)
+  }, [sessionId, openSession])
+  // The running turn's plan, else the latest finished turn's (a refresh
+  // clears the live one; the chat keeps each turn's plan).
+  const livePlan = useChatStore((s) => s.plan)
+  const messages = useChatStore((s) => s.messages)
+  const plan =
+    livePlan && livePlan.length
+      ? livePlan
+      : [...(messages || [])].reverse().find((m) => m.role === 'assistant' && m.plan?.length)?.plan || []
 
   const hasLivePlan = plan.length > 0
   const doneCount = plan.filter((s) => s.status === 'done').length
@@ -37,14 +52,14 @@ export function PlanStubPage() {
         {/* Left: Back Link & Breadcrumbs */}
         <div className="flex items-center gap-3">
           <Link
-            to="/workbench"
+            to={chatPath(sessionId || currentSessionId)}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
             style={{
               background: 'var(--color-overlay)',
               border: '1px solid var(--color-border)',
               color: 'var(--color-text)',
             }}
-            title="Return to workbench conversation"
+            title="Back to this plan's chat"
           >
             <ArrowLeft size={13} strokeWidth={2.2} />
             <span>Workbench</span>

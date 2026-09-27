@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { motion, useDragControls } from 'framer-motion'
+import { motion, useDragControls, useMotionValue } from 'framer-motion'
 import {
   GripVertical,
   Maximize2,
@@ -63,6 +63,11 @@ export function WorkspacePanel({
   } = useWorkspaceStore()
 
   const dragControls = useDragControls()
+  // The drag's own offset. Reset to 0 once the new position is saved:
+  // leaving it applied on top of the new left/top made the panel jump by
+  // the whole drag distance when it was let go.
+  const dragX = useMotionValue(0)
+  const dragY = useMotionValue(0)
   const [isDragging, setIsDragging] = useState(false)
   const [isHeaderHovered, setIsHeaderHovered] = useState(false)
 
@@ -283,7 +288,7 @@ export function WorkspacePanel({
 
   return (
     <motion.div
-      layout={!isFocused}
+      layout={!isFocused && !isFloating}
       onMouseDown={() => bringToFront(id)}
       drag={isFloating && !isPinned && !isFocused}
       dragControls={dragControls}
@@ -292,12 +297,16 @@ export function WorkspacePanel({
       onDragStart={() => setIsDragging(true)}
       onDragEnd={(_, info) => {
         setIsDragging(false)
-        if (panel.floatingPos) {
-          updatePanelPosition(id, {
-            x: Math.max(10, panel.floatingPos.x + info.offset.x),
-            y: Math.max(60, panel.floatingPos.y + info.offset.y),
-          })
-        }
+        const from = panel.floatingPos || { x: 0, y: 0 }
+        const maxX = (typeof window !== 'undefined' ? window.innerWidth : 1600) - 160
+        const maxY = (typeof window !== 'undefined' ? window.innerHeight : 900) - 60
+        updatePanelPosition(id, {
+          // kept on screen: a panel dragged off the edge cannot be grabbed back
+          x: Math.min(maxX, Math.max(10, from.x + info.offset.x)),
+          y: Math.min(maxY, Math.max(60, from.y + info.offset.y)),
+        })
+        dragX.set(0)
+        dragY.set(0)
       }}
       initial={false}
       animate={{
@@ -308,8 +317,9 @@ export function WorkspacePanel({
       style={{
         pointerEvents: hasAnyFocus ? 'none' : 'auto',
         ...computedStyle,
+        ...(isFloating && !isFocused ? { x: dragX, y: dragY } : {}),
       }}
-      className={`flex flex-col select-none ${
+      className={`flex flex-col ${
         id === 'chat' || (id === 'sources' && !isFloating)
           ? 'h-full w-full'
           : 'rounded-xl overflow-hidden border'
@@ -326,7 +336,14 @@ export function WorkspacePanel({
         <div
           onMouseEnter={() => setIsHeaderHovered(true)}
           onMouseLeave={() => setIsHeaderHovered(false)}
-          className={`flex items-center justify-between px-3 py-2 flex-shrink-0 relative group ${
+          // The whole header is the handle (it was a 13 px grip icon);
+          // its own buttons keep their clicks.
+          onPointerDown={(e) => {
+            if (isFloating && !isPinned && !isFocused && !e.target.closest('button, a, input, select')) {
+              dragControls.start(e)
+            }
+          }}
+          className={`flex items-center justify-between px-3 py-2 flex-shrink-0 relative group select-none ${
             id === 'sources' && !isFloating ? '' : 'border-b'
           }`}
           style={{
@@ -339,7 +356,6 @@ export function WorkspacePanel({
           <div className="flex items-center gap-2 min-w-0">
             {isFloating && !isPinned && (
               <div
-                onPointerDown={(e) => dragControls.start(e)}
                 className="p-1 -ml-1 text-[var(--color-text-faint)] hover:text-[var(--color-text)] cursor-grab active:cursor-grabbing rounded transition-colors"
                 title="Drag panel"
               >

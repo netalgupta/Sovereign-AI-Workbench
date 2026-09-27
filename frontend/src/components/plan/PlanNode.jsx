@@ -67,6 +67,15 @@ const STATUS_CONFIG = {
     badgeText: 'var(--color-text-faint)',
     pulse: false,
   },
+  // Planned, but nothing needed to run for it (lib/planProgress.js).
+  skipped: {
+    label: 'Not needed',
+    icon: Clock,
+    borderColor: 'var(--color-border)',
+    badgeBg: 'var(--color-overlay)',
+    badgeText: 'var(--color-text-faint)',
+    pulse: false,
+  },
   failed: {
     label: 'Failed',
     icon: AlertCircle,

@@ -64,6 +64,25 @@ export const DEFAULT_PANELS = {
     dockPosition: 'right',
     floatingPos: { x: 920, y: 72 },
   },
+  // Plan DAG + agent map in one floating, draggable panel beside the chat.
+  // A new id (not 'plan'): a saved layout overrides a panel's defaults, and
+  // the old 'plan' entry was pinned and docked.
+  orchestration: {
+    id: 'orchestration',
+    title: 'Plan & Agents',
+    category: 'orchestration',
+    isOpen: false,
+    isCollapsed: false,
+    isPinned: false,
+    isFocused: false,
+    width: 560,
+    minWidth: 380,
+    height: 560,
+    zIndex: 12,
+    dockPosition: 'floating',
+    floatingPos: { x: typeof window !== 'undefined' ? Math.max(380, window.innerWidth - 600) : 860, y: 76 },
+    tab: 'plan',
+  },
   graph: {
     id: 'graph',
     title: 'Knowledge Graph',
@@ -268,6 +287,16 @@ export const useWorkspaceStore = create((set, get) => ({
         ...state.panels,
         [id]: { ...p, isPinned },
       }
+      saveLayout(updated)
+      return { panels: updated }
+    })
+  },
+
+  setPanelTab: (id, tab) => {
+    set((state) => {
+      const p = state.panels[id]
+      if (!p) return state
+      const updated = { ...state.panels, [id]: { ...p, tab } }
       saveLayout(updated)
       return { panels: updated }
     })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { chatPath } from '../../lib/nav'
+import { useWorkspaceStore } from '../../store/workspaceStore'
 import {
   ShieldCheck,
   ShieldAlert,
@@ -42,6 +43,23 @@ export function TopBar({ onOpenSearch }) {
   const activeTab = useChatStore((s) => s.activeTab)
   const currentSessionId = useChatStore((s) => s.sessionId)
   const plan = useChatStore((s) => s.plan) || []
+  const planDone = plan.filter((s) => s.status === 'done').length
+  const planRunning = plan.some((s) => s.status === 'running')
+  // Both buttons open ONE floating panel (Plan & Agents) on their tab; the
+  // same button again closes it.
+  const orchestration = useWorkspaceStore((s) => s.panels.orchestration)
+  const orchestrationOpen = Boolean(orchestration?.isOpen)
+  const orchestrationTab = orchestration?.tab || 'plan'
+  const showOrchestration = (tab) => {
+    const ws = useWorkspaceStore.getState()
+    if (orchestrationOpen && orchestrationTab === tab) {
+      ws.closePanel('orchestration')
+      return
+    }
+    ws.setPanelTab('orchestration', tab)
+    if (!orchestrationOpen) ws.openPanel('orchestration')
+    ws.bringToFront?.('orchestration')
+  }
   const doneCount = plan.filter((s) => s.status === 'done').length
   const runningStep = plan.find((s) => s.status === 'running')
 
@@ -149,6 +167,65 @@ export function TopBar({ onOpenSearch }) {
 
       {/* ── Right: Navigation Links, Theme Toggle, Air-Gap, Operator ── */}
       <div className="flex items-center gap-1.5 sm:gap-2">
+
+        {/* The Plan DAG and the agent map, for the chat on screen. They sat in
+            the chat header, which the revamp moved into this bar -- and they
+            did not come with it. */}
+        {location.pathname.startsWith('/chat/') && (
+          <>
+            <button
+              type="button"
+              onClick={() => showOrchestration('plan')}
+              aria-pressed={orchestrationOpen && orchestrationTab === 'plan'}
+              className="group flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
+              style={{
+                border: '1px solid var(--color-border)',
+                background: orchestrationOpen && orchestrationTab === 'plan' ? 'var(--color-accent-tint)' : 'transparent',
+              }}
+              title={plan.length ? `Plan DAG: step ${planDone + (planRunning ? 1 : 0)} of ${plan.length}` : 'Plan DAG: the plan of the latest turn, as a graph'}
+            >
+              <GitBranch size={13} strokeWidth={2.2} style={{ color: 'var(--color-accent)' }} className="group-hover:scale-110 transition-transform" />
+              <span className="text-[11px] font-semibold" style={{ color: 'var(--color-text)' }}>Plan DAG</span>
+              {plan.length > 0 && (
+                <>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                    {planDone + (planRunning ? 1 : 0)}/{plan.length}
+                  </span>
+                  <span className="flex items-center gap-0.5 w-10">
+                    {plan.map((step, idx) => (
+                      <span
+                        key={step.id || idx}
+                        className={`h-1 flex-1 rounded-sm ${step.status === 'running' ? 'animate-pulse' : ''}`}
+                        style={{
+                          background:
+                            step.status === 'done' ? 'var(--color-success)'
+                              : step.status === 'running' ? 'var(--color-accent)'
+                                : step.status === 'failed' ? 'var(--color-danger, #ef4444)'
+                                  : 'var(--color-border)',
+                        }}
+                      />
+                    ))}
+                  </span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => showOrchestration('agents')}
+              aria-pressed={orchestrationOpen && orchestrationTab === 'agents'}
+              title="Agent map: every model call, tool call and background job of this chat"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-fast hover:bg-[var(--color-surface-hover)]"
+              style={{
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-accent)',
+                background: orchestrationOpen && orchestrationTab === 'agents' ? 'var(--color-accent-tint)' : 'transparent',
+              }}
+            >
+              <Bot size={13} />
+              <span>Agent map</span>
+            </button>
+          </>
+        )}
 
         {/* Sources Button — Takes to Sources page */}
         <Link

@@ -21,6 +21,9 @@ import {
 } from 'lucide-react'
 import { WorkspaceCanvas } from '../components/spatial/WorkspaceCanvas'
 import { WorkspacePanel } from '../components/spatial/WorkspacePanel'
+import { PlanGraphView } from '../components/plan/PlanGraphView'
+import { AgentMapContent } from '../integrations/agent-map/AgentMap'
+import { Link } from 'react-router-dom'
 import { ChatPane } from '../components/workbench/ChatPane'
 import { SourceFileTree } from '../components/workbench/SourceFileTree'
 import { MinimalistCollapsedSourcesRail } from '../components/workbench/MinimalistCollapsedSourcesRail'
@@ -599,6 +602,76 @@ export function WorkbenchPage() {
     </WorkspacePanel>
   )
 
+  // ── Plan & Agents: the Plan DAG and the agent map in one floating panel ──
+  // Draggable by its header, beside the chat. The plan shown is the running
+  // turn's, else the latest finished turn's (kept with the chat).
+  const chatMessages = useChatStore((s) => s.messages)
+  const setPanelTab = useWorkspaceStore((s) => s.setPanelTab)
+  const shownPlan = plan.length
+    ? plan
+    : [...(chatMessages || [])].reverse().find((m) => m.role === 'assistant' && m.plan?.length)?.plan || []
+  const orchestrationTab = panels.orchestration?.tab || 'plan'
+  const orchestrationContent = panels.orchestration?.isOpen && (
+    <WorkspacePanel
+      id="orchestration"
+      title="Plan & Agents"
+      icon={Network}
+      badge={shownPlan.length ? `${shownPlan.filter((s) => s.status === 'done').length}/${shownPlan.length} steps` : 'No plan yet'}
+      badgeTone="accent"
+      isFloating={true}
+      style={{
+        left: panels.orchestration.floatingPos?.x ?? 860,
+        top: panels.orchestration.floatingPos?.y ?? 76,
+        width: panels.orchestration.width || 560,
+        height: panels.orchestration.height || 560,
+      }}
+    >
+      <div className="flex-1 h-full w-full flex flex-col min-h-0">
+        <div className="flex items-center gap-1 px-3 py-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
+          {[['plan', 'Plan DAG'], ['agents', 'Agent map']].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setPanelTab('orchestration', id)}
+              className="px-3 py-1 rounded-md text-[11px] font-semibold cursor-pointer transition-colors"
+              style={{
+                background: orchestrationTab === id ? 'var(--color-accent-tint)' : 'transparent',
+                color: orchestrationTab === id ? 'var(--color-accent)' : 'var(--color-text-muted)',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          {orchestrationTab === 'plan' && (
+            <Link
+              to={`/plan/${encodeURIComponent(chatSessionId)}`}
+              className="ml-auto text-[11px] font-medium hover:underline"
+              style={{ color: 'var(--color-text-muted)' }}
+              title="Open the Plan DAG full screen"
+            >
+              Full screen
+            </Link>
+          )}
+        </div>
+        <div className="flex-1 min-h-0 relative">
+          {orchestrationTab === 'plan' ? (
+            shownPlan.length ? (
+              <PlanGraphView plan={shownPlan} />
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-center px-8" style={{ color: 'var(--color-text-muted)' }}>
+                Ask something that needs several steps and its plan appears here as it runs.
+              </div>
+            )
+          ) : (
+            <div className="h-full overflow-auto">
+              <AgentMapContent compact />
+            </div>
+          )}
+        </div>
+      </div>
+    </WorkspacePanel>
+  )
+
   // ── 4. Floating Network Monitor Panel ──────────────────────────────────
   const monitorContent = panels.monitor?.isOpen && (
     <WorkspacePanel
@@ -627,6 +700,7 @@ export function WorkbenchPage() {
         sourcesContent={sourcesContent}
         chatContent={chatContent}
         graphContent={graphContent}
+        orchestrationContent={orchestrationContent}
         monitorContent={monitorContent}
       />
 

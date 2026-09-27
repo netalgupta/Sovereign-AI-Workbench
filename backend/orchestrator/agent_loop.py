@@ -288,6 +288,50 @@ _COMPUTATION_TOOLS = frozenset({
 })
 
 
+_WORD_OPS = (("divided by", "/"), ("times", "*"), ("plus", "+"), ("minus", "-"), ("×", "*"))
+_RESULT_SPLIT = re.compile(r"\s*(?:=|\bis\b|\bequals\b|\bgives\b|\btotals?\b|\bcomes to\b)\s*", re.I)
+
+
+def _split_stated_arithmetic(stated: str) -> tuple[str, float] | None:
+    """'11.2 - 3.4 = 7.8' -> ('11.2 - 3.4', 7.8); None when it cannot be read."""
+    parts = _RESULT_SPLIT.split(stated)
+    if len(parts) < 2:
+        return None
+    left, right = " ".join(parts[:-1]), parts[-1]
+    expr = left.lower()
+    for word, op in _WORD_OPS:
+        expr = expr.replace(word, op)
+    expr = re.sub(r"(?<=\d)\s*x\s*(?=\d)", " * ", expr)
+    if not re.fullmatch(r"[\d.\s+\-*/()]+", expr):
+        return None
+    try:
+        return " ".join(expr.split()), float(right)
+    except ValueError:
+        return None
+
+
+def _numeric_result(output) -> float | None:
+    """The number a computation tool returned, whatever shape its result has."""
+    for key in ("result", "numeric_value", "value", "result_magnitude"):
+        v = output.get(key) if isinstance(output, dict) else getattr(output, key, None)
+        try:
+            if v is not None:
+                return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _fmt_number(v: float) -> str:
+    return f"{v:.10g}"
+
+
+def _replace_result(stated: str, value: float) -> str:
+    """'11.2 - 3.4 = 7.9' -> '11.2 - 3.4 = 7.8' (the stated result swapped for the computed one)."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*$", stated)
+    return stated[: m.start(1)] + _fmt_number(value) if m else stated
+
+
 def _unverified_arithmetic(reply: str, tools_used: set[str]) -> list[str]:
     """Arithmetic the model stated without any tool having computed it.
 
@@ -751,26 +795,61 @@ def run_agent_loop(
 
     reply = "".join(final_reply_chunks).strip()
 
-    # HARD CONSTRAINT #3, checked on the way out.
+    # HARD CONSTRAINT #3, ENFORCED on the way out. A sum the model wrote
+    # ("11.2 - 3.4 = 7.8") with no computation tool in the turn used to get
+    # a note saying it was unverified. Now it is COMPUTED: each stated sum
+    # runs through evaluate_expression -- a real tool call, in the trace and
+    # the audit log -- and a result that differs is corrected in the answer.
     unverified = _unverified_arithmetic(reply, tools_used)
     if unverified:
-        T.warn(
-            "arithmetic stated without a computation tool: "
-            + "; ".join(unverified[:3])
-        )
-        reply += (
-            "\n\n> **Note:** the arithmetic above was written by the model "
-            "rather than computed by a tool. Values quoted from documents are "
-            "still cited; the calculation itself is unverified."
-        )
-        yield {
-            "type": "unverified_arithmetic",
-            "expressions": unverified,
-            "message": (
-                "The answer states a calculation that no computation tool "
-                "performed."
-            ),
-        }
+        T.warn("arithmetic stated without a computation tool: " + "; ".join(unverified[:3]))
+        from backend.tools.registry import call_tool
+
+        checked, corrected, failed = [], [], []
+        for n, stated in enumerate(unverified[:6], 1):
+            parsed = _split_stated_arithmetic(stated)
+            if parsed is None:
+                failed.append(stated)
+                continue
+            expression, claimed = parsed
+            call_id = f"arith-check-{n}"
+            yield {"type": "tool_call", "id": call_id, "name": "evaluate_expression",
+                   "arguments": {"expression": expression},
+                   "reasoning": "The answer stated this calculation; it is computed here, not taken on trust."}
+            started_check = time.perf_counter()
+            try:
+                result = call_tool("evaluate_expression", {"expression": expression})
+                value = _numeric_result(result)
+                status = "done" if value is not None else "failed"
+            except Exception as exc:  # noqa: BLE001 - reported as a failed check
+                result, value, status = {"error": f"{type(exc).__name__}: {exc}"}, None, "failed"
+            yield {"type": "tool_result", "id": call_id, "name": "evaluate_expression",
+                   "output": _jsonable(result), "status": status,
+                   "seconds": round(time.perf_counter() - started_check, 2)}
+            if value is None:
+                failed.append(stated)
+            elif abs(value - claimed) <= max(1e-9, abs(value) * 1e-6):
+                checked.append(f"{expression} = {_fmt_number(value)}")
+            else:
+                corrected.append((stated, expression, claimed, value))
+                fixed = _replace_result(stated, value)
+                reply = reply.replace(stated, fixed)
+        tools_used.add("evaluate_expression")
+        notes = []
+        if checked:
+            notes.append("Computed with evaluate_expression: " + "; ".join(checked) + ".")
+        for _stated, expression, claimed, value in corrected:
+            notes.append(f"The model wrote {_fmt_number(claimed)} for {expression}; "
+                         f"evaluate_expression computes **{_fmt_number(value)}**, which is used above.")
+        if failed:
+            notes.append("Not computed (could not be read as a calculation): " + "; ".join(failed) + ".")
+        reply += "\n\n> " + " ".join(notes)
+        if corrected or failed:
+            yield {
+                "type": "unverified_arithmetic",
+                "expressions": [c[0] for c in corrected] + failed,
+                "message": "A calculation in the answer was corrected, or could not be computed by a tool.",
+            }
 
     T.kv("tool calls", tool_call_count)
     T.kv("elapsed", f"{time.perf_counter() - started:.2f}s")

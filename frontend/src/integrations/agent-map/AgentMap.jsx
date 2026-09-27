@@ -195,7 +195,8 @@ function Detail({ node }) {
   )
 }
 
-export default function AgentMap({ onClose }) {
+/** The map itself: the modal and the Plan & Agents panel both show this. */
+export function AgentMapContent({ compact = false }) {
   const messages = useChatStore((s) => s.messages)
   const { jobs, error } = useJobs(true)
   const [selected, setSelected] = useState(null)
@@ -213,8 +214,59 @@ export default function AgentMap({ onClose }) {
     tokens: null,
     detail: j,
   }))
-  const count = (liveMap ? 1 + liveMap.steps.length : 0) + jobNodes.length
 
+  return (
+    <div className={`flex-1 grid min-h-0 ${compact ? 'grid-cols-1 overflow-auto' : 'md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]'}`}>
+      <div className={`${compact ? 'p-3' : 'p-5'} overflow-auto flex flex-col gap-5`}>
+        {!liveMap ? (
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            Nothing has run in this chat yet. Ask something and the work appears here as it happens.
+          </p>
+        ) : (
+          <div className={compact ? 'flex flex-col gap-2' : 'grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-x-6 items-start'}>
+            <div className={compact ? '' : 'sticky top-0'}>
+              <NodeCard node={liveMap.root} selected={selected?.key === 'root'} onSelect={setSelected} />
+            </div>
+            <div className={`flex flex-col gap-2 ${compact ? 'pl-3 border-l ml-2' : 'border-l pl-4'}`} style={{ borderColor: 'var(--color-border)' }}>
+              {liveMap.steps.length === 0 ? (
+                <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                  {liveMap.working ? 'Starting…' : 'Answered without a model call or a tool.'}
+                </p>
+              ) : (
+                liveMap.steps.map((s) => (
+                  <NodeCard key={s.key} node={s} selected={selected?.key === s.key} onSelect={setSelected} />
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)' }}>
+            Background jobs
+          </div>
+          {error ? (
+            <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{error}</p>
+          ) : jobNodes.length === 0 ? (
+            <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>None this session.</p>
+          ) : (
+            <div className="grid sm:grid-cols-2 gap-2">
+              {jobNodes.map((j) => (
+                <NodeCard key={j.key} node={j} selected={selected?.key === j.key} onSelect={setSelected} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className={`${compact ? 'p-3 border-t' : 'p-5 border-t md:border-t-0 md:border-l'} overflow-auto`} style={{ borderColor: 'var(--color-border)' }}>
+        <Detail node={selected && (selected.key === 'root' ? liveMap?.root : selected)} />
+      </div>
+    </div>
+  )
+}
+
+export default function AgentMap({ onClose }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose?.()
     window.addEventListener('keydown', onKey)
@@ -233,62 +285,13 @@ export default function AgentMap({ onClose }) {
         <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
           <div>
             <h2 className="text-sm font-bold" style={{ color: 'var(--color-text)' }}>Agent map</h2>
-            <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-              {count} {count === 1 ? 'node' : 'nodes'} · click one for its detail
-            </p>
+            <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>Every model call, tool call and background job of this chat · click one for its detail</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close agent map" className="p-1.5 rounded-md cursor-pointer hover:bg-[var(--color-surface-hover)]">
             <X size={16} style={{ color: 'var(--color-text-muted)' }} />
           </button>
         </div>
-
-        <div className="flex-1 grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] min-h-0">
-          <div className="p-5 overflow-auto flex flex-col gap-5">
-            {!liveMap ? (
-              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                Nothing has run in this chat yet. Ask something and the work appears here as it happens.
-              </p>
-            ) : (
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-x-6 items-start">
-                <div className="sticky top-0">
-                  <NodeCard node={liveMap.root} selected={selected?.key === 'root'} onSelect={setSelected} />
-                </div>
-                <div className="flex flex-col gap-2 border-l pl-4" style={{ borderColor: 'var(--color-border)' }}>
-                  {liveMap.steps.length === 0 ? (
-                    <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-                      {liveMap.working ? 'Starting…' : 'Answered without a model call or a tool.'}
-                    </p>
-                  ) : (
-                    liveMap.steps.map((s) => (
-                      <NodeCard key={s.key} node={s} selected={selected?.key === s.key} onSelect={setSelected} />
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)' }}>
-                Background jobs
-              </div>
-              {error ? (
-                <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{error}</p>
-              ) : jobNodes.length === 0 ? (
-                <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>None this session.</p>
-              ) : (
-                <div className="grid sm:grid-cols-2 gap-2">
-                  {jobNodes.map((j) => (
-                    <NodeCard key={j.key} node={j} selected={selected?.key === j.key} onSelect={setSelected} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="p-5 border-t md:border-t-0 md:border-l overflow-auto" style={{ borderColor: 'var(--color-border)' }}>
-            <Detail node={selected && (selected.key === 'root' ? liveMap?.root : selected)} />
-          </div>
-        </div>
+        <AgentMapContent />
       </div>
     </div>
   )

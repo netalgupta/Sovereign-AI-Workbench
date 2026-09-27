@@ -19,6 +19,7 @@ import { errorText } from '../lib/errorText'
 const SESSIONS_INDEX_KEY = 'sw_sessions_index'
 const SESSION_KEY = (id) => `sw_session_${id}`
 const MAX_STORED_SESSIONS = 50
+let saveTimer = null
 
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
@@ -52,19 +53,35 @@ function writeSessionsIndex(index) {
 
 /** Persist a session's messages. */
 function writeSessionMessages(id, messages) {
+  // Text-safe fields only (no base64 attachments). The turn's plan, trace
+  // and route are kept too: without them a reload emptied every "Reasoned
+  // for ..." block, the Plan DAG and the agent map of a finished chat.
+  const base = (m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    displayedContent: m.content, // restore as already-displayed
+    streaming: false,
+    citations: m.citations || [],
+    timestamp: m.timestamp,
+  })
+  const full = (m) => ({
+    ...base(m),
+    plan: m.plan || [],
+    route: m.route || null,
+    toolCallEvents: m.toolCallEvents || [],
+    verification: m.verification || null,
+    elapsedSeconds: m.elapsedSeconds ?? null,
+    userRequest: m.userRequest || '',
+  })
   try {
-    // Only store text-safe fields; skip huge base64 attachments
-    const safe = messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      displayedContent: m.content, // restore as already-displayed
-      streaming: false,
-      citations: m.citations || [],
-      timestamp: m.timestamp,
-    }))
-    localStorage.setItem(SESSION_KEY(id), JSON.stringify(safe))
-  } catch {}
+    localStorage.setItem(SESSION_KEY(id), JSON.stringify(messages.map(full)))
+  } catch {
+    // storage full: keep the conversation itself rather than nothing
+    try {
+      localStorage.setItem(SESSION_KEY(id), JSON.stringify(messages.map(base)))
+    } catch {}
+  }
 }
 
 /** Load a session's messages from localStorage. */
@@ -519,6 +536,10 @@ export const useChatStore = create((set, get) => ({
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, ...updates } : m)),
     }))
+    // The turn's plan, trace and route arrive in its LAST events, after the
+    // typewriter's save: saved again (debounced), or a reload lost them.
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => get()._saveSession(), 400)
   },
 
   /**

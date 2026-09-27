@@ -188,3 +188,27 @@ def test_counts_ollama_did_not_report_are_absent_not_estimated(monkeypatch):
     monkeypatch.setattr(AL, "_stream_once", fake_stream)
     calls = [e for e in AL.run_agent_loop("hello there, what is PSA?") if e["type"] == "llm_call"]
     assert calls and calls[0]["prompt_tokens"] is None and calls[0]["output_tokens"] is None
+
+
+# ── hard constraint #3: stated arithmetic is COMPUTED, not just flagged ────
+
+def test_a_stated_sum_is_read_as_expression_and_claimed_result():
+    from backend.orchestrator.agent_loop import _split_stated_arithmetic
+
+    assert _split_stated_arithmetic("11.2 - 3.4 = 7.8") == ("11.2 - 3.4", 7.8)
+    assert _split_stated_arithmetic("22 plus 16 is 38") == ("22 + 16", 38.0)
+    assert _split_stated_arithmetic("3 x 4 = 12") == ("3 * 4", 12.0)
+    assert _split_stated_arithmetic("the answer = 7") is None
+
+
+def test_a_wrong_stated_result_is_replaced_by_the_computed_one():
+    """Measured 27 Sep: 'compute the difference' was answered with an inline
+    11.2 - 3.4 = 7.8 and no computation tool -- labelled unverified, never
+    computed. Now the tool runs; a wrong result is corrected."""
+    from backend.orchestrator.agent_loop import _numeric_result, _replace_result
+    from backend.tools import catalog  # noqa: F401 - registers the tools
+    from backend.tools.registry import call_tool
+
+    value = _numeric_result(call_tool("evaluate_expression", {"expression": "11.2 - 3.4"}))
+    assert abs(value - 7.8) < 1e-9
+    assert _replace_result("11.2 - 3.4 = 7.9", value) == "11.2 - 3.4 = 7.8"

@@ -29,7 +29,7 @@ export function AppShell({ children }) {
 
   return (
     <div
-      className="flex flex-col h-screen w-screen overflow-hidden select-none"
+      className="flex flex-col h-screen w-screen overflow-hidden"
       style={{ background: 'var(--color-bg)', color: 'var(--color-text)' }}
     >
       {/* ── Top Bar ─────────────────────────────────────────────────── */}

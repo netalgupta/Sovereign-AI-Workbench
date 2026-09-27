@@ -278,6 +278,16 @@ body {
   border-radius: var(--radius-xs);
 }
 
+/* ── Text is selectable; controls are not ────────────────────────────────
+   The app shell was user-select:none, so nothing -- answers' traces,
+   memory, the agent map, viewer text, panel contents -- could be selected
+   or copied unless a component opted back in. Now text is selectable by
+   default and only controls opt out (dragging across a button should not
+   select its label). */
+button, [role='button'], [role='tab'], [role='switch'], summary, label {
+  user-select: none;
+}
+
 /* ── Chat composer: ONE surface ─────────────────────────────────────────────
    The global ring above drew an orange box around the textarea INSIDE the
    composer's own border -- a box within a box, with the text pressed to its

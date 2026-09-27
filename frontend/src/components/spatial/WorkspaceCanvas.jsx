@@ -19,6 +19,7 @@ export function WorkspaceCanvas({
   sourcesContent,
   chatContent,
   graphContent,
+  orchestrationContent,
   evidenceContent,
   monitorContent,
 }) {
@@ -166,6 +167,7 @@ export function WorkspaceCanvas({
 
         {/* 4. Floating Spatial Overlays (Graph, Evidence, Monitor, etc.) */}
         {graphContent}
+        {orchestrationContent}
         {evidenceContent}
         {monitorContent}
       </div>

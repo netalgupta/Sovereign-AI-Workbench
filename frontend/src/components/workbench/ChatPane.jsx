@@ -40,6 +40,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore, earlierChatsMessages } from '../../store/chatStore'
 import { collectPrompts, stepHistory } from '../../lib/promptHistory'
+import { startStep, finishStep, reconcilePlan } from '../../lib/planProgress'
 import { useIngestionStore } from '../../store/ingestionStore'
 import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool, readAttachmentText, addChatAttachment } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
@@ -89,7 +90,6 @@ export function ChatPane() {
   const sessionId = useChatStore((s) => s.sessionId)
   const plan = useChatStore((s) => s.plan) || []
   const setPlan = useChatStore((s) => s.setPlan)
-  const updatePlanStepStatus = useChatStore((s) => s.updatePlanStepStatus)
   const activeDocuments = useChatStore((s) => s.activeDocuments)
   const sourcesEnabled = useChatStore((s) => s.sourcesEnabled)
   const toggleSourcesEnabled = useChatStore((s) => s.toggleSourcesEnabled)
@@ -136,6 +136,8 @@ export function ChatPane() {
   const [temporaryAttachments, setTemporaryAttachments] = useState([])
   // Reads of attached documents in flight, by attachment id (see addFiles).
   const docReadsRef = useRef({})
+  // tool call id -> plan step id, for the turn in flight
+  const stepForCallRef = useRef({})
   const attachMenuRef = useRef(null)
   const docFileInputRef = useRef(null)
   const photoFileInputRef = useRef(null)
@@ -923,10 +925,15 @@ export function ChatPane() {
           // We match by tool name → assigned_agent heuristic: any step
           // whose step_id contains the tool name prefix, or the first pending
           // step if we cannot match exactly.
-          updatePlanStepStatus(
-            call.id?.split('-')[0] || call.name,
-            'running'
-          )
+          // The step this call belongs to, by the agent that owns the tool
+          // (lib/planProgress.js); remembered so its result closes it.
+          {
+            const { plan: next, stepId } = startStep(useChatStore.getState().plan, call.name)
+            if (stepId) {
+              stepForCallRef.current[call.id] = stepId
+              setPlan(next)
+            }
+          }
           addToolCallEvent(msgId, {
             id: call.id,
             name: call.name,
@@ -939,10 +946,10 @@ export function ChatPane() {
         },
         onToolResult: (resEv) => {
           // Mark the corresponding plan step done or failed.
-          updatePlanStepStatus(
-            resEv.id?.split('-')[0] || resEv.name,
-            resEv.status === 'failed' ? 'failed' : 'done'
-          )
+          {
+            const stepId = stepForCallRef.current[resEv.id]
+            if (stepId) setPlan(finishStep(useChatStore.getState().plan, stepId, resEv.status !== 'failed'))
+          }
           addToolCallEvent(msgId, {
             id: resEv.id,
             name: resEv.name,
@@ -990,13 +997,17 @@ export function ChatPane() {
             source_document: c.source_document || c.doc,
           }))
 
-          if (doneEv.plan && doneEv.plan.length > 0) {
-            setPlan(doneEv.plan)
-          }
+          // The turn is over: settle every step (running -> done, the answer
+          // step -> done if an answer exists, the rest -> skipped).
+          const finalPlan = reconcilePlan(
+            doneEv.plan && doneEv.plan.length ? doneEv.plan : useChatStore.getState().plan,
+            { answered: Boolean((doneEv.reply || '').trim()) },
+          )
+          setPlan(finalPlan)
 
           updateMessage(msgId, {
             citations: normCitations,
-            plan: doneEv.plan || [],
+            plan: finalPlan,
             verification: doneEv.verification || null,
             elapsedSeconds:
               doneEv.seconds ??
