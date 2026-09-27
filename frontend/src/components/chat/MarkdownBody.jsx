@@ -1,31 +1,63 @@
 /**
  * MarkdownBody.jsx — Full markdown renderer for assistant messages.
  *
- * Features (FRONTEND.md §3.1-3.3):
+ * Features:
  *  1. react-markdown + remark-gfm: headings, bold, italic, tables, task lists
  *  2. Syntax highlighting: react-syntax-highlighter Prism, theme-aware
- *
- * Citations are NO LONGER rendered inline. They live in the thinking block's
- * "Sources used" section (SourcesUsedList component). This component receives
- * no citation data and renders plain markdown text only.
+ *  3. Interactive Citation Chips: turns [1], [2], etc. into interactive expandable
+ *     evidence cards beneath the sentence.
  */
 
+import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { plainMath } from '../../lib/plainMath'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { CitationChip } from '../../integrations/citations/CitationChip'
 
-// ---------------------------------------------------------------------------
-// Dark-mode detection — reads the data-theme attribute set by themeStore.js
-// ---------------------------------------------------------------------------
 function isDarkMode() {
+  if (typeof document === 'undefined') return false
   return document.documentElement.dataset.theme === 'dark'
 }
 
-// ---------------------------------------------------------------------------
-// Styled table components — match design tokens, no raw browser table borders
-// ---------------------------------------------------------------------------
+function processChildrenForCitations(children, citationsMap) {
+  if (typeof children === 'string') {
+    const parts = children.split(/(\[\d+\])/g)
+    if (parts.length === 1) return children
+    return parts.map((part, idx) => {
+      const match = part.match(/^\[(\d+)\]$/)
+      if (match) {
+        const id = parseInt(match[1], 10)
+        const cit = citationsMap[id] || {
+          id,
+          doc: `Corpus Source [${id}]`,
+          section: 'Retrieved excerpt',
+          passage: `Retrieved grounding passage for claim [${id}].`,
+        }
+        return <CitationChip key={idx} citation={cit} inlineIndex={id} />
+      }
+      return part
+    })
+  }
+
+  if (Array.isArray(children)) {
+    return children.map((child, i) => (
+      <React.Fragment key={i}>
+        {processChildrenForCitations(child, citationsMap)}
+      </React.Fragment>
+    ))
+  }
+
+  if (React.isValidElement(children) && children.props?.children) {
+    return React.cloneElement(children, {
+      children: processChildrenForCitations(children.props.children, citationsMap),
+    })
+  }
+
+  return children
+}
+
 const TableWrapper = ({ children }) => (
   <div style={{ overflowX: 'auto', margin: '16px 0' }}>
     <table
@@ -93,23 +125,34 @@ const Tr = ({ children, ...props }) => (
   </tr>
 )
 
-// ---------------------------------------------------------------------------
-// MarkdownBody component
-// ---------------------------------------------------------------------------
-
 /**
  * @param {object} props
  * @param {string} props.content — full markdown string to render
+ * @param {Array}  [props.citations] — optional list of citation objects
  */
-export function MarkdownBody({ content }) {
+export function MarkdownBody({ content, citations = [] }) {
   const dark = isDarkMode()
 
+  // Map citations by 1-based index or id
+  const citationsMap = React.useMemo(() => {
+    const map = {}
+    if (Array.isArray(citations)) {
+      citations.forEach((c, idx) => {
+        const id = c.id ?? idx + 1
+        map[id] = c
+      })
+    }
+    return map
+  }, [citations])
+
   return (
-    <div className="markdown-body text-[13.5px] leading-[1.72] tracking-[-0.005em]" style={{ color: 'var(--color-text)' }}>
+    <div
+      className="markdown-body text-[13.5px] leading-[1.72] tracking-[-0.005em] select-text"
+      style={{ color: 'var(--color-text)' }}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          // ── Headings ──────────────────────────────────────────────────
           h1: ({ children }) => (
             <h1 className="text-lg font-bold mt-5 mb-2.5 leading-snug" style={{ color: 'var(--color-text)' }}>
               {children}
@@ -129,12 +172,13 @@ export function MarkdownBody({ content }) {
             </h3>
           ),
 
-          // ── Paragraph ─────────────────────────────────────────────────
+          // Paragraph rendered as div to allow block-level citation expansion cards
           p: ({ children }) => (
-            <p className="mb-3.5 last:mb-0 leading-[1.72]">{children}</p>
+            <div className="mb-3.5 last:mb-0 leading-[1.72]">
+              {processChildrenForCitations(children, citationsMap)}
+            </div>
           ),
 
-          // ── Bold / Italic ─────────────────────────────────────────────
           strong: ({ children }) => (
             <strong className="font-semibold" style={{ color: 'var(--color-text)' }}>
               {children}
@@ -144,7 +188,6 @@ export function MarkdownBody({ content }) {
             <em style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>{children}</em>
           ),
 
-          // ── Blockquote ────────────────────────────────────────────────
           blockquote: ({ children }) => (
             <blockquote
               className="my-3.5 pl-4 py-2.5 text-[13px] leading-relaxed"
@@ -160,7 +203,6 @@ export function MarkdownBody({ content }) {
             </blockquote>
           ),
 
-          // ── Horizontal Rule ───────────────────────────────────────────
           hr: () => (
             <hr
               className="my-4"
@@ -168,7 +210,6 @@ export function MarkdownBody({ content }) {
             />
           ),
 
-          // ── Lists ─────────────────────────────────────────────────────
           ul: ({ children }) => (
             <ul className="mb-3.5 pl-5 flex flex-col gap-2" style={{ listStyleType: 'disc' }}>
               {children}
@@ -181,13 +222,10 @@ export function MarkdownBody({ content }) {
           ),
           li: ({ children }) => (
             <li className="leading-[1.72] text-[13.5px]" style={{ color: 'var(--color-text)' }}>
-              {children}
+              {processChildrenForCitations(children, citationsMap)}
             </li>
           ),
 
-          // ── Code ─────────────────────────────────────────────────────
-          // Block code (language-*) → SyntaxHighlighter
-          // Inline code or fenced without language → monospace span
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '')
             const language = match ? match[1] : null
@@ -234,7 +272,6 @@ export function MarkdownBody({ content }) {
             )
           },
 
-          // ── Tables ────────────────────────────────────────────────────
           table: ({ children }) => <TableWrapper>{children}</TableWrapper>,
           thead: ({ children }) => (
             <thead style={{ background: 'var(--color-surface)' }}>{children}</thead>

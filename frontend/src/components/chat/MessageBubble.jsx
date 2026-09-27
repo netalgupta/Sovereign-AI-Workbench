@@ -1157,6 +1157,7 @@ export function MessageBubble({ message }) {
               ? message.displayedContent
               : message.content || ''
           }
+          citations={message.citations || []}
         />
         {/* Blinking cursor while draining */}
         {isStreaming && <StreamCursor />}

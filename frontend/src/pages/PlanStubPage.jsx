@@ -37,7 +37,7 @@ export function PlanStubPage() {
         {/* Left: Back Link & Breadcrumbs */}
         <div className="flex items-center gap-3">
           <Link
-            to="/"
+            to="/workbench"
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)]"
             style={{
               background: 'var(--color-overlay)',
@@ -79,7 +79,7 @@ export function PlanStubPage() {
                 </span>
               </div>
               <span className="text-[10px] leading-tight mt-0.5" style={{ color: 'var(--color-text-faint)' }}>
-                Session: {sessionId || 'Refinery Turnaround Analysis'}
+                Session: {sessionId || 'Active Operational Session'}
               </span>
             </div>
           </div>
@@ -157,7 +157,7 @@ export function PlanStubPage() {
         <div className="flex items-center gap-2">
           <Sparkles size={12} style={{ color: 'var(--color-accent)' }} />
           <span>
-            <strong>Interactive DAG:</strong> Step 1 forks into Code (Branch A) and Vision (Branch B) in parallel, converging at Math. Click any node to jump to its live execution trace in chat.
+            <strong>Interactive DAG:</strong> {hasLivePlan ? `${plan.length} execution step${plan.length === 1 ? '' : 's'} mapped across specialized local agents.` : 'A visual DAG will appear when an inquiry requires multi-agent synthesis.'}
           </span>
         </div>
 

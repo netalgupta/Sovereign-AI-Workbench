@@ -237,11 +237,12 @@ _DOCX_SIGNAL = re.compile(
 )
 
 
-def _tools_for_request(request: str) -> list[dict]:
+def _tools_for_request(request: str, sources_enabled: bool = True) -> list[dict]:
     """The tool schemas suited to one `request`.
 
     Drafting requests (spreadsheet / Word) get exactly the two tools they
     can use; everything else gets the full curated chat set.
+    When sources_enabled is False, document search tools are excluded.
     """
     from backend.orchestrator.action_resolver import is_spreadsheet_request, is_pdf_request
     from backend.tools import catalog  # noqa: F401  (registers everything)
@@ -253,13 +254,16 @@ def _tools_for_request(request: str) -> list[dict]:
         return [by_name[n] for n in names if n in by_name]
 
     if is_spreadsheet_request(request):
-        return offer("search_documents", "draft_xlsx")
+        return offer("search_documents", "draft_xlsx") if sources_enabled else offer("draft_xlsx")
     if is_pdf_request(request):
-        return offer("search_documents", "generate_pdf")
+        return offer("search_documents", "generate_pdf") if sources_enabled else offer("generate_pdf")
     if _DOCX_SIGNAL.search(request):
-        return offer("search_documents", "draft_docx")
+        return offer("search_documents", "draft_docx") if sources_enabled else offer("draft_docx")
 
-    return _tools_for_chat()
+    tools = _tools_for_chat()
+    if not sources_enabled:
+        tools = [t for t in tools if t.get("function", {}).get("name") not in ("search_documents", "list_documents")]
+    return tools
 
 
 # Arithmetic stated WITH ITS RESULT: "22 + 16 = 38", "22+16 is 38".
@@ -392,6 +396,7 @@ def run_agent_loop(
     max_iterations: int = MAX_ITERATIONS,
     active_documents: list[str] | None = None,
     memory=None,
+    sources_enabled: bool = True,
 ) -> Iterator[dict]:
     """Work on `request`, yielding events as it goes.
 
@@ -421,7 +426,7 @@ def run_agent_loop(
 
     # Instrument tool schema construction
     t_schema_start = time.perf_counter()
-    tools = _tools_for_request(request)
+    tools = _tools_for_request(request, sources_enabled=sources_enabled)
     t_schema_ms = round((time.perf_counter() - t_schema_start) * 1000, 2)
 
     tool_names = [t["function"]["name"] for t in tools]
@@ -429,6 +434,7 @@ def run_agent_loop(
     T.section("AGENT LOOP")
     T.kv("request", repr(request))
     T.kv("model", f"{model_id} -> {model}")
+    T.kv("sources_enabled", sources_enabled)
     T.kv("step: tool_schema_construction (ms)", t_schema_ms)
     T.kv("tools offered count", len(tools))
     T.kv("tools offered names", ", ".join(tool_names))
@@ -440,15 +446,29 @@ def run_agent_loop(
     # request is interpreted against, which is what it is. It arrives
     # already labelled "context only - NOT a source".
     system = _SYSTEM_PROMPT
+    if not sources_enabled:
+        system = (
+            "You are Sovereign Workbench, an expert AI assistant operating in direct reasoning mode.\n"
+            "Sources grounding is currently TOGGLED OFF by the operator. "
+            "Do NOT attempt to search or require local documents. Answer directly and comprehensively using your "
+            "own knowledge, analytical tools (like calculation or data tools if applicable), and reasoning."
+        )
     context = getattr(memory, "context_block", "") or ""
     if context:
-        system = _SYSTEM_PROMPT + "\n" + context
+        system = system + "\n" + context
     messages: list[dict] = [
         {"role": "system", "content": system},
         {"role": "user", "content": request},
     ]
 
     yield {"type": "start", "request": request}
+
+    # THREAD-SAFE PER-REQUEST DOCUMENT FILTER.
+    # search_documents has no way to receive active_documents via its
+    # fixed tool-call signature. A ContextVar is scoped to the current
+    # thread/coroutine so it doesn't leak between concurrent requests.
+    from backend.api.state import active_documents_ctx
+    active_documents_ctx.set(active_documents)
 
     final_reply_chunks: list[str] = []
     tool_call_count = 0
@@ -798,6 +818,7 @@ def run_turn(
     session_id: str = "default",
     model_id: str = "reasoning-model",
     active_documents: list[str] | None = None,
+    sources_enabled: bool = True,
 ) -> Iterator[dict]:
     """Answer `request` by whichever path suits it, as one event stream.
 
@@ -827,6 +848,7 @@ def run_turn(
     T.section("ROUTE")
     T.kv("path", decision.path)
     T.kv("reason", decision.reason)
+    T.kv("sources_enabled", sources_enabled)
 
     # MEMORY, ON THIS PATH TOO.
     #
@@ -869,6 +891,7 @@ def run_turn(
             session_id=session_id,
             model_id=model_id,
             active_documents=active_documents,
+            sources_enabled=sources_enabled,
         ):
             kind = event.get("type")
             if kind == "done":
@@ -960,6 +983,7 @@ def _answer(
     session_id: str,
     model_id: str,
     active_documents: list[str] | None,
+    sources_enabled: bool = True,
 ) -> Iterator[dict]:
     """The turn itself. Split out of run_turn so that memory is opened
     and closed around EVERY path, including the ones that return early."""
@@ -973,9 +997,9 @@ def _answer(
     instant = decision.path in ("greeting", "closing", "capability", "unclear")
     yield {
         "type": "route",
-        "path": decision.path,
-        "reason": decision.reason,
-        "tools_expected": decision.tools_expected,
+        "path": "general_reasoning" if not sources_enabled else decision.path,
+        "reason": "Direct reasoning mode (sources bypassed by operator)" if not sources_enabled else decision.reason,
+        "tools_expected": [] if not sources_enabled else decision.tools_expected,
         # MODEL AUTO-SELECTION, visible. The problem statement's expected
         # demo is "model auto selection across at least two different task
         # types"; the turn now says which model it chose and why.
@@ -1123,7 +1147,7 @@ def _answer(
     # A failure here degrades to a single-step plan rather than breaking
     # the turn -- the plan is a description of the work, not a
     # prerequisite for it.
-    yield from _emit_plan(request, decision)
+    yield from _emit_plan(request, decision, sources_enabled=sources_enabled)
 
     # Instant paths: no retrieval, no model, no planner.
     if decision.path in ("greeting", "closing", "capability", "unclear"):
@@ -1156,6 +1180,24 @@ def _answer(
         yield from _run_code(request, selection, session_id=session_id)
         return
 
+    if not sources_enabled:
+        # Operator has toggled sources OFF:
+        # Bypass local corpus retrieval completely.
+        # Run agent loop with sources_enabled=False so LLM answers directly from
+        # general domain knowledge and reasoning without requiring or searching local docs.
+        for event in run_agent_loop(
+            request,
+            session_id=session_id,
+            model_id=model_id,
+            active_documents=[],
+            memory=memory,
+            sources_enabled=False,
+        ):
+            if event.get("type") == "start":
+                continue
+            yield event
+        return
+
     if decision.path == "agentic" or decision.path == "arithmetic":
         # Drop the loop's own `start`; one has already been emitted, and
         # two would make a UI clear its transcript mid-turn.
@@ -1165,6 +1207,7 @@ def _answer(
             model_id=model_id,
             active_documents=active_documents,
             memory=memory,
+            sources_enabled=True,
         ):
             if event.get("type") == "start":
                 continue
@@ -1249,7 +1292,7 @@ def _run_code(request: str, selection, *, session_id: str) -> Iterator[dict]:
            "citations": [], "model": selection.model, "task": selection.task}
 
 
-def _emit_plan(request: str, decision) -> Iterator[dict]:
+def _emit_plan(request: str, decision, sources_enabled: bool = True) -> Iterator[dict]:
     """The step DAG for this turn, as a `plan` event.
 
     Shape matches /api/chat's `plan` field exactly, so the Plan Graph
@@ -1257,6 +1300,18 @@ def _emit_plan(request: str, decision) -> Iterator[dict]:
     """
     from backend.observability import turn_log as T
     from backend.orchestrator.simple_intent import is_simple_lookup, simple_plan
+
+    if not sources_enabled:
+        steps = [{
+            "step_id": "general_reasoning",
+            "description": "General reasoning & domain knowledge (sources bypassed)",
+            "assigned_agent": "reasoning",
+            "status": "pending",
+            "depends_on": [],
+        }]
+        T.kv("plan steps", len(steps))
+        yield {"type": "plan", "steps": steps, "path": "general_reasoning"}
+        return
 
     # THE PLANNER MUST NOT RUN FOR A TURN THAT NEEDS NO PLAN.
     #

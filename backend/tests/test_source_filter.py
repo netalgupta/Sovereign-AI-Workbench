@@ -106,3 +106,23 @@ def test_the_stream_endpoint_defaults_to_no_filter_not_an_empty_one():
     assert AgentStreamRequest(
         message="x", active_documents=["a.pdf"]
     ).active_documents == ["a.pdf"]
+
+
+def test_sources_enabled_flag_on_stream_request_and_tools():
+    """sources_enabled must default to True and filter search tools when False."""
+    from backend.api.routes import AgentStreamRequest
+    from backend.orchestrator.agent_loop import _tools_for_request
+
+    req_default = AgentStreamRequest(message="test query")
+    assert req_default.sources_enabled is True
+
+    req_disabled = AgentStreamRequest(message="test query", sources_enabled=False)
+    assert req_disabled.sources_enabled is False
+
+    # When sources_enabled is False, search_documents and list_documents must not be offered
+    tools_with_sources = _tools_for_request("test query", sources_enabled=True)
+    tools_without_sources = _tools_for_request("test query", sources_enabled=False)
+
+    search_tool_names = {"search_documents", "list_documents"}
+    assert any(t["function"]["name"] in search_tool_names for t in tools_with_sources)
+    assert not any(t["function"]["name"] in search_tool_names for t in tools_without_sources)

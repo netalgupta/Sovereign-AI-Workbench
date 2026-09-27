@@ -74,12 +74,16 @@ def search_documents(query: str, top_k: int = 5) -> dict:
     page_number, score) and, when nothing is confident enough, `reason`
     and the documents that came closest.
     """
-    from backend.api.state import get_state
+    from backend.api.state import active_documents_ctx, get_state
     from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
 
     top_k = max(1, min(int(top_k or 5), 10))
     store, _ = get_state().ensure_corpus()
-    result = retrieve_with_grounding_check(store, query, top_k)
+
+    # Respect the per-request document filter set by run_agent_loop.
+    # None = no filter (search all). [] = everything disabled (refuse).
+    active_docs = active_documents_ctx.get()
+    result = retrieve_with_grounding_check(store, query, top_k, active_documents=active_docs)
 
     if not result.found:
         # The refusal is returned to the MODEL, with the near-miss

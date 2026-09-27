@@ -254,7 +254,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
   // Defaulting to [] here would tell the backend "every source is
   // switched off" for any caller that does not pass the option at all.
   // null is the only safe default: no filter.
-  const { activeDocuments = null } = options
+  const { activeDocuments = null, sourcesEnabled = true } = options
 
   let liveError = null
   let receivedAnyEvent = false
@@ -273,6 +273,7 @@ export async function sendMessageStream(message, sessionId, callbacks = {}, opti
         // backend applies no filter, rather than being told the user
         // deselected everything.
         active_documents: Array.isArray(activeDocuments) ? activeDocuments : null,
+        sources_enabled: sourcesEnabled !== false,
       }),
       signal: controller.signal,
     })

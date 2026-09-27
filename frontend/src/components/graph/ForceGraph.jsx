@@ -23,8 +23,9 @@ import { useEffect, useRef, useCallback } from 'react'
 import { getNodeColor, nodeName } from './graphTheme'
 
 export function ForceGraph({
-  nodes: rawNodes,
-  relationships,
+  nodes: rawNodesProp,
+  relationships: relationshipsProp,
+  data,
   height = 560,
   labelFilter = '',
   selectedId = null,
@@ -39,6 +40,17 @@ export function ForceGraph({
   // A Set<string> of node ids.
   highlightIds = null,
 }) {
+  const rawNodes = Array.isArray(rawNodesProp)
+    ? rawNodesProp
+    : Array.isArray(data?.nodes)
+    ? data.nodes
+    : []
+  const relationships = Array.isArray(relationshipsProp)
+    ? relationshipsProp
+    : Array.isArray(data?.relationships)
+    ? data.relationships
+    : []
+
   const canvasRef = useRef(null)
   const stateRef = useRef({
     nodes: [], links: [], byId: {},
@@ -55,6 +67,10 @@ export function ForceGraph({
   // rather than at random: a random cloud takes far longer to untangle, and
   // the first frame the user sees is the messiest one.
   useEffect(() => {
+    if (!rawNodes || rawNodes.length === 0) {
+      stateRef.current = { ...stateRef.current, nodes: [], links: [], byId: {}, heat: 0 }
+      return
+    }
     const byId = {}
     const nodes = rawNodes.map((n, i) => {
       const angle = (i / rawNodes.length) * Math.PI * 2
