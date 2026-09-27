@@ -73,3 +73,25 @@ def _source_lists_in_tmp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(source_config, "CONFIG_PATH", tmp_path / "configured_sources.json")
     monkeypatch.setattr(source_config, "DELETED_PATH", tmp_path / "deleted_sources.json")
+
+
+@pytest.fixture(autouse=True)
+def _chat_attachments_in_tmp(tmp_path, monkeypatch):
+    """Chat attachments (files and registry) are never written to real storage by a test."""
+    from backend.retrieval import chat_attachments
+
+    monkeypatch.setattr(chat_attachments, "ROOT", tmp_path / "chat_attachments")
+
+
+@pytest.fixture(autouse=True)
+def _corpus_cache_read_only(monkeypatch):
+    """Tests READ the real corpus cache (.workbench/) but never WRITE it.
+
+    A test that ingested a file through the live pipeline saved the result
+    to the operator's cache: sop_test_procedure_*.txt documents sat in the
+    real index and outranked SOP-114 for "a report of SOPs and procedures".
+    """
+    from backend.api.state import PipelineState
+
+    monkeypatch.setattr(PipelineState, "_write_corpus_cache", lambda self, chunks: None)
+    monkeypatch.setattr(PipelineState, "_write_index", lambda self: None)

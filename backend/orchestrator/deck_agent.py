@@ -206,10 +206,28 @@ class NotInCorpus(ValueError):
 _SAVE_TAIL = re.compile(r"\s*(and\s+)?(please\s+)?(save|store|write|export)\s*(it|them|this)?\s*[.!]?\s*$", re.I)
 
 
+# "... and give me its doc", "... and send me the pdf": the hand-over at
+# the END of a request. MEASURED 27 Sep: "Create a report of Sops and
+# Procedures and give me its doc" searched for "... and give me its doc",
+# which ranked the Cyber Security book first and SOP-114 not at all -- the
+# report was refused as "unrelated to SOPs" with SOP-114 in the corpus.
+_HANDOVER_TAIL = re.compile(
+    r"\s*[,.]?\s*(and\s+)?(then\s+)?(please\s+)?(give|send|share|hand|get|provide|return|email)\s+"
+    r"(it\s+to\s+me|me|us)?\s*(back\s+)?(it|its|them|the|a|an|this|that)?\s*"
+    r"(doc|docx|document|word(\s*(file|doc|document))?|file|pdf|report|deck|slides?|pptx|presentation|"
+    r"excel|xlsx|spreadsheet|sheet|copy|version|output)?s?\s*[.!]?\s*$",
+    re.I,
+)
+# "a report OF x": after the deliverable word is stripped, "of" is left.
+_LEADING_OF = re.compile(r"^\s*(of|on|about|for|regarding|covering)\s+", re.I)
+
+
 def topic_of(request: str) -> str:
     """The subject of a request, without the deliverable words around it."""
     topic = _DELIVERABLE_PHRASE.sub("", request or "").strip()
     topic = _SAVE_TAIL.sub("", topic).strip()
+    topic = _HANDOVER_TAIL.sub("", topic).strip()
+    topic = _LEADING_OF.sub("", topic).strip()
     return topic or (request or "").strip()
 
 

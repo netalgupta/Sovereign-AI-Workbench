@@ -213,6 +213,15 @@ def retrieve_with_grounding_check(
                 "is nothing to search. Re-enable at least one document."
             ),
         )
+    # Chat attachments belong to one chat (chat_attachments.py). With no
+    # explicit list they are never searched: only the owning chat names
+    # them, so a path that forgets the chat fails closed, never across chats.
+    if allowed is None:
+        from backend.retrieval.chat_attachments import all_names as _chat_attachment_names
+
+        hidden = _chat_attachment_names()
+        if hidden:
+            allowed = {d for d in store.document_names() if d not in hidden}
     allowed_ids = store.faiss_ids_for_documents(allowed) if allowed is not None else None
 
     # Embedded once and shared with the fusion: it was computed twice per question.

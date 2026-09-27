@@ -95,6 +95,39 @@ export function WorkbenchPage() {
     }
   }
 
+  // ── This chat's attachments: sources of this chat only ──────────────────
+  // Listed at the top of the tree for the chat that owns them and nowhere
+  // else; they switch on and off like any source (per chat, by full path).
+  const chatSessionId = useChatStore((s) => s.sessionId)
+  const [chatAttachments, setChatAttachments] = useState([])
+  useEffect(() => {
+    let alive = true
+    const load = () =>
+      fetch(`/api/chat-attachments?session_id=${encodeURIComponent(chatSessionId)}`)
+        .then((r) => (r.ok ? r.json() : { attachments: [] }))
+        .then((d) => alive && setChatAttachments(d.attachments || []))
+        .catch(() => alive && setChatAttachments([]))
+    load()
+    window.addEventListener('chat-attachments-changed', load)
+    return () => {
+      alive = false
+      window.removeEventListener('chat-attachments-changed', load)
+    }
+  }, [chatSessionId])
+  const attachmentItems = useMemo(
+    () =>
+      chatAttachments.map((a) => ({
+        ...a,
+        corpus: 'This chat',
+        folder: 'Attached in this chat',
+        relPath: a.name,
+        category: 'documents',
+        subcategory: 'attachments',
+        isFile: true,
+      })),
+    [chatAttachments],
+  )
+
   // A file's identity is its full path: two files may share a name (and the
   // toggle used to flip every file of the same name at once).
   const keyOf = (n) => n?.fullPath || n?.id || ''
@@ -103,7 +136,7 @@ export function WorkbenchPage() {
   // panel shows, re-derived when the chat changes or the corpus reloads.
   const { sources, tree } = useMemo(() => {
     const off = new Set(disabledSources)
-    const sourcesOut = corpusSources.map((s) => ({ ...s, enabled: !off.has(keyOf(s)) }))
+    const sourcesOut = [...attachmentItems, ...corpusSources].map((s) => ({ ...s, enabled: !off.has(keyOf(s)) }))
     const mark = (nodes) =>
       (nodes || []).map((n) => {
         if (n.type === 'directory') {
@@ -114,14 +147,26 @@ export function WorkbenchPage() {
         }
         return { ...n, enabled: !off.has(keyOf(n)) }
       })
-    return { sources: sourcesOut, tree: mark(corpusTree) }
-  }, [corpusSources, corpusTree, disabledSources]) // eslint-disable-line react-hooks/exhaustive-deps
+    const attachmentsRoot = attachmentItems.length
+      ? [{
+          id: 'chat_attachments_root',
+          name: 'Attached in this chat',
+          fullPath: 'This chat only',
+          type: 'directory',
+          isRoot: true,
+          isPreset: false,
+          fileCount: attachmentItems.length,
+          children: attachmentItems,
+        }]
+      : []
+    return { sources: sourcesOut, tree: mark([...attachmentsRoot, ...corpusTree]) }
+  }, [corpusSources, corpusTree, disabledSources, attachmentItems]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // What the next question may search. null = no filter (every file on:
   // nothing to confine, and the backend skips the filtering work); a list =
   // only these. setActiveDocuments is called only here.
   useEffect(() => {
-    if (corpusSources.length === 0) return
+    if (corpusSources.length === 0 && attachmentItems.length === 0) return
     if (disabledSources.length === 0) {
       setActiveDocuments(null)
       return

@@ -92,7 +92,7 @@ export function InlineMiniGraph({
 
   return (
     <div
-      className="my-1.5 p-2 rounded-lg border flex flex-col gap-1 select-none max-w-[340px] text-xs"
+      className="my-1.5 p-2 rounded-lg border flex flex-col gap-1 max-w-[340px] text-xs"
       style={{
         background: 'var(--color-bg)',
         borderColor: 'var(--color-border)',

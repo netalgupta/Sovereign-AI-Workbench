@@ -87,6 +87,14 @@ function deleteSessionStorage(id) {
   } catch {}
 }
 
+/** Earlier chats' messages, newest chat first (Up-arrow prompt history). */
+export function earlierChatsMessages(excludeId, limit = 20) {
+  return readSessionsIndex()
+    .filter((s) => s.id !== excludeId)
+    .slice(0, limit)
+    .map((s) => readSessionMessages(s.id))
+}
+
 // ── Each chat's own source selection ────────────────────────────────────────
 // A chat about five files keeps those five; another chat keeps its six.
 // Stored as the files switched OFF (by full path, which is unique -- a name

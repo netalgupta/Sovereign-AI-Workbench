@@ -19,6 +19,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FileText, ExternalLink, Eye } from 'lucide-react'
 import { usePreviewStore } from '../../store/previewStore'
+import { CopyButton } from '../../components/common/CopyButton'
 
 /**
  * @param {{ citation: { id: number, doc: string, section: string, passage: string } }} props
@@ -202,6 +203,17 @@ export function CitationChip({ citation }) {
               <Eye size={10} strokeWidth={2} />
               Preview document
             </button>
+
+            <CopyButton
+              text={() =>
+                `"${(citation.passage || '').trim()}"\n-- ${citation.source_document || citation.doc}` +
+                (citation.page_number ? `, p. ${citation.page_number}` : '')
+              }
+              label="Copy passage"
+              title="Copy the passage with its source"
+              size={10}
+              style={{ fontSize: '10px', padding: 0 }}
+            />
 
             <Link
               to="/sources"

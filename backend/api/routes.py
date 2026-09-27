@@ -3296,6 +3296,86 @@ async def upload_attachment(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# ── Chat attachments: sources of ONE chat (backend/retrieval/chat_attachments.py) ──
+
+@router.post("/chat-attachments")
+def add_chat_attachment(file: UploadFile = File(...), session_id: str = Form(...)) -> dict:
+    """Attach a file to a chat: saved under that chat and indexed like any
+    source, but searchable from this chat only. Indexing runs in the
+    background; poll the returned job like any source ingestion."""
+    import threading
+
+    from backend.ingestion.ingestion_progress import get_tracker
+    from backend.retrieval import chat_attachments as CA
+
+    raw = file.file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The attached file is empty.")
+    if len(raw) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="The attached file is larger than 50 MB.")
+    try:
+        folder = CA.session_dir(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    name = CA.unique_name(session_id, file.filename or "attachment")
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    target.write_bytes(raw)
+    CA.register(session_id, target)
+
+    state = get_state()
+    tracker = get_tracker()
+    job = tracker.create(str(target), [target])
+
+    def _run():
+        try:
+            state.ingest_path(target, job_id=job.job_id)
+            tracker.finish(job.job_id)
+        except Exception as exc:  # noqa: BLE001 - reported on the job
+            tracker.finish(job.job_id, error=f"{type(exc).__name__}: {exc}")
+
+    threading.Thread(target=_run, name=f"chat-attachment-{job.job_id}", daemon=True).start()
+    return {"name": name, "fullPath": str(target.resolve()), "job_id": job.job_id,
+            "poll": f"/api/ingestion/{job.job_id}"}
+
+
+@router.get("/chat-attachments")
+def list_chat_attachments(session_id: str = Query(...)) -> dict:
+    from backend.retrieval import chat_attachments as CA
+
+    items = []
+    for a in CA.for_session(session_id):
+        path = Path(a["path"])
+        items.append({
+            "id": f"chat_{a['name']}",
+            "name": a["name"],
+            "fullPath": a["path"],
+            "relativePath": a["path"],
+            "extension": path.suffix.lstrip(".").lower(),
+            "size": f"{path.stat().st_size / 1024:.1f} KB" if path.exists() else "",
+            "addedAt": a.get("added_at"),
+            "type": "file",
+            "chatAttachment": True,
+        })
+    return {"session_id": session_id, "attachments": items}
+
+
+@router.delete("/chat-attachments")
+def remove_chat_attachment(session_id: str = Query(...), name: str = Query(...)) -> dict:
+    from backend.retrieval import chat_attachments as CA
+
+    entry = CA.retire(session_id, name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"{name} is not attached to this chat.")
+    removed = get_state().delete_source(entry["path"])
+    try:
+        Path(entry["path"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+    return {"removed": name, "index": removed}
+
+
 ATTACHMENT_TEXT_LIMIT = 60_000  # characters returned; the chat decides how much of it to send
 
 
@@ -3337,8 +3417,12 @@ def read_attachment_text(file: UploadFile = File(...)) -> dict:
         except (NotImplementedError, ValueError) as exc:
             raise HTTPException(status_code=415, detail=f"{name} could not be read: {exc}") from exc
 
+    # A spreadsheet's "pages" are its sheets, and each already opens with
+    # "Sheet k of N: <tab name>" -- a "page" label over it would mislead.
+    unit = {"xlsx": "sheet", "xls": "sheet", "pptx": "slide"}.get(detected, "page")
     parts = [
-        (f"--- page {p.page_number} ---\n" if p.page_number and len(pages) > 1 else "") + p.text.strip()
+        (f"--- {unit} {p.page_number} ---\n" if unit != "sheet" and p.page_number and len(pages) > 1 else "")
+        + p.text.strip()
         for p in pages
         if p.text and p.text.strip()
     ]
@@ -3346,6 +3430,7 @@ def read_attachment_text(file: UploadFile = File(...)) -> dict:
     return {
         "filename": name,
         "type": detected,
+        "unit": unit,
         "pages": len(pages),
         "chars": len(text),
         "text": text[:ATTACHMENT_TEXT_LIMIT],

@@ -157,6 +157,11 @@ class VectorStore:
             scores, ids = self.index.search(query, top_k)
             return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
 
+    def document_names(self) -> list[str]:
+        """Every indexed document's name."""
+        with self._rw:
+            return [r[0] for r in self._conn.execute("SELECT DISTINCT source_document FROM chunks").fetchall()]
+
     def faiss_ids_for_documents(self, names) -> set[int]:
         """Every chunk id belonging to the named documents (a chat's switched-on sources)."""
         names = list(names)

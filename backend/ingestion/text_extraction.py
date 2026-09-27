@@ -350,9 +350,40 @@ def _extract_eml(file_path: str) -> list[PageText]:
     return [PageText(page_number=None, text=text)]
 
 
-def _sheet_to_text(sheet_name: str, rows: list[list[str]]) -> str:
-    lines = [f"Sheet: {sheet_name}"]
-    lines.extend("\t".join(cell for cell in row) for row in rows)
+def _sheet_to_text(
+    sheet_name: str,
+    rows: list[list[str]],
+    position: int | None = None,
+    sheet_names: list[str] | None = None,
+) -> str:
+    """One sheet as text a model can read as a table.
+
+    Measured on a real 11-sheet workbook (one sheet per institute, the
+    institutes named only by their TABS), asked "list the institutes":
+    the answer was one house from the first sheet. Three causes, all here:
+
+      - a cell holding a line break ("Periyar Elephants\n(Purple House)")
+        split its row over two lines, so no row read as a row;
+      - every row carried its full width of empty trailing cells -- 40 KB
+        for a few hundred values -- so later sheets fell out of the budget;
+      - nothing said how many sheets there were or what they were called.
+
+    Now: a cell is one field (inner whitespace collapsed), trailing empty
+    cells and empty rows go (leading ones stay: column position means
+    something), columns are " | "-separated, each sheet says which of how
+    many it is, and the first lists every sheet by name.
+    """
+    total = len(sheet_names) if sheet_names else None
+    head = f"Sheet {position} of {total}: {sheet_name}" if position and total else f"Sheet: {sheet_name}"
+    lines = [head]
+    if sheet_names and position == 1 and len(sheet_names) > 1:
+        lines.append(f"This workbook has {len(sheet_names)} sheets (tabs): " + "; ".join(sheet_names))
+    for row in rows:
+        cells = [" ".join(str(cell).split()) for cell in row]
+        while cells and not cells[-1]:
+            cells.pop()
+        if any(cells):
+            lines.append(" | ".join(cells))
     return "\n".join(lines)
 
 
@@ -378,7 +409,7 @@ def _extract_xlsx(file_path: str) -> list[PageText]:
             ["" if cell is None else str(cell) for cell in row]
             for row in sheet.iter_rows(values_only=True)
         ]
-        text = _sheet_to_text(sheet_name, rows)
+        text = _sheet_to_text(sheet_name, rows, position=i, sheet_names=list(workbook.sheetnames))
 
         charts = extract_chart_descriptions(sheet)
         if charts:
@@ -404,7 +435,8 @@ def _extract_xls(file_path: str) -> list[PageText]:
             [str(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
             for r in range(sheet.nrows)
         ]
-        pages.append(PageText(page_number=i + 1, text=_sheet_to_text(sheet.name, rows)))
+        pages.append(PageText(page_number=i + 1, text=_sheet_to_text(
+            sheet.name, rows, position=i + 1, sheet_names=workbook.sheet_names())))
     return pages
 
 

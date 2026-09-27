@@ -843,6 +843,20 @@ def run_turn(
     from backend.observability import turn_log as T
     from backend.orchestrator.path_router import decide_path
 
+    # This chat's own attachments join its search; other chats' never do
+    # (retrieval hides every chat attachment unless named -- see
+    # backend/retrieval/chat_attachments.py).
+    try:
+        from backend.api.state import get_state
+        from backend.retrieval.chat_attachments import scope_documents
+
+        active_documents = scope_documents(session_id, active_documents, get_state().ensure_corpus()[0])
+    except Exception as exc:  # noqa: BLE001 - fail closed: no attachment is searched
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Chat-attachment scope could not be computed: %s: %s", type(exc).__name__, exc)
+
     decision = decide_path(request)
 
     T.section("ROUTE")

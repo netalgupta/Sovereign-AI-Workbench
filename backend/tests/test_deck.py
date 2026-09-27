@@ -754,3 +754,13 @@ def test_a_deliverable_is_titled_by_its_subject_not_the_instruction():
     titled 'sheet comparing the average MFI…'."""
     assert D.topic_of("Make a presentation on the CCR-1 regeneration cycle 18 inspection findings.").startswith("CCR-1")
     assert not D.topic_of("Make an Excel sheet comparing the average MFI of each grade.").lower().startswith("sheet")
+
+
+def test_the_handover_at_the_end_of_a_request_is_not_its_subject():
+    """'... and give me its doc' was searched for, ranked the Cyber Security
+    book first, and the SOP report was refused as 'unrelated to SOPs'."""
+    from backend.orchestrator.deck_agent import topic_of
+
+    assert topic_of("Create a report of Sops and Procedures and give me its doc") == "Sops and Procedures"
+    assert topic_of("Make a deck on the Novolen batch QA results and send me the pptx") == "Novolen batch QA results"
+    assert topic_of("Create a report on how to give feedback") == "how to give feedback"

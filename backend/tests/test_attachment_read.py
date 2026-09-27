@@ -63,3 +63,39 @@ def test_a_message_with_an_attached_file_is_never_a_shortcut():
         assert decide_path(question + attached).path == "agentic", question
     # without a file, the inventory still answers the collection question
     assert is_corpus_question("What documents do you have?")
+
+
+def test_a_workbook_reads_as_tables_with_every_tab_named():
+    """Best House 2026.xlsx: 11 tabs (one per institute), cells with line breaks,
+    26 columns wide. It read as 40 KB of tabs, rows split mid-cell, and "list
+    the institutes" got one house from the first sheet."""
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sakarwadi"
+    for name in ("Laxmiwadi", "CONSOLIDATED"):
+        wb.create_sheet(name)
+    for ws in wb.worksheets:
+        ws["A1"] = "Name of the Institute -"
+        ws["B1"] = "Periyar Elephants \n(Purple House)"
+        ws["Z1"] = None
+        ws["A2"] = "Total (OUT OF 500)"
+        ws["B2"] = 420
+        ws["AF40"] = ""  # a far, empty corner: width without content
+    wb["CONSOLIDATED"]["B1"] = "Somaiya Vidya Mandir Sakarwadi"
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    res = client.post("/api/attachments/read", files={"file": ("Best House.xlsx", io.BytesIO(buf.getvalue()),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    text = body["text"]
+    assert body["unit"] == "sheet" and body["pages"] == 3
+    assert "This workbook has 3 sheets (tabs): Sakarwadi; Laxmiwadi; CONSOLIDATED" in text
+    assert "Sheet 2 of 3: Laxmiwadi" in text
+    # a row is one line, with its cells in order
+    assert "Name of the Institute - | Periyar Elephants (Purple House)" in text
+    assert "Total (OUT OF 500) | 420" in text
+    assert "--- page" not in text
+    assert "\t" not in text and "| |" not in text.split("\n")[-1]
+    assert len(text) < 1000

@@ -15,6 +15,7 @@ import { plainMath } from '../../lib/plainMath'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { CitationChip } from '../../integrations/citations/CitationChip'
+import { CopyButton } from '../common/CopyButton'
 
 function isDarkMode() {
   if (typeof document === 'undefined') return false
@@ -56,9 +57,25 @@ function processChildrenForCitations(children, citationsMap) {
   return children
 }
 
-const TableWrapper = ({ children }) => (
-  <div style={{ overflowX: 'auto', margin: '16px 0' }}>
+// A table copies as tab-separated rows: it pastes into Excel as cells.
+function tableAsTsv(table) {
+  if (!table) return ''
+  return [...table.querySelectorAll('tr')]
+    .map((tr) => [...tr.querySelectorAll('th,td')].map((c) => c.innerText.replace(/\s+/g, ' ').trim()).join('\t'))
+    .join('\n')
+}
+
+function TableWrapper({ children }) {
+  const ref = React.useRef(null)
+  return (
+  <div className="group relative" style={{ margin: '16px 0' }}>
+    <div className="absolute -top-3 right-1 z-10 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      <CopyButton text={() => tableAsTsv(ref.current)} label="Copy table" title="Copy as rows and columns (pastes into Excel)"
+        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }} />
+    </div>
+  <div style={{ overflowX: 'auto' }}>
     <table
+      ref={ref}
       style={{
         width: '100%',
         borderCollapse: 'collapse',
@@ -72,7 +89,9 @@ const TableWrapper = ({ children }) => (
       {children}
     </table>
   </div>
-)
+  </div>
+  )
+}
 
 const Th = ({ children }) => (
   <th
@@ -237,19 +256,38 @@ function useMarkdownComponents(citationsMap, dark) {
             </li>
           ),
 
-          code({ className, children, ...props }) {
+          code({ className, children, node, ...props }) {
             const match = /language-(\w+)/.exec(className || '')
-            const language = match ? match[1] : null
+            const source = String(children).replace(/\n$/, '')
+            // A fenced block WITHOUT a language used to fall through to the
+            // inline style below -- a flat, cramped box. Multi-line content
+            // is a block, whatever its language.
+            const isBlock = Boolean(match) || source.includes('\n')
+            const language = match ? match[1] : isBlock ? 'text' : null
 
             if (language) {
               return (
+                <div className="group relative" style={{ margin: '16px 0' }}>
+                  <div
+                    className="flex items-center justify-between px-3 py-1 text-[10.5px] font-mono uppercase tracking-wider"
+                    style={{
+                      color: 'var(--color-text-muted)',
+                      background: dark ? '#221e1a' : 'var(--color-overlay)',
+                      border: '1px solid var(--color-code-border)',
+                      borderBottom: 'none',
+                      borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
+                    }}
+                  >
+                    <span>{language === 'text' ? 'plain text' : language}</span>
+                    <CopyButton text={source} label="Copy" title="Copy code" size={12} />
+                  </div>
                 <SyntaxHighlighter
                   style={dark ? oneDark : oneLight}
                   language={language}
                   PreTag="div"
                   customStyle={{
-                    margin: '16px 0',
-                    borderRadius: 'var(--radius-lg)',
+                    margin: 0,
+                    borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
                     fontSize: '12px',
                     border: '1px solid var(--color-code-border)',
                     background: dark ? '#1a1714' : 'var(--color-code-bg)',
@@ -262,8 +300,9 @@ function useMarkdownComponents(citationsMap, dark) {
                   codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
                   {...props}
                 >
-                  {String(children).replace(/\n$/, '')}
+                  {source}
                 </SyntaxHighlighter>
+                </div>
               )
             }
 

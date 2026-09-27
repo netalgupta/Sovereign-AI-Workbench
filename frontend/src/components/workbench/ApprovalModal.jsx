@@ -55,7 +55,7 @@ export function ApprovalModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
-          className="fixed inset-0 z-[10100] flex items-center justify-center p-4 select-none"
+          className="fixed inset-0 z-[10100] flex items-center justify-center p-4"
           style={{
             background: 'rgba(5, 5, 8, 0.72)',
             backdropFilter: 'blur(8px)',

@@ -32,6 +32,19 @@ import {
 } from 'lucide-react'
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
+import { CopyButton } from '../common/CopyButton'
+
+// The answer as text, with the sources its [n] markers point to listed
+// under it -- a pasted answer keeps its citations.
+function answerForCopy(message) {
+  const body = (message.content || '').trim()
+  const cites = (message.citations || []).map((c, i) => {
+    const id = c.id ?? i + 1
+    const page = c.page_number ? `, p. ${c.page_number}` : ''
+    return `[${id}] ${c.source_document || c.doc || 'source'}${page}`
+  })
+  return cites.length ? `${body}\n\nSources:\n${cites.join('\n')}` : body
+}
 import { useChatStore } from '../../store/chatStore'
 import { InlineMiniGraph } from './InlineMiniGraph'
 import { getToolsMetadata } from '../../lib/api'
@@ -260,6 +273,7 @@ function extractToolResult(tool) {
  */
 function TurnTrace({ message, isStreaming = false }) {
   const [open, setOpen] = useState(false)
+  const traceRef = useRef(null)
   const [activeWordIndex, setActiveWordIndex] = useState(0)
 
   // Rotate active word every 2.4s while actively in progress
@@ -794,13 +808,18 @@ function TurnTrace({ message, isStreaming = false }) {
       <div className={`collapsible-grid ${open ? 'is-expanded' : ''}`}>
         <div className="collapsible-inner">
           <div
-            className="mt-1 pt-2.5 pb-2.5 pl-3 pr-2 flex flex-col font-mono text-[11.5px] leading-relaxed gap-0.5 rounded-lg border"
+            ref={traceRef}
+            className="group relative mt-1 pt-2.5 pb-2.5 pl-3 pr-2 flex flex-col font-mono text-[11.5px] leading-relaxed gap-0.5 rounded-lg border select-text"
             style={{
               background: 'var(--color-surface)',
               borderColor: 'var(--color-border)',
               boxShadow: 'var(--shadow-xs)',
             }}
           >
+            {/* The whole trace -- memory, tools, sources -- as text */}
+            <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <CopyButton text={() => traceRef.current?.innerText || ''} label="Copy trace" title="Copy this turn's trace" size={11} />
+            </div>
             {/* Level 0: Turn Root */}
             <div className="flex items-center gap-2 py-1">
               <Terminal
@@ -1100,9 +1119,12 @@ export function MessageBubble({ message }) {
             {/* User messages are plain text — no markdown, no citations */}
             {message.content}
           </div>
-          <span className="text-xs px-1.5" style={{ color: 'var(--color-text-faint)' }}>
-            {formatTime(message.timestamp)}
-          </span>
+          <div className="flex items-center gap-1">
+            <CopyButton text={message.content} title="Copy message" size={12} />
+            <span className="text-xs px-1.5" style={{ color: 'var(--color-text-faint)' }}>
+              {formatTime(message.timestamp)}
+            </span>
+          </div>
         </div>
       </motion.div>
     )
@@ -1166,6 +1188,12 @@ export function MessageBubble({ message }) {
       {/* Real detection overlay from tool output (rendered only when the
           backend actually returned detections for an image). */}
       {!isStreaming && <DetectionCards message={message} />}
+
+      {!isStreaming && (
+        <div className="flex items-center gap-2 -mb-2">
+          <CopyButton text={() => answerForCopy(message)} label="Copy" title="Copy the answer, with its sources" />
+        </div>
+      )}
 
       {!isStreaming && <VerifyButton message={message} />}
 

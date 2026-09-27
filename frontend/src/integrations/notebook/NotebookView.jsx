@@ -18,6 +18,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Calculator, Code2, Play, RotateCcw, BookOpen, Loader2, AlertTriangle } from 'lucide-react'
 import { useChatStore } from '../../store/chatStore'
 import { buildCells } from './notebookModel'
+import { CopyButton } from '../../components/common/CopyButton'
 
 const pretty = (v) => {
   if (v == null) return ''
@@ -33,8 +34,11 @@ function Block({ label, children, tone }) {
   if (children == null || children === '') return null
   return (
     <div>
-      <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: tone || 'var(--color-text-muted)' }}>
-        {label}
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: tone || 'var(--color-text-muted)' }}>
+          {label}
+        </span>
+        <CopyButton text={String(children)} title={`Copy ${String(label).toLowerCase()}`} size={11} />
       </div>
       <pre
         className="text-[12px] font-mono rounded-lg border p-3 overflow-auto max-h-72 whitespace-pre-wrap break-words"

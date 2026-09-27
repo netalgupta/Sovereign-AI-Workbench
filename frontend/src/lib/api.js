@@ -526,3 +526,19 @@ export async function readAttachmentText(file) {
   if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`)
   return data
 }
+
+
+/**
+ * Attach a file to a chat as a source of THAT chat only (indexed in the
+ * background; searchable from this chat, never from another).
+ * @returns {Promise<{name, fullPath, job_id, poll}>}
+ */
+export async function addChatAttachment(file, sessionId) {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('session_id', sessionId)
+  const res = await fetch('/api/chat-attachments', { method: 'POST', body: form })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`)
+  return data
+}

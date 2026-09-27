@@ -38,9 +38,10 @@ import { usePreviewStore } from '../../store/previewStore'
 import { OutputJobCard } from './OutputJobCard'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { useChatStore } from '../../store/chatStore'
+import { useChatStore, earlierChatsMessages } from '../../store/chatStore'
+import { collectPrompts, stepHistory } from '../../lib/promptHistory'
 import { useIngestionStore } from '../../store/ingestionStore'
-import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool, readAttachmentText } from '../../lib/api'
+import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool, readAttachmentText, addChatAttachment } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { CalcTraceCard } from '../../integrations/calc-trace'
@@ -238,6 +239,11 @@ export function ChatPane() {
         continue
       }
       const id = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      // ...and it becomes a source of THIS chat (not global): later
+      // questions in this chat can search it; no other chat can.
+      addChatAttachment(file, useChatStore.getState().sessionId)
+        .then(() => window.dispatchEvent(new CustomEvent('chat-attachments-changed')))
+        .catch((err) => showToast(`${file.name} could not be added to this chat's sources: ${err.message}`, 'error'))
       // A PDF, Word, Excel or PowerPoint file is READ now, while the
       // operator types: it used to send only its name, so the model was
       // told a file existed and never saw a word of it. Read-only -- the
@@ -246,7 +252,7 @@ export function ChatPane() {
         docReadsRef.current[id] = readAttachmentText(file).then(
           (r) => {
             setTemporaryAttachments((prev) =>
-              prev.map((a) => (a.id === id ? { ...a, status: 'ready', pages: r.pages, truncated: r.truncated } : a)),
+              prev.map((a) => (a.id === id ? { ...a, status: 'ready', pages: r.pages, unit: r.unit || 'page', truncated: r.truncated } : a)),
             )
             return r
           },
@@ -721,7 +727,7 @@ export function ChatPane() {
         const included = d.text.slice(0, perFile)
         const partial = included.length < total || d.truncated
         blocks.push(
-          `ATTACHED FILE: ${d.name}${d.pages > 1 ? ` (${d.pages} pages)` : ''}` +
+          `ATTACHED FILE: ${d.name}${d.pages > 1 ? ` (${d.pages} ${d.unit || 'page'}s)` : ''}` +
             (partial ? ` -- only the first ${included.length} of ${total} characters are included` : '') +
             `\n<<<\n${included}\n>>>`,
         )
@@ -1022,10 +1028,38 @@ export function ChatPane() {
     }
   }
 
+  // Up / Down walk through past prompts, like a terminal: this chat's,
+  // then earlier chats'. Up works from the first line, Down from the last,
+  // so a multi-line draft is still edited normally; Down past the newest
+  // brings back what was being typed.
+  const historyRef = useRef({ index: -1, saved: '', list: null })
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      historyRef.current = { index: -1, saved: '', list: null }
       handleSend()
+      return
+    }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const h = historyRef.current
+      if (!h.list) h.list = collectPrompts(messages, earlierChatsMessages(sessionId))
+      const next = stepHistory({
+        key: e.key,
+        draft,
+        caretStart: e.currentTarget.selectionStart,
+        caretEnd: e.currentTarget.selectionEnd,
+        history: h.list,
+        state: h,
+      })
+      if (!next) return
+      e.preventDefault()
+      historyRef.current = { ...next, list: h.list }
+      setDraft(next.draft)
+      // caret to the end, where a recalled prompt is edited from
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (el) el.setSelectionRange(el.value.length, el.value.length)
+      })
     }
   }
 
@@ -1439,7 +1473,7 @@ export function ChatPane() {
                         : att.status === 'error'
                           ? 'could not be read'
                           : att.pages > 1
-                            ? `${att.pages} pages`
+                            ? `${att.pages} ${att.unit || 'page'}s`
                             : `${Math.round(att.size / 1024)} KB`}
                     </span>
                     <button
@@ -1471,7 +1505,7 @@ export function ChatPane() {
               id="chat-composer-input"
               rows={1}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => { historyRef.current = { index: -1, saved: "", list: null }; setDraft(e.target.value) }}
               onKeyDown={handleKeyDown}
               placeholder={
                 awaitingHumanApproval

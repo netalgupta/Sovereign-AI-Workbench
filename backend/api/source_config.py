@@ -126,9 +126,11 @@ def viewable_file(raw: str) -> Path | None:
     if not raw:
         return None
     from backend.paths import OUTPUT_DIR
+    from backend.retrieval.chat_attachments import ROOT as CHAT_ATTACHMENTS
 
-    # generated deliverables (the Artifacts tab) open in the same viewer
-    roots = source_roots() + ([OUTPUT_DIR.resolve()] if OUTPUT_DIR.exists() else [])
+    # generated deliverables (the Artifacts tab) and files attached in a
+    # chat open in the same viewer
+    roots = source_roots() + [r.resolve() for r in (OUTPUT_DIR, CHAT_ATTACHMENTS) if r.exists()]
     given = Path(raw)
     candidate = given if given.is_absolute() else _REPO_ROOT / given
     try:
