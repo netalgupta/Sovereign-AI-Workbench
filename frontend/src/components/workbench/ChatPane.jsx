@@ -43,6 +43,7 @@ import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
+import NotebookView from '../../integrations/notebook/NotebookView'
 import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
 
 // Helper to convert browser File object to Base64
@@ -107,7 +108,6 @@ export function ChatPane() {
   const setActiveTab = useChatStore((s) => s.setActiveTab)
 
   // Code block copy state
-  const [copiedCode, setCopiedCode] = useState(false)
 
   // Model selector state (Cosmetic selector pointing to real models.yaml entries)
   // Kept for the trigger label only; routing is per-task, so there is no
@@ -641,9 +641,6 @@ export function ChatPane() {
     }
   }, [])
 
-  const CODE_SNIPPET = `if feed_rate > 1.10 * design_capacity:
-    alert("High risk: exceeds design threshold")
-    suggest_mitigation(cool_quench=True)`
 
   const handleSend = async () => {
     const hasAttachments = attachments.length > 0
@@ -957,17 +954,6 @@ export function ChatPane() {
     }
   }
 
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(CODE_SNIPPET)
-      setCopiedCode(true)
-      showToast('Code copied to clipboard', 'success')
-      setTimeout(() => setCopiedCode(false), 2000)
-    } catch (err) {
-      console.error('Failed to copy code:', err)
-      showToast('Could not copy code to clipboard', 'warning')
-    }
-  }
 
   const toggleCompletedStep = (id) => {
     setExpandedCompletedSteps((prev) => ({
@@ -989,6 +975,9 @@ export function ChatPane() {
       {activeTab === 'artifacts' ? (
         /* Every file the operator has approved, newest first (outputs/). */
         <RealOutputCards />
+      ) : activeTab === 'notebooks' ? (
+        /* Every calculation and program in this chat, re-runnable (integrations/notebook). */
+        <NotebookView />
       ) : activeTab !== 'chat' ? (
         /* Notebooks: not built yet */
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-fade-in">

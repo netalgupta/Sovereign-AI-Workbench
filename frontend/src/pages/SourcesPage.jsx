@@ -33,7 +33,7 @@ export function SourcesPage() {
   const [activeTab, setActiveTab] = useState('files') // 'files' | 'graph' | 'images' | 'vectors' | 'chunks'
 
   // Corpus & Sources state
-  const [corpusData, setCorpusData] = useState({ tree: [], sources: [], directories: [], totalSizeDisplay: '2.83 MB' })
+  const [corpusData, setCorpusData] = useState({ tree: [], sources: [], directories: [], totalSizeDisplay: null })
   const [selectedFile, setSelectedFile] = useState(null)
   const [fileFilterCategory, setFileFilterCategory] = useState('all')
   const [fileSearchQuery, setFileSearchQuery] = useState('')
@@ -719,7 +719,7 @@ export function SourcesPage() {
                             {selectedFile.badge || selectedFile.type || 'DOCUMENT'}
                           </span>
                           <span>•</span>
-                          <span>{selectedFile.size || '37.0 KB'}</span>
+                          <span>{selectedFile.size || '—'}</span>
                           <span>•</span>
                           <span>Corpus: {selectedFile.corpus || 'MRPL Corpus'}</span>
                         </div>

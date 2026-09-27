@@ -24,6 +24,12 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
   // Handle Escape Key to close panel or exit fullscreen
   useEffect(() => {
     const handleKeyDown = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '') || e.target?.isContentEditable
+      if (isOpen && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '+' || e.key === '=') return setZoomLevel((z) => Math.min(z + 25, 250))
+        if (e.key === '-') return setZoomLevel((z) => Math.max(z - 25, 50))
+        if (e.key === '0') return setZoomLevel(100)
+      }
       if (e.key === 'Escape' && isOpen) {
         if (isFullscreen) {
           setIsFullscreen(false)
@@ -36,14 +42,15 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isOpen, isFullscreen, onClose])
 
-  // Reset zoom & page info when file or visibility changes
+  // Reset zoom & page info when the panel closes, and when it switches to
+  // another file (the previous file's "Page 3 / 26" used to stay on the
+  // counter over a Markdown file, which has no pages).
+  const fileKey = file ? (typeof file === 'string' ? file : file.id || file.fullPath || file.relativePath || file.name) : ''
   useEffect(() => {
-    if (!isOpen || !file) {
-      setZoomLevel(100)
-      setIsFullscreen(false)
-      setPageInfo({ current: 1, total: 1, label: '' })
-    }
-  }, [isOpen, file])
+    setZoomLevel(100)
+    setPageInfo({ current: 1, total: 1, label: '' })
+    if (!isOpen || !fileKey) setIsFullscreen(false)
+  }, [isOpen, fileKey])
 
   // Helper to derive clean workspace-relative path identifier for API calls
   const getFilePath = (file) => {
@@ -185,7 +192,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
               type="button"
               onClick={handleZoomReset}
               className="p-1 rounded hover:bg-[var(--color-overlay)] transition-fast cursor-pointer"
-              title="Reset Zoom (100%)"
+              title="Reset Zoom (0)"
             >
               <RotateCcw size={12} />
             </button>

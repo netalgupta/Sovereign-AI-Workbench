@@ -95,70 +95,6 @@ const INITIAL_SYSTEM_INFO = {
  * RBAC Matrix Definition (FRONTEND.md §3.11):
  * Role tiers × Knowledge base source categories.
  */
-const RBAC_TIERS = [
-  {
-    role: 'Plant Engineer',
-    badge: 'Operations Tier',
-    description: 'Operational troubleshooting, sensor telemetry, and standard operating procedure lookup.',
-    permissions: {
-      sops: true,
-      inspection: true,
-      quality: true,
-      sap_mock: true,
-      correspondence: false,
-      diagrams: true,
-    },
-  },
-  {
-    role: 'HSE Specialist',
-    badge: 'Safety Compliance Tier',
-    description: 'Health, Safety & Environment compliance, runaway prevention guidelines, and safety interlock review.',
-    permissions: {
-      sops: true,
-      inspection: true,
-      quality: true,
-      sap_mock: false,
-      correspondence: false,
-      diagrams: true,
-    },
-  },
-  {
-    role: 'Superintendent / Approver',
-    badge: 'Executive Authorization Tier',
-    description: 'Management of Change (MOC) sign-off, critical parameter overrides, and cross-unit economic optimization.',
-    permissions: {
-      sops: true,
-      inspection: true,
-      quality: true,
-      sap_mock: true,
-      correspondence: true,
-      diagrams: true,
-    },
-  },
-  {
-    role: 'System Administrator',
-    badge: 'Infrastructure Tier',
-    description: 'Air-gapped model registry orchestration, hardware encryption keys, and network interface security.',
-    permissions: {
-      sops: true,
-      inspection: true,
-      quality: true,
-      sap_mock: true,
-      correspondence: true,
-      diagrams: true,
-    },
-  },
-]
-
-const RBAC_CATEGORIES = [
-  { id: 'sops', label: '01_SOPs & Safety (HCU-2 & Aromatics)' },
-  { id: 'inspection', label: '02_Inspection & Maintenance (CCR-1 & Hassan)' },
-  { id: 'quality', label: '03_Quality & Process Data (Novolen QA & Merox)' },
-  { id: 'sap_mock', label: '04_SAP ERP Mock Records (Materials Master)' },
-  { id: 'correspondence', label: '05_Depot Correspondence (Kasargod)' },
-  { id: 'diagrams', label: '06_Diagrams & Scans (P&ID & OCR Checklist)' },
-]
-
 /**
  * SettingsPage — Administrative & Orchestration View per FRONTEND.md §3.11.
  *
@@ -177,8 +113,10 @@ export function SettingsPage() {
   const [modelsError, setModelsError] = useState(null)
   const [systemInfo, setSystemInfo] = useState(INITIAL_SYSTEM_INFO)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [rbacTiers, setRbacTiers] = useState(RBAC_TIERS)
-  const [rbacCategories, setRbacCategories] = useState(RBAC_CATEGORIES)
+  // Live from /api/rbac/tiers only: the built-in tables stayed on screen when
+  // the backend was unreachable, as if they were the enforced policy.
+  const [rbacTiers, setRbacTiers] = useState([])
+  const [rbacCategories, setRbacCategories] = useState([])
 
   // Add Model Form State
   const [formData, setFormData] = useState({

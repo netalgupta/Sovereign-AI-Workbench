@@ -2526,6 +2526,15 @@ def get_rbac_matrix() -> dict:
     return get_rbac_manifest()
 
 
+def _os_user() -> str:
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001 - no login name in some service contexts; shown as absent
+        return ""
+
+
 @router.get("/system-info")
 def system_info() -> dict:
     """Host facts the status bar reports, measured rather than assumed."""
@@ -2535,6 +2544,10 @@ def system_info() -> dict:
 
     vm = psutil.virtual_memory()
     info = {
+        # Who is running this workstation and which machine it is -- the top
+        # bar showed a fixed "Operator / Station #1".
+        "user": _os_user(),
+        "host": platform.node(),
         "platform": platform.system(),
         "platform_release": platform.release(),
         "python_version": platform.python_version(),
@@ -3398,45 +3411,31 @@ def serve_sandbox_render_preview(attachment_id: str, page: int = Query(1)) -> Re
     if not file_path or not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Rendered preview not found for attachment: {attachment_id}")
 
-    media_type = "image/png" if file_path.suffix.lower() == ".png" else "application/pdf"
+    media_type = {".png": "image/png", ".jpg": "image/jpeg"}.get(file_path.suffix.lower(), "application/octet-stream")
     return Response(content=file_path.read_bytes(), media_type=media_type)
 
 
 @router.get("/sources/content")
 def get_source_content(path: str = Query(..., description="Disk file path or relative path of source file")) -> Response:
-    """Serve direct raw content for PDF, TXT, and media files in the Sources corpus."""
-    raw_path_p = Path(path)
-    if raw_path_p.is_absolute():
-        candidate_path = raw_path_p.resolve()
-    else:
-        candidate_path = (Path.cwd() / raw_path_p).resolve()
-
-    if not candidate_path.exists() or not candidate_path.is_file():
-        # Fallback: search for matching filename within workspace
-        matched = list(Path.cwd().glob(f"**/{raw_path_p.name}"))
-        if matched and matched[0].is_file():
-            candidate_path = matched[0].resolve()
-        else:
-            raise HTTPException(status_code=404, detail=f"Source file not found on disk: {path}")
-
-    # Prevent path traversal outside workspace or temp directory
-    import tempfile
-    is_workspace = candidate_path.is_relative_to(Path.cwd()) if hasattr(candidate_path, "is_relative_to") else str(candidate_path).lower().startswith(str(Path.cwd()).lower())
-    is_temp = candidate_path.is_relative_to(Path(tempfile.gettempdir())) if hasattr(candidate_path, "is_relative_to") else str(candidate_path).lower().startswith(str(tempfile.gettempdir()).lower())
-    if not (is_workspace or is_temp):
-        raise HTTPException(status_code=403, detail="Access denied: target path is outside repository workspace")
+    """Serve the raw bytes of a file inside a configured source (source_config.viewable_file)."""
+    from fastapi.responses import FileResponse
+    candidate_path = source_config.viewable_file(path)
+    if candidate_path is None:
+        raise HTTPException(status_code=404, detail=f"No file in the configured sources matches: {path}")
 
     ext = candidate_path.suffix.lower()
+    images = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+              ".svg": "image/svg+xml", ".gif": "image/gif", ".bmp": "image/bmp"}
     if ext == ".pdf":
         media_type = "application/pdf"
-    elif ext in (".txt", ".md", ".json", ".csv", ".py", ".log", ".xml", ".yaml", ".yml"):
+    elif ext in (".txt", ".md", ".json", ".csv", ".py", ".log", ".xml", ".yaml", ".yml", ".html", ".css", ".js"):
         media_type = "text/plain; charset=utf-8"
-    elif ext in (".png", ".jpg", ".jpeg", ".webp", ".svg"):
-        media_type = f"image/{ext.lstrip('.')}"
+    elif ext in images:
+        media_type = images[ext]
     else:
         media_type = "application/octet-stream"
 
-    return Response(content=candidate_path.read_bytes(), media_type=media_type)
+    return FileResponse(candidate_path, media_type=media_type)
 
 
 # ============================================================================

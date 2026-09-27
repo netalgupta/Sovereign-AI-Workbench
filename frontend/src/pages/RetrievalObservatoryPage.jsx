@@ -171,7 +171,7 @@ export function RetrievalObservatoryPage() {
                   VECTOR DIMENSION
                 </span>
                 <span className="text-sm font-bold font-mono text-[var(--color-text)] mt-0.5 block">
-                  {chunksData?.embeddingDim || 1024} dims
+                  {chunksData?.embeddingDim ? `${chunksData.embeddingDim} dims` : '—'}
                 </span>
               </div>
 
@@ -220,7 +220,7 @@ export function RetrievalObservatoryPage() {
                 <div className="flex-1 w-full min-h-[360px] relative flex items-center justify-center">
                   <VectorScatter
                     chunks={chunksList}
-                    pcaExplained={chunksData?.pcaExplained || [0.28, 0.19]}
+                    pcaExplained={chunksData?.pcaExplained || []}
                     height={420}
                   />
                 </div>

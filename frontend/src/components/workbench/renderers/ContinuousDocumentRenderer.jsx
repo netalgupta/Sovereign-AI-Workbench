@@ -1,8 +1,59 @@
-import { useState, useEffect, useRef } from 'react'
-import { Loader2, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { Loader2, AlertCircle, RotateCcw } from 'lucide-react'
 
-// Simple in-memory cache for render jobs to prevent re-fetching on toggle
-const renderCache = new Map()
+// No client-side cache of render jobs: the backend answers an unchanged file
+// from its disk cache in milliseconds, and knows when a file was edited --
+// a Map here kept showing the old pages of an edited file until reload.
+const POLL_MS = 350
+const GIVE_UP_MS = 120000
+
+// One page image. Until it loads it holds its space (so lazy loading loads
+// only what is near the viewport, and the scrollbar does not jump); a page
+// the backend cannot render says so, with a retry, instead of a broken icon.
+function PageImage({ src, label, aspect, eager }) {
+  const [state, setState] = useState('loading') // loading | ready | failed
+  const [attempt, setAttempt] = useState(0)
+  return (
+    <div
+      className="relative w-full rounded-lg shadow-md border overflow-hidden bg-white"
+      style={state === 'ready' ? undefined : { aspectRatio: aspect }}
+    >
+      {state !== 'failed' && (
+        <img
+          key={attempt}
+          src={attempt ? `${src}&retry=${attempt}` : src}
+          alt={label}
+          className="w-full h-auto object-contain block bg-white transition-opacity duration-200"
+          style={{ opacity: state === 'ready' ? 1 : 0 }}
+          loading={eager ? 'eager' : 'lazy'}
+          decoding="async"
+          onLoad={() => setState('ready')}
+          onError={() => setState('failed')}
+        />
+      )}
+      {state === 'loading' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 animate-pulse" style={{ background: 'var(--color-overlay)' }}>
+          <Loader2 size={18} className="animate-spin text-muted" />
+          <span className="text-[10px] font-mono text-muted">Rendering {label}</span>
+        </div>
+      )}
+      {state === 'failed' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center p-4" style={{ background: 'var(--color-overlay)' }}>
+          <AlertCircle size={18} className="text-red-500" />
+          <span className="text-xs text-muted">{label} could not be rendered.</span>
+          <button
+            type="button"
+            onClick={() => { setState('loading'); setAttempt((a) => a + 1) }}
+            className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded border cursor-pointer hover:bg-[var(--color-surface)]"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-accent)' }}
+          >
+            <RotateCcw size={11} /> Try again
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function ContinuousDocumentRenderer({
   filePath,
@@ -25,20 +76,42 @@ export function ContinuousDocumentRenderer({
     setLoading(true)
     setError(null)
     setActivePage(1)
+    pageRefs.current = []
 
     let cancelled = false
+    let timer = null
+    const started = Date.now()
 
-    const cacheKey = filePath
-    if (renderCache.has(cacheKey)) {
-      const cached = renderCache.get(cacheKey)
-      setPreviewBaseUrl(cached.preview_url)
-      setPageCount(cached.page_count || 1)
+    const fail = (message) => {
+      if (cancelled) return
+      setError(message)
       setLoading(false)
-      if (onPageChange) onPageChange(1, cached.page_count || 1)
-      return
     }
 
-    // Submit document for sandbox conversion
+    // One request at a time: the next poll is scheduled only after the
+    // previous answer, so a slow backend is never stacked with requests.
+    const poll = (jobId) => {
+      fetch(`/api/sandbox/render/${jobId}`)
+        .then((r) => (r.ok ? r.json() : r.json().catch(() => ({})).then((d) => Promise.reject(new Error(d.detail || `HTTP ${r.status}`)))))
+        .then((job) => {
+          if (cancelled) return
+          if (job.status === 'ready') {
+            const count = Math.max(1, job.page_count || 1)
+            setPreviewBaseUrl(`${job.preview_url}?v=${started}`)
+            setPageCount(count)
+            setLoading(false)
+            if (onPageChange) onPageChange(1, count)
+          } else if (job.status === 'failed') {
+            fail(job.error || 'Sandboxed document conversion failed')
+          } else if (Date.now() - started > GIVE_UP_MS) {
+            fail('The document is still converting after two minutes. Close and reopen it to try again.')
+          } else {
+            timer = setTimeout(() => poll(jobId), POLL_MS)
+          }
+        })
+        .catch((err) => fail(err.message || 'Error checking rendering job status'))
+    }
+
     fetch('/api/sandbox/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -46,57 +119,32 @@ export function ContinuousDocumentRenderer({
     })
       .then((res) => {
         if (!res.ok) {
-          return res.json().then((d) => Promise.reject(new Error(d.detail || 'Render job submission failed')))
+          return res.json().catch(() => ({})).then((d) => Promise.reject(new Error(d.detail || 'Render job submission failed')))
         }
         return res.json()
       })
       .then((data) => {
-        if (cancelled) return
-        const jobId = data.job_id
-
-        const pollInterval = setInterval(() => {
-          if (cancelled) {
-            clearInterval(pollInterval)
-            return
-          }
-          fetch(`/api/sandbox/render/${jobId}`)
-            .then((r) => r.json())
-            .then((job) => {
-              if (cancelled) return
-              if (job.status === 'ready') {
-                clearInterval(pollInterval)
-                const count = Math.max(1, job.page_count || 1)
-                setPreviewBaseUrl(job.preview_url)
-                setPageCount(count)
-                setLoading(false)
-                renderCache.set(cacheKey, job)
-
-                if (onPageChange) onPageChange(1, count)
-              } else if (job.status === 'failed') {
-                clearInterval(pollInterval)
-                setError(job.error || 'Sandboxed document conversion failed')
-                setLoading(false)
-              }
-            })
-            .catch((err) => {
-              clearInterval(pollInterval)
-              if (!cancelled) {
-                setError(err.message || 'Error checking rendering job status')
-                setLoading(false)
-              }
-            })
-        }, 400)
+        if (!cancelled) poll(data.job_id)
       })
-      .catch((err) => {
-        if (cancelled) return
-        setError(err.message || 'Failed to submit document for rendering')
-        setLoading(false)
-      })
+      .catch((err) => fail(err.message || 'Failed to submit document for rendering'))
 
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [filePath])
+
+  // Zoom keeps the page you are reading in view (it used to stay at the same
+  // scroll offset, which is a different page once every page changes size).
+  const lastZoom = useRef(zoomLevel)
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const el = pageRefs.current[activePage - 1]
+    if (lastZoom.current !== zoomLevel && container && el) {
+      container.scrollTop = el.offsetTop - container.offsetTop - 16
+    }
+    lastZoom.current = zoomLevel
+  }, [zoomLevel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Continuous Scroll Intersection Observer for active page calculation
   useEffect(() => {
@@ -181,15 +229,12 @@ export function ContinuousDocumentRenderer({
           className="flex flex-col items-center gap-2 group transition-all duration-150"
           style={{ width: `${targetWidthPx}px`, maxWidth: '100%' }}
         >
-          {/* Page Image */}
-          <div className="relative w-full rounded-lg shadow-md border overflow-hidden bg-white">
-            <img
-              src={`${previewBaseUrl}?page=${pageNum}`}
-              alt={`${labelWord} ${pageNum}`}
-              className="w-full h-auto object-contain block bg-white"
-              loading={pageNum <= 3 ? 'eager' : 'lazy'}
-            />
-          </div>
+          <PageImage
+            src={`${previewBaseUrl}&page=${pageNum}`}
+            label={`${labelWord} ${pageNum}`}
+            aspect={isPptx ? '16 / 9' : '1 / 1.414'}
+            eager={pageNum <= 2}
+          />
 
           {/* Bottom Page Label */}
           <span className="text-[10px] font-mono text-muted px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] opacity-70 group-hover:opacity-100 transition-opacity">

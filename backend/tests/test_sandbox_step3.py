@@ -125,7 +125,7 @@ def test_criterion_1_docx_rendering():
     # Verify preview image HTTP endpoint returns 200 OK image
     prev_resp = client.get(f"/api/sandbox/render/preview/{att_id}?page=1")
     assert prev_resp.status_code == 200
-    assert prev_resp.headers["content-type"] in ("image/png", "application/pdf")
+    assert prev_resp.headers["content-type"] in ("image/png", "image/jpeg")  # an <img> is shown it: never a PDF
     assert len(prev_resp.content) > 100
 
 

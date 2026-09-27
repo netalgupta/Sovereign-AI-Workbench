@@ -69,7 +69,7 @@ export function WorkbenchPage() {
         setTree(data.tree || [])
         setSources(fetchedSources)
         setDirectories(data.directories || [])
-        setTotalSizeDisplay(data.totalSizeDisplay || '2.83 MB')
+        setTotalSizeDisplay(data.totalSizeDisplay || null)
       }
     } catch (e) {
       console.warn('Corpus fetch error:', e)
@@ -387,7 +387,7 @@ export function WorkbenchPage() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="font-mono text-[10px] text-[var(--color-text-faint)]">
-              {totalSizeDisplay || '50.5 MB'}
+              {totalSizeDisplay || '—'}
             </span>
             {/* Seamless Toggle Switch */}
             <button

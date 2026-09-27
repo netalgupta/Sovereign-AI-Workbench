@@ -75,3 +75,16 @@ def test_the_model_registry_loads_by_default(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     assert "reasoning-model" in load_registry()
+
+
+def test_the_default_path_follows_a_redirected_config_path(tmp_path, monkeypatch):
+    """conftest redirects CONFIG_PATH; a call that relies on the default must
+    follow it. With `path=CONFIG_PATH` bound at import, a test's save() wrote
+    the operator's real list and wiped every configured source (27 Sep)."""
+    from backend.api import source_config as SC
+
+    target = tmp_path / "redirected.json"
+    monkeypatch.setattr(SC, "CONFIG_PATH", target)
+    assert SC.save([{"id": "x", "path": str(tmp_path)}])
+    assert target.exists()
+    assert SC.load() == [{"id": "x", "path": str(tmp_path)}]

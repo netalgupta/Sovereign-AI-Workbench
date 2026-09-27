@@ -22,10 +22,19 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useChatStore } from '../../store/chatStore'
-import { showToast } from '../../store/toastStore'
 import { springs } from '../../lib/motion'
 
 export function TopBar({ onOpenSearch }) {
+  // Who and where, from the backend. Empty until it answers.
+  const [station, setStation] = useState({ user: '', host: '' })
+  useEffect(() => {
+    let alive = true
+    fetch('/api/system-info')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d && setStation({ user: d.user || '', host: d.host || '' }))
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
   const { theme, toggleTheme } = useThemeStore()
   const location = useLocation()
   const navigate = useNavigate()
@@ -108,9 +117,6 @@ export function TopBar({ onOpenSearch }) {
                   setActiveTab(tab.id)
                   if (location.pathname !== '/workbench' && location.pathname !== '/chat') {
                     navigate('/workbench')
-                  }
-                  if (tab.id !== 'chat') {
-                    showToast(`${tab.label} module — Coming soon`, 'info')
                   }
                 }}
                 className="relative flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs transition-fast cursor-pointer"
@@ -195,16 +201,18 @@ export function TopBar({ onOpenSearch }) {
               background: 'var(--color-overlay)',
               color: 'var(--color-text)',
             }}
-            title="Station: MRPL Refinery Unit — Local Operator"
+            title={station.host ? `Signed in as ${station.user || 'local account'} on ${station.host}` : 'Local workstation'}
           >
             <User size={12} strokeWidth={2.2} />
           </div>
           <div className="hidden xl:flex flex-col">
+            {/* The real OS account and machine (/api/system-info), not a fixed
+                "Operator / Station #1". Blank until known, never invented. */}
             <span className="text-[11px] font-semibold leading-none" style={{ color: 'var(--color-text)' }}>
-              Operator
+              {station.user || ' '}
             </span>
             <span className="text-[9px] font-mono leading-none mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-              Station #1
+              {station.host || ' '}
             </span>
           </div>
         </div>

@@ -9,6 +9,7 @@ a user's question the way this system is supposed to: grounded, cited,
 and willing to say "not found" instead of guessing.
 """
 
+import logging
 import re
 
 from pydantic import BaseModel
@@ -16,6 +17,8 @@ from pydantic import BaseModel
 from backend.models.ollama_client import generate as ollama_generate
 from backend.models.registry import resolve_model_name
 from backend.retrieval.grounded_retrieval import retrieve_with_grounding_check
+
+logger = logging.getLogger(__name__)
 from backend.retrieval.citation_validation import validate_citations
 from backend.retrieval.hybrid_search import RetrievedChunk
 from backend.retrieval.vector_store import VectorStore
@@ -79,7 +82,45 @@ class GeneratedAnswer(BaseModel):
     best_similarity: float = 0.0
     threshold: float = 0.0
     invalid_citations_stripped: list[int]
-    unresolved_placeholders_stripped: int  # count of literal "[N]"-shaped markers the model never resolved — see citation_validation.py
+    unresolved_placeholders_stripped: int
+    # Documents the operator switched off that would have been the best
+    # match. Named in the answer so "not in the sources" is never shown
+    # when the answer is sitting in a source that is merely switched off.
+    switched_off_documents: list[str] = []  # count of literal "[N]"-shaped markers the model never resolved — see citation_validation.py
+
+
+def switched_off_matches(store, query: str, top_k: int, active_documents: list[str] | None) -> list[str]:
+    """Switched-off documents that the unfiltered search ranks FIRST for this query.
+
+    Only when a filter is active. One extra retrieval (no model call). The
+    signal is deliberately strict -- the single best unfiltered match must
+    come from a switched-off document -- so a loosely related disabled file
+    is never named.
+    """
+    if active_documents is None:
+        return []
+    allowed = set(active_documents)
+    try:
+        full = retrieve_with_grounding_check(store, query, top_k, active_documents=None)
+    except Exception as exc:  # noqa: BLE001 - the note is a courtesy, never a reason to fail the answer
+        logger.warning("Switched-off source check failed: %s: %s", type(exc).__name__, exc)
+        return []
+    if not full.found or not full.chunks or full.chunks[0].source_document in allowed:
+        return []
+    names: list[str] = []
+    for chunk in full.chunks[:3]:
+        if chunk.source_document not in allowed and chunk.source_document not in names:
+            names.append(chunk.source_document)
+    return names
+
+
+def switched_off_note(names: list[str]) -> str:
+    if not names:
+        return ""
+    listed = ", ".join(names)
+    verb = "is" if len(names) == 1 else "are"
+    return (f"> **{listed} {verb} switched off in Sources** and was not used here, though it looks "
+            "like the best match for this question. Switch it on to include it.\n\n")
 
 
 _MARKDOWN_FENCE_LABELS = ("markdown", "md", "")
@@ -468,8 +509,10 @@ def generate_grounded_answer(
                f"threshold {grounding.threshold}. No prompt sent to the model.")
         if grounding.near_miss_documents:
             T.note("  closest documents: " + ", ".join(grounding.near_miss_documents))
+        switched_off = switched_off_matches(store, effective_query, top_k, active_documents)
         return GeneratedAnswer(
-            answer_text="Not found in the provided corpus.",
+            answer_text=switched_off_note(switched_off) + "Not found in the provided corpus.",
+            switched_off_documents=switched_off,
             found=False,
             sources=[],
             invalid_citations_stripped=[],
@@ -528,8 +571,10 @@ def generate_grounded_answer(
     if signature:
         T.warn(f"removed a signature block from the answer: {signature[:60]!r}")
 
+    switched_off = switched_off_matches(store, effective_query, top_k, active_documents)
     answer = GeneratedAnswer(
-        answer_text=cleaned_text,
+        answer_text=switched_off_note(switched_off) + cleaned_text,
+        switched_off_documents=switched_off,
         found=True,
         sources=grounding.chunks,
         invalid_citations_stripped=validation.invalid_citation_numbers,

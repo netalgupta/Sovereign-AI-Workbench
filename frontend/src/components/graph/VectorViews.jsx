@@ -86,11 +86,11 @@ export function VectorScatter({ chunks, pcaExplained = [], height = 380 }) {
       ctx.font = '500 10px "IBM Plex Mono", ui-monospace, monospace'
       ctx.fillStyle = cssVar('--color-text-muted', '#888')
       ctx.textAlign = 'left'
-      ctx.fillText(`PC1 · ${((pcaExplained[0] ?? 0) * 100).toFixed(1)}% of variance`, pad, height - 10)
+      ctx.fillText(pcaExplained[0] != null ? `PC1 · ${(pcaExplained[0] * 100).toFixed(1)}% of variance` : 'PC1', pad, height - 10)
       ctx.save()
       ctx.translate(12, height - pad)
       ctx.rotate(-Math.PI / 2)
-      ctx.fillText(`PC2 · ${((pcaExplained[1] ?? 0) * 100).toFixed(1)}%`, 0, 0)
+      ctx.fillText(pcaExplained[1] != null ? `PC2 · ${(pcaExplained[1] * 100).toFixed(1)}%` : 'PC2', 0, 0)
       ctx.restore()
 
       canvas.onmousemove = (e) => {

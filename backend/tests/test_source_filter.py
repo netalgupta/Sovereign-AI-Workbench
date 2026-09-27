@@ -126,3 +126,41 @@ def test_sources_enabled_flag_on_stream_request_and_tools():
     search_tool_names = {"search_documents", "list_documents"}
     assert any(t["function"]["name"] in search_tool_names for t in tools_with_sources)
     assert not any(t["function"]["name"] in search_tool_names for t in tools_without_sources)
+
+
+# ── a switched-off source that holds the answer is named, not hidden ───────
+
+def test_the_best_match_being_switched_off_is_said(monkeypatch):
+    """Measured through the chat: with the Novolen report switched off, the
+    MFI question was answered 'not provided in the given sources'."""
+    from backend.retrieval import generation as G
+
+    class Chunk:
+        def __init__(self, doc):
+            self.source_document = doc
+
+    class Result:
+        found = True
+        chunks = [Chunk("Novolen_Batch_QA_Report_Aug2026.pdf"), Chunk("README.md")]
+
+    monkeypatch.setattr(G, "retrieve_with_grounding_check", lambda *a, **k: Result())
+    names = G.switched_off_matches(object(), "MFI of H030SG", 5, ["README.md", "TOOLS.md"])
+    assert names == ["Novolen_Batch_QA_Report_Aug2026.pdf"]
+    assert "switched off in Sources" in G.switched_off_note(names)
+
+
+def test_nothing_is_named_when_the_best_match_is_enabled_or_no_filter(monkeypatch):
+    from backend.retrieval import generation as G
+
+    class Chunk:
+        def __init__(self, doc):
+            self.source_document = doc
+
+    class Result:
+        found = True
+        chunks = [Chunk("README.md"), Chunk("Novolen_Batch_QA_Report_Aug2026.pdf")]
+
+    monkeypatch.setattr(G, "retrieve_with_grounding_check", lambda *a, **k: Result())
+    assert G.switched_off_matches(object(), "q", 5, ["README.md"]) == []
+    assert G.switched_off_matches(object(), "q", 5, None) == []
+    assert G.switched_off_note([]) == ""
