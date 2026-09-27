@@ -114,3 +114,44 @@ def test_a_request_for_code_files_is_not_a_question_about_the_collection():
     for q in ("What documents do you have?", "List all the files", "How many sources are indexed?",
               "What's in the corpus?"):
         assert is_corpus_question(q), q
+
+
+# ── folders: locations, not just file names ────────────────────────────────
+
+def test_a_short_question_with_its_own_subject_is_not_a_follow_up():
+    """'Find both sop summary and quality' (6 words) was treated as a
+    follow-up and had the previous turn's cyber-security book appended."""
+    from backend.memory.resolver import needs_resolution
+
+    assert not needs_resolution("Find both sop summary and quality")
+    assert needs_resolution("give all of them")
+    assert needs_resolution("what about the rest?")
+
+
+def test_folder_words_match_documents_by_location(tmp_path, monkeypatch):
+    """The SOPs live in 01_SOPs_and_Procedures and quality records in
+    03_Quality_and_Process_Data; no passage's text says either name."""
+    from backend.api import source_config
+    from backend.retrieval import catalog as C
+
+    root = tmp_path / "Plant"
+    for rel in ("01_SOPs_and_Procedures/SOP-114-Changeout.docx", "03_Quality_and_Process_Data/Batch_QA_Aug.pdf",
+                "02_Inspection/Pipeline_Incident.pdf"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x", encoding="utf-8")
+    source_config.save([{"id": "p", "name": "Plant", "path": str(root), "enabled": True}])
+    monkeypatch.setattr(C, "_cache", {"key": None, "docs": {}})
+
+    class Store:
+        def document_names(self):
+            return ["SOP-114-Changeout.docx", "Batch_QA_Aug.pdf", "Pipeline_Incident.pdf"]
+
+        def generation(self):
+            return 1
+
+    store = Store()
+    scores = C.location_scores(store, "Find both sop summary and quality")
+    assert set(scores) == {"SOP-114-Changeout.docx", "Batch_QA_Aug.pdf"}
+    assert C.location_label(store, "Batch_QA_Aug.pdf") == "Plant / 03_Quality_and_Process_Data / Batch_QA_Aug.pdf"
+    listing = dict((k, [d.name for d in v]) for k, v in C.folder_listing(store, "what is in the quality folder"))
+    assert listing == {"Plant / 03_Quality_and_Process_Data": ["Batch_QA_Aug.pdf"]}

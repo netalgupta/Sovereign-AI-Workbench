@@ -93,6 +93,47 @@ def extract_code(raw: str) -> str:
     return code
 
 
+# A request for a FILE TO READ, not a program to run. Measured 27 Sep: "Write a
+# single self-contained HTML page ... with a button that counts clicks" went
+# down the run-it-in-the-sandbox path, the model correctly returned an html
+# block, and extract_code() rejected it as "prose rather than code" -- the
+# user got a failure for a correct answer. Pages, markup, config, SQL and
+# multi-file projects are written and returned; they are not executed.
+_SOURCE_ONLY = re.compile(
+    r"\b(html|css|web ?page|landing page|svg|ya?ml|json|toml|ini|dockerfile|docker[- ]compose|compose file|"
+    r"kubernetes|k8s|manifest|nginx|config(?:uration)? file|\.env|requirements\.txt|sql|schema|"
+    r"separate files|multiple files|several files|project structure|as files)\b",
+    re.I,
+)
+
+
+def wants_source_only(task: str) -> bool:
+    """Is this a request for source to read (a page, config, a project), not a program to run?"""
+    return bool(task and _SOURCE_ONLY.search(task))
+
+
+_SOURCE_PROMPT = (
+    "Write exactly what is asked:\n\n{task}\n\n"
+    "Rules:\n"
+    "- Give each file as its own fenced code block with the right language tag.\n"
+    "- When there is more than one file, put the line 'File: relative/path/name.ext' "
+    "directly above each file's block.\n"
+    "- A web page must be self-contained: inline CSS and JavaScript, no external "
+    "links, fonts, images or CDNs (it is shown offline).\n"
+    "- One short sentence before the code saying what it is. No other prose.\n"
+)
+
+
+def write_source(task: str, model_id: str = "coder-model") -> str:
+    """The code model's files for `task`, as markdown with fenced blocks. Not executed."""
+    from backend.models.ollama_client import generate as ollama_generate
+
+    raw = ollama_generate(resolve_model_name(model_id), _SOURCE_PROMPT.format(task=task.strip()))
+    if not raw or "```" not in raw:
+        raise CodeGenerationError("The model returned no code block.")
+    return raw.strip()
+
+
 def generate_code(task: str, language: str = "python", model_id: str = "coder-model") -> str:
     """Ask the code model for a program that performs `task`.
 

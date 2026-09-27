@@ -95,7 +95,38 @@ def rrf_fuse(
         )
     sparse_rank = {faiss_ids[i]: rank for rank, i in enumerate(sparse_order, start=1)}
 
-    candidate_ids = set(dense_rank) | set(sparse_rank)
+    # LOCATION: the question's words against each document's folders and
+    # name (catalog.py). "sop summary and quality" names 01_SOPs_and_Procedures
+    # and 03_Quality_and_Process_Data, which no passage's text says. Each
+    # matching document (best first, at most five) puts forward two
+    # passages -- its best keyword match and its opening -- so the signal
+    # surfaces the right documents without flooding the results with one
+    # long book that happens to sit in a matching folder.
+    location_rank: dict[int, int] = {}
+    try:
+        from backend.retrieval.catalog import location_scores
+
+        matched = sorted(location_scores(store, query).items(), key=lambda kv: -kv[1])[:5]
+        position = {fid: i for i, fid in enumerate(faiss_ids)}
+        rank = 1
+        for doc, _score in matched:
+            ids = store.faiss_ids_for_documents([doc])
+            if allowed_ids is not None:
+                ids &= allowed_ids
+            if not ids:
+                continue
+            picks = [min(ids)]
+            if len(bm25_scores):
+                best = max(ids, key=lambda fid: bm25_scores[position[fid]] if fid in position else -1)
+                if best not in picks:
+                    picks.append(best)
+            for fid in picks:
+                location_rank.setdefault(fid, rank)
+            rank += 1
+    except Exception:  # noqa: BLE001 - a location signal is a bonus, never a failure
+        location_rank = {}
+
+    candidate_ids = set(dense_rank) | set(sparse_rank) | set(location_rank)
     fused: dict[int, float] = {}
     for faiss_id in candidate_ids:
         score = 0.0
@@ -103,6 +134,8 @@ def rrf_fuse(
             score += 1.0 / (RRF_K + dense_rank[faiss_id])
         if faiss_id in sparse_rank:
             score += 1.0 / (RRF_K + sparse_rank[faiss_id])
+        if faiss_id in location_rank:
+            score += 1.0 / (RRF_K + location_rank[faiss_id])
         fused[faiss_id] = score
     return fused
 

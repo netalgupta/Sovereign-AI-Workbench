@@ -192,6 +192,9 @@ _SYSTEM_PROMPT = (
     "- Write working and formulas as plain text (1450 m3/h x 24 h = 34,800 m3), "
     "never LaTeX: the chat does not render it.\n"
     "- Name the source document when you use a retrieved passage.\n"
+    "- Asked to WRITE code, an HTML page, a script or a config file: write it "
+    "yourself in fenced code blocks. That needs no tool, and the chat renders "
+    "HTML as a live preview. Never say there is no tool for it.\n"
     "- When code or configuration spans SEVERAL files, put the line "
     "'File: relative/path/name.ext' directly above each file's fenced block, "
     "one block per file. The chat offers those files as one zip download.\n"
@@ -289,6 +292,25 @@ _COMPUTATION_TOOLS = frozenset({
     "describe_series",
     "lookup_thermophysical_property",
 })
+
+
+def _tool_content_for_model(name: str, output) -> str:
+    """What the model is shown of one tool result.
+
+    Search results go as compact text -- "[n] location · p.N" then the
+    passage -- most relevant document first. As JSON, quotes and escaped
+    newlines spent the 4,000-character cap, and the passages that fell
+    past it were never seen: the model then said a report it had found
+    was not in "the provided text". Everything else stays JSON, capped.
+    """
+    if name == "search_documents" and isinstance(output, dict) and output.get("found"):
+        lines = [f"Found {len(output.get('passages') or [])} passages, most relevant document first."]
+        for i, p in enumerate(output.get("passages") or [], 1):
+            page = f" · p.{p.get('page_number')}" if p.get("page_number") else ""
+            where = p.get("location") or p.get("source_document")
+            lines.append(f"[{i}] {where}{page}\n{p.get('text', '').strip()}")
+        return "\n\n".join(lines)[:6500]
+    return json.dumps(_jsonable(output))[:4000]
 
 
 _WORD_OPS = (("divided by", "/"), ("times", "*"), ("plus", "+"), ("minus", "-"), ("×", "*"))
@@ -748,7 +770,7 @@ def run_agent_loop(
             messages.append(
                 {
                     "role": "tool",
-                    "content": json.dumps(_jsonable(output))[:4000],
+                    "content": _tool_content_for_model(name, output),
                     "name": name,
                 }
             )
@@ -1327,8 +1349,41 @@ def _run_code(request: str, selection, *, session_id: str) -> Iterator[dict]:
     """
     import time
 
-    from backend.orchestrator.code_generation import CodeGenerationError, run_generated_code
+    from backend.orchestrator.code_generation import (
+        CodeGenerationError,
+        run_generated_code,
+        wants_source_only,
+        write_source,
+    )
     from backend.orchestrator.state import PlanStep
+
+    # A page, config or multi-file project is WRITTEN and returned, not run
+    # (code_generation.wants_source_only).
+    if wants_source_only(request):
+        yield {"type": "plan", "path": "code", "steps": [{
+            "step_id": "code", "description": f"Write the files with {selection.model}",
+            "assigned_agent": "code", "status": "running", "depends_on": [],
+        }]}
+        yield {"type": "tool_call", "id": "code-1", "name": "write_code",
+               "arguments": {"task": request, "model": selection.model}}
+        started = time.time()
+        try:
+            reply = write_source(request, model_id=selection.model_id)
+            status, output = "done", {"blocks": reply.count("```") // 2, "model": selection.model}
+        except CodeGenerationError as exc:
+            reply = f"**The code model did not return any code.** {exc}"
+            status, output = "failed", {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+            reply = f"**The code model could not be reached.** {type(exc).__name__}: {exc}"
+            status, output = "failed", {"error": str(exc)}
+        seconds = round(time.time() - started, 1)
+        yield {"type": "tool_result", "id": "code-1", "status": status, "output": output, "seconds": seconds}
+        yield {"type": "text_delta", "text": reply}
+        yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1, "seconds": seconds,
+               "plan": [{"step_id": "code", "description": f"Write the files with {selection.model}",
+                         "assigned_agent": "code", "status": "done" if status == "done" else "failed",
+                         "depends_on": []}]}
+        return
 
     step = PlanStep(step_id="code", description=request, assigned_agent="code")
     yield {"type": "plan", "path": "code", "steps": [{

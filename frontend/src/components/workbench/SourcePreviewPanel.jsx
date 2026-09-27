@@ -14,6 +14,7 @@ import { ContinuousDocumentRenderer } from './renderers/ContinuousDocumentRender
 import { MarkdownPreviewRenderer } from './renderers/MarkdownPreviewRenderer'
 import { ImageViewerRenderer } from './renderers/ImageViewerRenderer'
 import { TextViewerRenderer } from './renderers/TextViewerRenderer'
+import { HtmlPreviewRenderer } from './renderers/HtmlPreviewRenderer'
 import { UnsupportedPreviewRenderer } from './renderers/UnsupportedPreviewRenderer'
 
 export function SourcePreviewPanel({ file, isOpen, onClose }) {
@@ -115,7 +116,8 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
   const isContinuousDoc = ['pdf', 'docx', 'doc', 'pptx', 'ppt'].includes(ext)
   const isMarkdown = ext === 'md'
   const isImage = ['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(ext)
-  const isText = ['txt', 'json', 'csv', 'log', 'py', 'js', 'css', 'html', 'xml', 'yaml', 'yml'].includes(ext)
+  const isHtml = ['html', 'htm'].includes(ext)
+  const isText = ['txt', 'json', 'csv', 'log', 'py', 'js', 'css', 'xml', 'yaml', 'yml'].includes(ext)
 
   return (
     <div
@@ -269,6 +271,8 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
           />
         )}
 
+        {isHtml && <HtmlPreviewRenderer filePath={filePath} zoomLevel={zoomLevel} />}
+
         {isText && (
           <TextViewerRenderer
             filePath={filePath}
@@ -276,7 +280,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
           />
         )}
 
-        {!isXlsx && !isContinuousDoc && !isMarkdown && !isImage && !isText && (
+        {!isXlsx && !isContinuousDoc && !isMarkdown && !isImage && !isText && !isHtml && (
           <UnsupportedPreviewRenderer
             file={file}
             ext={ext}

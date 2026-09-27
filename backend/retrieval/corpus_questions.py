@@ -91,12 +91,53 @@ _NOT_ABOUT_THE_COLLECTION = re.compile(
 )
 
 
+# "What's in the SOP folder?", "list the quality documents", "which files
+# are in 02_Inspection_and_Maintenance": questions about a FOLDER of the
+# collection, answered exactly from the catalog (catalog.folder_listing).
+_FOLDER_QUESTION = re.compile(
+    r"\b(what('s| is| are)|which|list|show)\b.{0,40}\b(in|inside|under)\b.{0,40}\bfolders?\b"
+    r"|\b(list|show)\b.{0,20}\b(the|all)\b.{0,30}\b(documents?|files?)\b.{0,15}$"
+    r"|\bfolders?\b.{0,30}\b(contain|hold|have)\b",
+    re.I,
+)
+
+
+def folder_question_answer(query: str) -> str | None:
+    """The documents in the folder(s) a question names, or None."""
+    if not query or not _FOLDER_QUESTION.search(query):
+        return None
+    try:
+        from backend.api.state import get_state
+        from backend.retrieval.catalog import folder_listing
+
+        groups = folder_listing(get_state().ensure_corpus()[0], query)
+    except Exception:  # noqa: BLE001 - no catalog: fall through to the normal path
+        return None
+    if not groups:
+        return None
+    # the deepest folders only (a parent listed with the same files repeats them)
+    keys = [k for k, _ in groups]
+    groups = [(k, docs) for k, docs in groups if not any(o != k and o.startswith(k + " / ") for o in keys)]
+    lines = []
+    for folder, docs in groups:
+        lines.append(f"**{folder}** ({len(docs)} {'document' if len(docs) == 1 else 'documents'})")
+        for d in sorted(docs, key=lambda d: d.name.lower()):
+            sub = " / ".join(d.folders[len(folder.split(' / ')) - 1:])
+            lines.append(f"- `{d.name}`" + (f" — in {sub}" if sub else ""))
+        lines.append("")
+    lines.append("Read directly from the source index and the folders on disk, not generated. "
+                 "Ask about any of these and the answer will cite it.")
+    return "\n".join(lines).strip()
+
+
 def is_corpus_question(query: str) -> bool:
     """Is this a question about the collection rather than its contents?"""
     if not query or not query.strip():
         return False
     if carries_attached_file(query) or _NOT_ABOUT_THE_COLLECTION.search(query):
         return False
+    if _FOLDER_QUESTION.search(query):
+        return True
     text = query.strip()
     if _SPECIFIC_SUBJECT.search(text):
         # Names a domain subject -> there may be a real, citable answer.
@@ -121,6 +162,10 @@ def answer_corpus_question(query: str) -> str:
     independent views of the corpus that can drift is how a user ends up
     trusting the wrong one.
     """
+    folder_answer = folder_question_answer(query)
+    if folder_answer:
+        return folder_answer
+
     from backend.api.routes import _get_corpus_data
 
     try:

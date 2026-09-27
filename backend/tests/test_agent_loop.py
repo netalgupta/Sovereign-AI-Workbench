@@ -212,3 +212,19 @@ def test_a_wrong_stated_result_is_replaced_by_the_computed_one():
     value = _numeric_result(call_tool("evaluate_expression", {"expression": "11.2 - 3.4"}))
     assert abs(value - 7.8) < 1e-9
     assert _replace_result("11.2 - 3.4 = 7.9", value) == "11.2 - 3.4 = 7.8"
+
+
+def test_a_page_or_config_is_written_not_run():
+    """'Write a single self-contained HTML page ...' went to the sandbox path,
+    and the model's correct html block was rejected as prose."""
+    from backend.orchestrator.code_generation import wants_source_only
+
+    for task in ("Write a single self-contained HTML page with a button that counts clicks",
+                 "Give me a docker-compose file for postgres and redis",
+                 "Write the nginx config for a reverse proxy",
+                 "A Flask project as separate files: app.py and requirements.txt",
+                 "Write the SQL schema for a maintenance log"):
+        assert wants_source_only(task), task
+    for task in ("Write a Python program that prints the first 10 primes",
+                 "Compute the LMTD for these temperatures in Python"):
+        assert not wants_source_only(task), task

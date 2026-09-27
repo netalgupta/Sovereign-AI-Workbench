@@ -43,6 +43,11 @@ from typing import Literal
 from backend.tools.registry import tool
 
 
+# The agent loop shows the model up to 6,500 characters of a search
+# (agent_loop._tool_content_for_model); the passages share most of it.
+PASSAGE_BUDGET = 5600
+
+
 @tool(
     name="search_documents",
     category="retrieval",
@@ -102,19 +107,39 @@ def search_documents(query: str, top_k: int = 5) -> dict:
             "passages": [],
         }
 
-    return {
-        "found": True,
-        "passages": [
-            {
-                "text": chunk.text,
-                "source_document": chunk.source_document,
-                "page_number": chunk.page_number,
-                "score": round(chunk.score, 4),
-            }
-            for chunk in result.chunks
-        ],
-        "admitted_by": result.admitted_by,
-    }
+    # MOST RELEVANT DOCUMENT FIRST, AND EVERY PASSAGE GETS ITS SHARE.
+    #
+    # Retrieval returns passages grouped by document in NAME order (so a
+    # document reads in sequence), and the agent loop hands the model the
+    # first 4,000 characters of this result. Measured 27 Sep: "Inspection
+    # Report ccr1 and pipeline incident report" found both reports -- and
+    # GRAPH_SPEC.md sorted first alphabetically, filled the 4,000
+    # characters, and the model truthfully said the text it saw did not
+    # mention either report. Documents are now ordered by their best
+    # passage's score (reading order kept inside each), each passage is
+    # trimmed to a fair share of the budget, and each carries its location.
+    from backend.retrieval.catalog import location_label
+
+    best: dict[str, float] = {}
+    for chunk in result.chunks:
+        best[chunk.source_document] = max(best.get(chunk.source_document, 0.0), chunk.score)
+    ordered = sorted(result.chunks, key=lambda c: -best[c.source_document])  # stable: keeps reading order per doc
+    per_passage = max(300, PASSAGE_BUDGET // max(1, len(ordered)))
+    passages = []
+    for chunk in ordered:
+        text = chunk.text if len(chunk.text) <= per_passage else chunk.text[: per_passage - 1].rstrip() + "…"
+        try:
+            location = location_label(store, chunk.source_document)
+        except Exception:  # noqa: BLE001 - a missing location never hides a passage
+            location = chunk.source_document
+        passages.append({
+            "source_document": chunk.source_document,
+            "location": location,
+            "page_number": chunk.page_number,
+            "score": round(chunk.score, 4),
+            "text": text,
+        })
+    return {"found": True, "passages": passages, "admitted_by": result.admitted_by}
 
 
 @tool(

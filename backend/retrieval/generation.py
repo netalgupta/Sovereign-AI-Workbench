@@ -198,10 +198,20 @@ def _unwrap_markdown_fence(text: str) -> str:
 
 
 def _format_sources(chunks: list[RetrievedChunk]) -> str:
+    """Each passage with WHERE it lives (source / folders / file), not just
+    its file name, so the model can tell an SOP from a spec by location."""
+    try:
+        from backend.api.state import get_state
+        from backend.retrieval.catalog import location_label
+
+        store = get_state().ensure_corpus()[0]
+        label = lambda name: location_label(store, name)  # noqa: E731
+    except Exception:  # noqa: BLE001 - no catalog: the file name still identifies it
+        label = lambda name: name  # noqa: E731
     lines = []
     for i, chunk in enumerate(chunks, start=1):
         page_part = f", p.{chunk.page_number}" if chunk.page_number is not None else ""
-        lines.append(f"[{i}] ({chunk.source_document}{page_part}) {chunk.text}")
+        lines.append(f"[{i}] ({label(chunk.source_document)}{page_part}) {chunk.text}")
     return "\n".join(lines)
 
 

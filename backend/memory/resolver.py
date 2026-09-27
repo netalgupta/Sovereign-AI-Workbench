@@ -92,6 +92,7 @@ also more can could should would will about abt detail detailed
 gave give given want wants wanted need needs needed get gets got make makes
 made using used use via per like just only very much many such other another
 here there now then again back next previous last first thing things stuff
+find both either each
 """.split())
 
 
@@ -145,7 +146,12 @@ def needs_resolution(query: str) -> bool:
         return False
 
     words = text.split()
-    if len(words) <= SHORT_QUERY_WORDS:
+    # SHORT IS NOT THE SAME AS INCOMPLETE. "Find both sop summary and
+    # quality" (6 words) was treated as a follow-up, and the previous turn's
+    # focus document -- a cyber-security book -- was appended to its search.
+    # A short query with its own subject words stands on its own; one with
+    # none ("give all of them", "and the rest?") still needs its context.
+    if len(words) <= SHORT_QUERY_WORDS and not _content_terms(text):
         return True
     if _REFERENTIAL.match(text):
         return True

@@ -19,6 +19,11 @@ const SYMBOLS = [
   [/\\leq?(?![a-z])/g, '≤'], [/\\geq?(?![a-z])/g, '≥'], [/\\neq?(?![a-z])/g, '≠'],
   [/\\pm/g, '±'], [/\\degree/g, '°'], [/\\circ/g, '°'], [/\\%/g, '%'],
   [/\\rightarrow|\\to(?![a-z])/g, '→'], [/\\Delta/g, 'Δ'], [/\\rho/g, 'ρ'], [/\\mu/g, 'µ'],
+  // Greek letters engineers write (\pi was left as "\pi" in a rendered answer)
+  [/\\pi(?![a-z])/g, 'π'], [/\\alpha/g, 'α'], [/\\beta/g, 'β'], [/\\gamma/g, 'γ'], [/\\delta/g, 'δ'],
+  [/\\epsilon|\\varepsilon/g, 'ε'], [/\\eta/g, 'η'], [/\\theta/g, 'θ'], [/\\lambda/g, 'λ'],
+  [/\\sigma/g, 'σ'], [/\\tau/g, 'τ'], [/\\phi|\\varphi/g, 'φ'], [/\\omega/g, 'ω'], [/\\Omega/g, 'Ω'],
+  [/\\Sigma/g, 'Σ'], [/\\infty/g, '∞'], [/\\sum(?![a-z])/g, 'Σ'], [/\\partial/g, '∂'],
   [/\\(?:,|;|:|!|quad|qquad)/g, ' '], [/\\left|\\right/g, ''],
 ]
 

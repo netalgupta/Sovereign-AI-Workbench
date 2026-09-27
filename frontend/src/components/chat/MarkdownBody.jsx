@@ -16,6 +16,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { CitationChip } from '../../integrations/citations/CitationChip'
 import { CopyButton } from '../common/CopyButton'
+import { SafeHtmlFrame } from '../common/SafeHtmlFrame'
 
 function isDarkMode() {
   if (typeof document === 'undefined') return false
@@ -63,6 +64,85 @@ function tableAsTsv(table) {
   return [...table.querySelectorAll('tr')]
     .map((tr) => [...tr.querySelectorAll('th,td')].map((c) => c.innerText.replace(/\s+/g, ' ').trim()).join('\t'))
     .join('\n')
+}
+
+// Languages a browser can show as a page. Previewed in SafeHtmlFrame: no
+// network, no access to this app.
+const PREVIEWABLE = new Set(['html', 'htm', 'svg', 'xhtml'])
+
+function CodeBlock({ language, source, dark, props }) {
+  const canPreview = PREVIEWABLE.has(language.toLowerCase())
+  const [view, setView] = React.useState('code')
+  return (
+    <div className="group relative" style={{ margin: '16px 0' }}>
+      <div
+        className="flex items-center justify-between gap-2 px-3 py-1 text-[10.5px] font-mono uppercase tracking-wider"
+        style={{
+          color: 'var(--color-text-muted)',
+          background: dark ? '#221e1a' : 'var(--color-overlay)',
+          border: '1px solid var(--color-code-border)',
+          borderBottom: 'none',
+          borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
+        }}
+      >
+        <span>{language === 'text' ? 'plain text' : language}</span>
+        <span className="flex items-center gap-1">
+          {canPreview && (
+            <span className="inline-flex rounded-md overflow-hidden border normal-case tracking-normal" style={{ borderColor: 'var(--color-border)' }}>
+              {[['preview', 'Preview'], ['code', 'Code']].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setView(id)}
+                  aria-pressed={view === id}
+                  className="px-2 py-0.5 text-[11px] font-medium cursor-pointer"
+                  style={{
+                    background: view === id ? 'var(--color-accent-tint)' : 'transparent',
+                    color: view === id ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
+          )}
+          <CopyButton text={source} label="Copy" title="Copy code" size={12} />
+        </span>
+      </div>
+      {canPreview && view === 'preview' ? (
+        <div
+          className="overflow-hidden"
+          style={{ border: '1px solid var(--color-code-border)', borderRadius: '0 0 var(--radius-lg) var(--radius-lg)', resize: 'vertical', height: 380, minHeight: 160 }}
+        >
+          <SafeHtmlFrame
+            html={language.toLowerCase() === 'svg' && !/<html/i.test(source) ? `<body style="margin:0;display:grid;place-items:center;min-height:100vh">${source}</body>` : source}
+            title="Preview of the HTML in this answer"
+            height="100%"
+          />
+        </div>
+      ) : (
+      <SyntaxHighlighter
+        style={dark ? oneDark : oneLight}
+        language={language}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
+          fontSize: '12px',
+          border: '1px solid var(--color-code-border)',
+          background: dark ? '#1a1714' : 'var(--color-code-bg)',
+          padding: '16px 18px',
+          lineHeight: 1.68,
+          boxShadow: dark ? '0 2px 8px -2px rgba(0,0,0,0.5)' : '0 1px 4px -1px rgba(42,39,36,0.08)',
+        }}
+        codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
+        {...props}
+      >
+        {source}
+      </SyntaxHighlighter>
+      )}
+    </div>
+  )
 }
 
 function TableWrapper({ children }) {
@@ -266,44 +346,7 @@ function useMarkdownComponents(citationsMap, dark) {
             const language = match ? match[1] : isBlock ? 'text' : null
 
             if (language) {
-              return (
-                <div className="group relative" style={{ margin: '16px 0' }}>
-                  <div
-                    className="flex items-center justify-between px-3 py-1 text-[10.5px] font-mono uppercase tracking-wider"
-                    style={{
-                      color: 'var(--color-text-muted)',
-                      background: dark ? '#221e1a' : 'var(--color-overlay)',
-                      border: '1px solid var(--color-code-border)',
-                      borderBottom: 'none',
-                      borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
-                    }}
-                  >
-                    <span>{language === 'text' ? 'plain text' : language}</span>
-                    <CopyButton text={source} label="Copy" title="Copy code" size={12} />
-                  </div>
-                <SyntaxHighlighter
-                  style={dark ? oneDark : oneLight}
-                  language={language}
-                  PreTag="div"
-                  customStyle={{
-                    margin: 0,
-                    borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
-                    fontSize: '12px',
-                    border: '1px solid var(--color-code-border)',
-                    background: dark ? '#1a1714' : 'var(--color-code-bg)',
-                    padding: '16px 18px',
-                    lineHeight: 1.68,
-                    boxShadow: dark
-                      ? '0 2px 8px -2px rgba(0,0,0,0.5)'
-                      : '0 1px 4px -1px rgba(42,39,36,0.08)',
-                  }}
-                  codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
-                  {...props}
-                >
-                  {source}
-                </SyntaxHighlighter>
-                </div>
-              )
+              return <CodeBlock language={language} source={source} dark={dark} props={props} />
             }
 
             return (
