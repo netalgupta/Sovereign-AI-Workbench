@@ -77,11 +77,25 @@ def carries_attached_file(text: str) -> bool:
     return bool(text) and bool(_ATTACHED_FILE.search(text))
 
 
+# A request to WRITE something, or one that names files by extension, is
+# never a question about the collection. Measured 27 Sep: "Give me a minimal
+# Flask project as separate files: app.py, requirements.txt and a
+# Dockerfile. Show each file's full contents." matched "show ... files" and
+# was answered with the corpus inventory.
+_NOT_ABOUT_THE_COLLECTION = re.compile(
+    r"\b(code|program|script|function|class|project|app|config(?:uration)?|dockerfile|"
+    r"python|javascript|typescript|flask|fastapi|django|react|docker|sql|regex|"
+    r"write|create|build|generate|implement|refactor|debug|fix)\b"
+    r"|\b[\w-]+\.(py|js|jsx|ts|tsx|ya?ml|json|toml|ini|cfg|txt|sh|ps1|html|css|sql|java|go|rs|cpp|c|h)\b",
+    re.I,
+)
+
+
 def is_corpus_question(query: str) -> bool:
     """Is this a question about the collection rather than its contents?"""
     if not query or not query.strip():
         return False
-    if carries_attached_file(query):
+    if carries_attached_file(query) or _NOT_ABOUT_THE_COLLECTION.search(query):
         return False
     text = query.strip()
     if _SPECIFIC_SUBJECT.search(text):

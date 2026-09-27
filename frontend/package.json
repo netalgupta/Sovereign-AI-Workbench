@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node --test src/integrations/network-monitor/security-state.test.js src/lib/no-fabricated-payloads.test.js src/lib/plainMath.test.js src/lib/stream-callbacks.test.js src/lib/approval-flow.test.js src/integrations/notebook/notebookModel.test.js src/lib/promptHistory.test.js src/lib/planProgress.test.js",
+    "test": "node --test src/integrations/network-monitor/security-state.test.js src/lib/no-fabricated-payloads.test.js src/lib/plainMath.test.js src/lib/stream-callbacks.test.js src/lib/approval-flow.test.js src/integrations/notebook/notebookModel.test.js src/lib/promptHistory.test.js src/lib/planProgress.test.js src/lib/codeFiles.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

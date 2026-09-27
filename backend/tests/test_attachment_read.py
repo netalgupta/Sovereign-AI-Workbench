@@ -99,3 +99,18 @@ def test_a_workbook_reads_as_tables_with_every_tab_named():
     assert "--- page" not in text
     assert "\t" not in text and "| |" not in text.split("\n")[-1]
     assert len(text) < 1000
+
+
+def test_a_request_for_code_files_is_not_a_question_about_the_collection():
+    """'...as separate files: app.py, requirements.txt and a Dockerfile. Show
+    each file's full contents.' was answered with the corpus inventory."""
+    from backend.retrieval.corpus_questions import is_corpus_question
+
+    assert not is_corpus_question("Give me a minimal Flask hello-world project as separate files: app.py, "
+                                  "requirements.txt and a Dockerfile. Show each file's full contents.")
+    assert not is_corpus_question("Show all files for a docker compose setup")
+    assert not is_corpus_question("Write a script that lists the files in a folder")
+    # the collection questions still are
+    for q in ("What documents do you have?", "List all the files", "How many sources are indexed?",
+              "What's in the corpus?"):
+        assert is_corpus_question(q), q
