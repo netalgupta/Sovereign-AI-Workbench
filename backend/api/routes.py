@@ -2851,6 +2851,10 @@ class AgentStreamRequest(BaseModel):
     # everything off, which is a different instruction and is honoured
     # as one.
     active_documents: list[str] | None = None
+    # Master switch toggled in Sources panel and Composer toolbar.
+    # When True: grounds in local sources and includes citations.
+    # When False: bypasses document retrieval and uses direct general reasoning.
+    sources_enabled: bool = True
 
 
 @router.post("/chat/stream")
@@ -2900,6 +2904,7 @@ def chat_stream(body: AgentStreamRequest):
                 body.message,
                 session_id=body.session_id,
                 active_documents=body.active_documents,
+                sources_enabled=body.sources_enabled,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:  # noqa: BLE001

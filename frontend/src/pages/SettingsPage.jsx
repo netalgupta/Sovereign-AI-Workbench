@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowLeft,
+  ArrowRight,
   Settings,
   Cpu,
   Plus,
@@ -1102,6 +1103,38 @@ export function SettingsPage() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Network Monitor Diagnostics Redirection */}
+            <div
+              className="p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-2"
+              style={{
+                background: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+                boxShadow: 'var(--shadow-xs)',
+              }}
+            >
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>
+                  Network & Sockets Surveillance Diagnostics
+                </span>
+                <span className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                  Inspect real-time zero-egress hardware telemetry, live socket tables, and process PID trees.
+                </span>
+              </div>
+              <Link
+                to="/monitor"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-medium border flex items-center justify-center gap-1.5 transition-fast shadow-xs cursor-pointer hover:bg-[var(--color-surface-hover)] shrink-0"
+                style={{
+                  background: 'var(--color-overlay)',
+                  borderColor: 'var(--color-border)',
+                  color: 'var(--color-text)',
+                }}
+              >
+                <ShieldCheck size={14} className="text-emerald-500" />
+                <span>Open Network Monitor (/monitor)</span>
+                <ArrowRight size={13} />
+              </Link>
             </div>
           </div>
         </section>

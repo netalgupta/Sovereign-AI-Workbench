@@ -303,23 +303,26 @@ def register_all() -> None:
     )(run_in_sandbox)
 
     # ---- presentation generation (PPTX_AGENT_SPEC.md, TOOLS.md row 40) ----
-    from backend.orchestrator.slide_agent import generate_deck
+    try:
+        from backend.orchestrator.slide_agent import generate_deck
 
-    tool(
-        name="generate_deck",
-        description=(
-            "Render an approved deck spec (from prepare_deck) to a PowerPoint (.pptx) "
-            "file, designed by the deck design system. WRITES A FILE, so it requires human "
-            "approval before it runs, like draft_docx."
-        ),
-        category="documents",
-        priority="🔴",
-        # Hard constraint #4. Decks were exempted as "safe deliverables";
-        # a presentation that leaves the building carrying refinery figures
-        # is exactly the kind of file the gate exists for.
-        requires_approval=True,
-        tools_md_row=40,
-    )(generate_deck)
+        tool(
+            name="generate_deck",
+            description=(
+                "Render an approved deck spec (from prepare_deck) to a PowerPoint (.pptx) "
+                "file, designed by the deck design system. WRITES A FILE, so it requires human "
+                "approval before it runs, like draft_docx."
+            ),
+            category="documents",
+            priority="🔴",
+            # Hard constraint #4. Decks were exempted as "safe deliverables";
+            # a presentation that leaves the building carrying refinery figures
+            # is exactly the kind of file the gate exists for.
+            requires_approval=True,
+            tools_md_row=40,
+        )(generate_deck)
+    except (ImportError, ModuleNotFoundError):
+        pass
 
 
 register_all()

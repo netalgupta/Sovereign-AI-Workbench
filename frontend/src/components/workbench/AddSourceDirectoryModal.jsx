@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+
 import {
   X,
   FolderPlus,
@@ -353,7 +355,7 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
     }
   }
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -841,4 +843,8 @@ export function AddSourceDirectoryModal({ isOpen, onClose, onDirectoriesUpdated,
       )}
     </AnimatePresence>
   )
+  // Render into document.body via portal so that position:fixed escapes
+  // all ancestor transform/stacking contexts (motion.div layout animations).
+  if (typeof document === 'undefined') return null
+  return createPortal(modalContent, document.body)
 }

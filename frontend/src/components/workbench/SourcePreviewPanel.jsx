@@ -21,16 +21,20 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [pageInfo, setPageInfo] = useState({ current: 1, total: 1, label: '' })
 
-  // Handle Escape Key to close panel
+  // Handle Escape Key to close panel or exit fullscreen
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && isOpen) {
-        onClose()
+        if (isFullscreen) {
+          setIsFullscreen(false)
+        } else {
+          onClose()
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, onClose])
+  }, [isOpen, isFullscreen, onClose])
 
   // Reset zoom & page info when file or visibility changes
   useEffect(() => {
@@ -108,10 +112,10 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
 
   return (
     <div
-      className={`h-full flex flex-col shadow-2xl border-l transition-all duration-300 animate-in slide-in-from-right select-none ${
+      className={`h-full flex flex-col shadow-2xl border-l transition-all duration-200 select-none ${
         isFullscreen
-          ? 'absolute inset-0 z-50 w-full max-w-full'
-          : 'relative flex-shrink-0 z-20 w-[41vw] min-w-[320px] max-w-[800px]'
+          ? 'fixed inset-0 z-50 w-screen h-screen'
+          : 'relative flex-shrink-0 z-20 w-[44vw] min-w-[340px] max-w-[850px]'
       }`}
       style={{
         background: 'var(--color-bg)',

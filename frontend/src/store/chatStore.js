@@ -16,6 +16,10 @@ import { create } from 'zustand'
 import { now } from '../lib/formatTime'
 import { errorText } from '../lib/errorText'
 
+const SESSIONS_INDEX_KEY = 'sw_sessions_index'
+const SESSION_KEY = (id) => `sw_session_${id}`
+const MAX_STORED_SESSIONS = 50
+
 function generateSessionId() {
   // Simple UUID v4 — no dependency needed
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -25,12 +29,152 @@ function generateSessionId() {
   })
 }
 
+/** Read the sessions index from localStorage (sorted newest-first). */
+function readSessionsIndex() {
+  try {
+    const raw = localStorage.getItem(SESSIONS_INDEX_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/** Write updated sessions index to localStorage. */
+function writeSessionsIndex(index) {
+  try {
+    // Keep only the most recent MAX_STORED_SESSIONS
+    const trimmed = index.slice(0, MAX_STORED_SESSIONS)
+    localStorage.setItem(SESSIONS_INDEX_KEY, JSON.stringify(trimmed))
+  } catch {}
+}
+
+/** Persist a session's messages. */
+function writeSessionMessages(id, messages) {
+  try {
+    // Only store text-safe fields; skip huge base64 attachments
+    const safe = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      displayedContent: m.content, // restore as already-displayed
+      streaming: false,
+      citations: m.citations || [],
+      timestamp: m.timestamp,
+    }))
+    localStorage.setItem(SESSION_KEY(id), JSON.stringify(safe))
+  } catch {}
+}
+
+/** Load a session's messages from localStorage. */
+function readSessionMessages(id) {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY(id))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/** Delete a session's messages from localStorage. */
+function deleteSessionStorage(id) {
+  try {
+    localStorage.removeItem(SESSION_KEY(id))
+  } catch {}
+}
+
 export const useChatStore = create((set, get) => ({
   // ── State ──────────────────────────────────────────────────────────────────
   messages: [],
   sessionId: generateSessionId(),
   draft: '',
   plan: [],
+  activeTab: 'chat',
+  setActiveTab: (tab) => set({ activeTab: tab }),
+
+  // ── Session List (persisted in localStorage) ────────────────────────────
+  // Each entry: { id, title, messageCount, updatedAt }
+  sessions: readSessionsIndex(),
+
+  /** Refresh the sessions list from localStorage (call after any mutation). */
+  _refreshSessions: () => set({ sessions: readSessionsIndex() }),
+
+  /** Save current session to localStorage and refresh the index. */
+  _saveSession: () => {
+    const { sessionId, messages } = get()
+    if (messages.length === 0) return
+    const userMsgs = messages.filter((m) => m.role === 'user')
+    const title = userMsgs[0]?.content?.slice(0, 72) || `Session ${sessionId.slice(0, 8)}`
+    writeSessionMessages(sessionId, messages)
+    const index = readSessionsIndex()
+    const existing = index.findIndex((s) => s.id === sessionId)
+    const entry = {
+      id: sessionId,
+      title,
+      messageCount: messages.length,
+      updatedAt: new Date().toISOString(),
+    }
+    if (existing >= 0) {
+      index[existing] = entry
+    } else {
+      index.unshift(entry)
+    }
+    // Sort newest first
+    index.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    writeSessionsIndex(index)
+    set({ sessions: [...index] })
+  },
+
+  /** Start a brand-new session, saving the current one first. */
+  newSession: () => {
+    get()._saveSession()
+    const newId = generateSessionId()
+    set({
+      messages: [],
+      sessionId: newId,
+      plan: [],
+      draft: '',
+      awaitingHumanApproval: false,
+      pendingApprovalAction: null,
+      isApprovalModalOpen: false,
+      activeJob: null,
+    })
+  },
+
+  /** Load an existing session by ID. */
+  loadSession: (id) => {
+    get()._saveSession()
+    const messages = readSessionMessages(id)
+    set({
+      sessionId: id,
+      messages,
+      plan: [],
+      draft: '',
+      awaitingHumanApproval: false,
+      pendingApprovalAction: null,
+      isApprovalModalOpen: false,
+      activeJob: null,
+    })
+  },
+
+  /** Delete a session by ID. */
+  deleteSession: (id) => {
+    deleteSessionStorage(id)
+    const index = readSessionsIndex().filter((s) => s.id !== id)
+    writeSessionsIndex(index)
+    set((state) => ({
+      sessions: index,
+      // If deleting the active session, start fresh
+      ...(state.sessionId === id ? {
+        messages: [],
+        sessionId: generateSessionId(),
+        plan: [],
+      } : {}),
+    }))
+  },
 
   // ── Approval Gate State (§3.12 / FR-15) ────────────────────────────────────
   awaitingHumanApproval: false,
@@ -41,7 +185,13 @@ export const useChatStore = create((set, get) => ({
   approvalError: null,
   isResolvingApproval: false,
 
-  // ── Active Documents (Source Filtering) ───────────────────────────────────
+  // ── Active Documents & Source Grounding Mode ─────────────────────────────
+  // When sourcesEnabled is true (default): LLM strictly grounds in local documents.
+  // When false: LLM bypasses local corpus retrieval and answers from general knowledge.
+  sourcesEnabled: true,
+  setSourcesEnabled: (enabled) => set({ sourcesEnabled: Boolean(enabled) }),
+  toggleSourcesEnabled: () => set((state) => ({ sourcesEnabled: !state.sourcesEnabled })),
+
   // Built from the Sources panel — names of files currently toggled ON.
   // Passed as active_documents to every /api/chat/stream call.
   // null means "NOT YET KNOWN -- do not filter", and it is NOT the same
@@ -387,6 +537,8 @@ export const useChatStore = create((set, get) => ({
         m.id === id ? { ...m, streaming: false } : m
       ),
     }))
+    // Auto-persist after each completed AI reply
+    setTimeout(() => get()._saveSession(), 0)
   },
 
   /**
@@ -439,6 +591,7 @@ export const useChatStore = create((set, get) => ({
    * Clear all messages and start a new session.
    */
   clearMessages: () => {
+    get()._saveSession()
     set({ messages: [], sessionId: generateSessionId() })
   },
 }))

@@ -25,9 +25,18 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+
+# Per-request allowlist of documents the user has enabled in the Sources panel.
+# None means "no filter — search everything".
+# [] means "the user disabled every source" and retrieval should refuse.
+# Set by run_agent_loop / _answer before any tools execute; read by search_documents.
+active_documents_ctx: ContextVar[list[str] | None] = ContextVar(
+    "active_documents_ctx", default=None
+)
 
 logger = logging.getLogger(__name__)
 

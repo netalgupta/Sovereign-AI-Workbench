@@ -16,7 +16,6 @@ import {
   FileCode,
   Sparkles,
   Bot,
-  Network,
   Layers,
   FileCheck,
   Calculator,
@@ -42,7 +41,7 @@ import { useIngestionStore } from '../../store/ingestionStore'
 import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
-import { NetworkMonitorBar } from '../../integrations/network-monitor'
+import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
 import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
 
@@ -88,6 +87,8 @@ export function ChatPane() {
   const setPlan = useChatStore((s) => s.setPlan)
   const updatePlanStepStatus = useChatStore((s) => s.updatePlanStepStatus)
   const activeDocuments = useChatStore((s) => s.activeDocuments)
+  const sourcesEnabled = useChatStore((s) => s.sourcesEnabled)
+  const toggleSourcesEnabled = useChatStore((s) => s.toggleSourcesEnabled)
   const awaitingHumanApproval = useChatStore((s) => s.awaitingHumanApproval)
   const setAwaitingApproval = useChatStore((s) => s.setAwaitingApproval)
   const setActiveJob = useChatStore((s) => s.setActiveJob)
@@ -101,16 +102,9 @@ export function ChatPane() {
   const openPreview = usePreviewStore((s) => s.openPreview)
   const [attachments, setAttachments] = useState([])
 
-  // Top tabs: Chat / Notebooks / Artifacts
-  const [activeTab, setActiveTab] = useState('chat')
-  // A file was written while the operator was elsewhere: the Artifacts tab
-  // carries a dot until they open it.
-  const [newArtifact, setNewArtifact] = useState(false)
-  useEffect(() => {
-    const mark = () => setNewArtifact(true)
-    window.addEventListener(OUTPUTS_CHANGED, mark)
-    return () => window.removeEventListener(OUTPUTS_CHANGED, mark)
-  }, [])
+  // Top tabs: Chat / Notebooks / Artifacts (synchronized with TopBar)
+  const activeTab = useChatStore((s) => s.activeTab)
+  const setActiveTab = useChatStore((s) => s.setActiveTab)
 
   // Code block copy state
   const [copiedCode, setCopiedCode] = useState(false)
@@ -945,7 +939,7 @@ export function ChatPane() {
           appendStreamChunk(msgId, `\n\n> ⚠️ **Error:** ${errMsg}`)
           finishStreaming(msgId)
         },
-      }, { activeDocuments })
+      }, { activeDocuments, sourcesEnabled })
     } catch (err) {
       appendStreamChunk(msgId, `\n\n> ⚠️ **Turn Error:** ${err?.message || err}`)
       finishStreaming(msgId)
@@ -989,123 +983,6 @@ export function ChatPane() {
         background: 'var(--color-bg)',
       }}
     >
-      {/* ── 1. Chat Header: Title + Tab Row + Plan DAG Link + Options ──── */}
-      <div
-        className="flex items-center justify-between px-8 pt-4 pb-3.5 flex-shrink-0 select-none gap-6"
-        style={{ borderBottom: '1px solid var(--color-border)' }}
-      >
-        {/* Left: Title + Tagline */}
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col">
-            <h2
-              className="text-base font-bold tracking-tight leading-tight"
-              style={{ color: 'var(--color-text)' }}
-            >
-              Chat
-            </h2>
-            <span
-              className="text-[11px] italic leading-tight mt-0.5"
-              style={{ color: 'var(--color-text-muted)' }}
-            >
-              Ask. Analyze. Act.
-            </span>
-          </div>
-
-          {/* Segmented Control Tab Row (Chat / Notebooks / Artifacts) */}
-          <div
-            className="flex items-center p-1 rounded-lg text-xs font-medium ml-3 gap-1 border relative"
-            style={{ background: 'var(--color-overlay)', borderColor: 'var(--color-border)' }}
-          >
-            {[
-              { id: 'chat', label: 'Chat', icon: Bot },
-              { id: 'notebooks', label: 'Notebooks', icon: BookOpen },
-              { id: 'artifacts', label: 'Artifacts', icon: FileCode },
-            ].map((tab) => {
-              const isActive = activeTab === tab.id
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(tab.id)
-                    if (tab.id === 'artifacts') setNewArtifact(false)
-                    if (tab.id === 'notebooks') {
-                      showToast(`${tab.label} module — Coming soon`, 'info')
-                    }
-                  }}
-                  className="relative flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs transition-fast cursor-pointer"
-                  style={{
-                    color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
-                    fontWeight: isActive ? 600 : 500,
-                  }}
-                >
-                  {isActive && (
-                    <motion.div
-                      layoutId="chatpane-active-tab-pill"
-                      className="absolute inset-0 rounded-md border"
-                      style={{
-                        background: 'var(--color-surface)',
-                        borderColor: 'var(--color-border-strong)',
-                        boxShadow: 'var(--shadow-xs)',
-                      }}
-                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                    />
-                  )}
-                  <span className="relative z-10 flex items-center gap-2">
-                    <tab.icon size={13} strokeWidth={2} />
-                    <span>{tab.label}</span>
-                    {tab.id === 'artifacts' && newArtifact && activeTab !== 'artifacts' && (
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-accent)' }} aria-label="New file written" />
-                    )}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Right Header Actions: Plan DAG Compact Progress Strip + Live Sockets + Overflow Menu */}
-        <div className="flex items-center gap-2">
-          {(() => {
-            const doneSteps = plan.filter((s) => s.status === 'done').length
-            const runningStep = plan.find((s) => s.status === 'running')
-            const currentStepNum = doneSteps + (runningStep ? 1 : 0)
-            const totalSteps = plan.length || 5
-
-            return (
-              <Link
-                to={`/plan/${sessionId}`}
-                className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none row-hover-lift"
-                style={{
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                }}
-                title="Open full-screen Plan DAG execution graph (/plan)"
-              >
-                <div className="flex items-center gap-1.5" style={{ color: 'var(--color-accent)' }}>
-                  <Network size={13} strokeWidth={2.2} className="group-hover:scale-110 transition-transform" />
-                  <span className="text-[11px] font-semibold">Plan DAG</span>
-                </div>
-
-                <div className="w-[1px] h-3" style={{ background: 'var(--color-border)' }} />
-
-                <span className="font-mono text-[10px] font-medium" style={{ color: 'var(--color-text)' }}>
-                  Step {currentStepNum}/{totalSteps}
-                </span>
-
-                {/* Segmented Progress Ticks */}
-                <div
-                  className="flex items-center gap-1 w-12"
-                  title={`Plan Progress: Step ${currentStepNum} of ${totalSteps} active`}
-                >
-                  {plan.map((step, idx) => {
-                    const isDone = step.status === 'done'
-                    const isRunning = step.status === 'running'
-                    return (
-                      <div
-                        key={step.id || idx}
-                        className="h-1 flex-1 rounded-xs transition-all relative overflow-hidden"
-                        style={{
                           background: isDone
                             ? 'var(--color-success)'
                             : isRunning
@@ -1168,6 +1045,9 @@ export function ChatPane() {
           </button>
         </div>
       </div>
+=======
+      {/* ── 2. Active Tab Content (Chat / Notebooks / Artifacts) ─────────── */}
+>>>>>>> Stashed changes
 
       {/* ── 2. Active Tab Content ──────────────────────────────────────── */}
       {activeTab === 'artifacts' ? (
@@ -1235,11 +1115,8 @@ export function ChatPane() {
         </div>
       )}
 
-      {/* ── 3. Chat Composer Docked Above Status Strip ──────────────────── */}
-      <div
-        className="px-8 py-4 flex-shrink-0"
-        style={{ borderTop: '1px solid var(--color-border)' }}
-      >
+      {/* ── 3. Chat Composer Seamlessly Integrated with Chat Stream ──── */}
+      <div className="px-8 pb-5 pt-1 flex-shrink-0">
         {/* A deck, report or spreadsheet being written in the background. */}
         <OutputJobCard />
 
@@ -1625,6 +1502,8 @@ export function ChatPane() {
             />
           </div>
 
+
+
           {/* Model Selector Dropdown (Cosmetic only per SYSTEM.md) */}
           <div className="relative">
             <button
@@ -1749,8 +1628,6 @@ export function ChatPane() {
         </AnimatePresence>
       </div>
 
-      {/* Live network monitor bar (Sahil, §3.9): polls /api/network/status. */}
-      <NetworkMonitorBar />
     </div>
   )
 }

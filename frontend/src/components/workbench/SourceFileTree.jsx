@@ -16,6 +16,7 @@ import {
   Check,
 } from 'lucide-react'
 import { useIngestionStore } from '../../store/ingestionStore'
+import { usePreviewStore } from '../../store/previewStore'
 import { FileTypeTile } from '../common/FileTypeTile'
 
 
@@ -146,6 +147,7 @@ export function SourceFileTree({
   compact = false,
 }) {
   const fileStatuses = useIngestionStore((s) => s.fileStatuses)
+  const openPreview = usePreviewStore((s) => s.openPreview)
 
   // Helper to gather all directory IDs recursively
   const getAllDirectoryIds = (nodes) => {
@@ -209,13 +211,23 @@ export function SourceFileTree({
     const currentlyDisabled = disabledNodeIds.has(node.id) || node.enabled === false
     const willBeEnabled = currentlyDisabled
 
+    // Collect this node + all descendant IDs if it's a directory
+    const collectIds = (n) => {
+      const ids = [n.id]
+      if (n.children) n.children.forEach((c) => ids.push(...collectIds(c)))
+      return ids
+    }
+    const affected = node.type === 'directory' ? collectIds(node) : [node.id]
+
     setDisabledNodeIds((prev) => {
       const next = new Set(prev)
-      if (willBeEnabled) {
-        next.delete(node.id)
-      } else {
-        next.add(node.id)
-      }
+      affected.forEach((id) => {
+        if (willBeEnabled) {
+          next.delete(id)
+        } else {
+          next.add(id)
+        }
+      })
       return next
     })
 
@@ -285,56 +297,49 @@ export function SourceFileTree({
             onClick={() => toggleFolder(node.id)}
             className={`flex items-center justify-between transition-fast cursor-pointer group row-hover-lift ${
               isRootSection
-                ? 'py-2 px-2.5 rounded-lg my-1 border shadow-xs'
-                : 'py-1.5 px-2 rounded-md my-0.5 hover:bg-[var(--color-surface-hover)]'
+                ? 'py-1.5 px-2 rounded-lg my-0.5 hover:bg-[var(--color-surface-hover)]'
+                : 'py-1 px-2 rounded-md my-0.5 hover:bg-[var(--color-surface-hover)]'
             }`}
             style={{
-              background: isRootSection
-                ? isExpanded
-                  ? 'var(--color-surface)'
-                  : 'var(--color-bg)'
-                : 'transparent',
-              borderColor: isRootSection ? 'var(--color-border)' : 'transparent',
-              paddingLeft: isRootSection ? '10px' : `${depth * 8 + 6}px`,
+              background: 'transparent',
+              paddingLeft: isRootSection ? '8px' : `${depth * 10 + 6}px`,
+              opacity: disabledNodeIds.has(node.id) ? 0.5 : 1,
+              transition: 'opacity 0.2s',
             }}
           >
-            <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1 pr-2">
               <span className="text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-fast flex-shrink-0">
                 {isExpanded ? <ChevronDown size={12} strokeWidth={2.2} /> : <ChevronRight size={12} strokeWidth={2.2} />}
               </span>
 
               {isRootSection ? (
                 <div
-                  className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 shadow-xs"
+                  className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0"
                   style={{
-                    background: 'var(--color-accent-tint)',
+                    background: 'rgba(181, 101, 74, 0.14)',
                     color: 'var(--color-accent)',
-                    border: '1px solid var(--color-accent-border)',
                   }}
                 >
-                  <HardDrive size={12} strokeWidth={2.2} />
+                  <HardDrive size={11} strokeWidth={2.2} />
                 </div>
               ) : isExpanded ? (
                 <FolderOpen
-                  size={14}
-                  className="flex-shrink-0"
-                  style={{ color: 'var(--color-accent)' }}
+                  size={13}
+                  className="flex-shrink-0 text-[var(--color-accent)]"
                 />
               ) : (
                 <Folder
-                  size={14}
-                  className="flex-shrink-0"
-                  style={{ color: 'var(--color-text-muted)' }}
+                  size={13}
+                  className="flex-shrink-0 text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]"
                 />
               )}
 
               <span
                 className={`truncate font-sans ${
                   isRootSection
-                    ? 'text-[11px] font-bold tracking-wider uppercase'
-                    : 'text-[11.5px] font-semibold tracking-tight'
+                    ? 'text-[11px] font-semibold tracking-wider uppercase text-[var(--color-text)]'
+                    : 'text-[11.5px] font-medium text-[var(--color-text)]'
                 }`}
-                style={{ color: 'var(--color-text)' }}
                 title={node.name}
               >
                 {node.name}
@@ -343,7 +348,7 @@ export function SourceFileTree({
 
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <span
-                className="text-[10px] font-mono px-2 py-0.2 rounded-full font-semibold border"
+                className="text-[9.5px] font-mono px-1.5 py-0.2 rounded-full font-semibold border"
                 style={{
                   background: 'var(--color-overlay)',
                   borderColor: 'var(--color-border)',
@@ -367,6 +372,34 @@ export function SourceFileTree({
                   <Trash2 size={12} />
                 </button>
               )}
+
+              {/* Folder-level On/Off Toggle — visible on hover, cascades to children */}
+              {onToggleSource && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!disabledNodeIds.has(node.id)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleToggle(e, node)
+                  }}
+                  className="w-7 h-4 rounded-full relative transition-all duration-200 cursor-pointer flex-shrink-0 focus:outline-none opacity-0 group-hover:opacity-100"
+                  style={{
+                    background: !disabledNodeIds.has(node.id) ? 'var(--color-accent)' : 'var(--color-border-strong)',
+                    boxShadow: !disabledNodeIds.has(node.id) ? '0 0 6px rgba(181, 101, 74, 0.25)' : 'none',
+                  }}
+                  title={
+                    !disabledNodeIds.has(node.id)
+                      ? `Folder "${node.name}" included in retrieval (click to exclude all)`
+                      : `Folder "${node.name}" excluded from retrieval (click to include all)`
+                  }
+                >
+                  <span
+                    className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200 shadow-xs pointer-events-none"
+                    style={{ left: !disabledNodeIds.has(node.id) ? '14px' : '2px' }}
+                  />
+                </button>
+              )}
             </div>
           </div>
 
@@ -378,11 +411,11 @@ export function SourceFileTree({
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                className="flex flex-col relative my-1 overflow-hidden"
+                className="flex flex-col relative my-0.5 overflow-hidden"
                 style={{
-                  marginLeft: isRootSection ? '16px' : '12px',
+                  marginLeft: isRootSection ? '14px' : '10px',
                   paddingLeft: '10px',
-                  borderLeft: '1px solid var(--color-border)',
+                  borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
                 }}
               >
                 {children.length > 0 ? (
@@ -424,7 +457,13 @@ export function SourceFileTree({
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.98 }}
         transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-        onClick={() => onSelectSource && onSelectSource(node)}
+        onClick={() => {
+          if (onSelectSource) {
+            onSelectSource(node)
+          } else {
+            openPreview(node)
+          }
+        }}
         className="flex items-center justify-between py-2 px-2.5 rounded-lg transition-fast group cursor-pointer my-1 hover:bg-[var(--color-surface-hover)] row-hover-lift"
         style={{
           background: isSelected ? 'var(--color-surface-hover)' : 'transparent',
@@ -555,21 +594,23 @@ export function SourceFileTree({
     <div className="flex flex-col gap-0.5 py-1">
       {/* Quick Expand / Collapse All bar if multiple roots */}
       {tree.length > 0 && !compact && (
-        <div className="flex items-center justify-between px-2 py-1 mb-1 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-          <span className="font-semibold uppercase tracking-wider text-[9px]">Corpus Structure</span>
+        <div className="flex items-center justify-between px-2 py-1 mb-1 text-[10px] text-[var(--color-text-muted)] select-none">
+          <span className="font-semibold uppercase tracking-wider text-[9px] text-[var(--color-text-faint)]">
+            Corpus Structure
+          </span>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={expandAll}
-              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline"
+              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline text-[10px]"
             >
               Expand all
             </button>
-            <span>•</span>
+            <span className="text-[var(--color-text-faint)]">•</span>
             <button
               type="button"
               onClick={collapseAll}
-              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline"
+              className="hover:text-[var(--color-text)] transition-fast cursor-pointer hover:underline text-[10px]"
             >
               Collapse all
             </button>
