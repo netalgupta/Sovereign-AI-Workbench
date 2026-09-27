@@ -27,7 +27,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
     const handleKeyDown = (e) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '') || e.target?.isContentEditable
       if (isOpen && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.key === '+' || e.key === '=') return setZoomLevel((z) => Math.min(z + 25, 250))
+        if (e.key === '+' || e.key === '=') return setZoomLevel((z) => Math.min(z + 25, 400))
         if (e.key === '-') return setZoomLevel((z) => Math.max(z - 25, 50))
         if (e.key === '0') return setZoomLevel(100)
       }
@@ -83,7 +83,8 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
     return corpus ? `${corpus} / ${name}` : name
   }
 
-  const handleZoomIn = () => setZoomLevel((z) => Math.min(z + 25, 250))
+  const zoomBy = useCallback((d) => setZoomLevel((z) => Math.min(400, Math.max(50, z + d))), [])
+  const handleZoomIn = () => setZoomLevel((z) => Math.min(z + 25, 400))
   const handleZoomOut = () => setZoomLevel((z) => Math.max(z - 25, 50))
   const handleZoomReset = () => setZoomLevel(100)
 
@@ -251,6 +252,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
             ext={ext}
             zoomLevel={zoomLevel}
             initialPage={typeof file === 'object' ? file.page : null}
+            onZoomDelta={zoomBy}
             jumpToken={file}
             onPageChange={(current, total) => handlePageChange(current, total)}
           />
@@ -268,6 +270,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
             filePath={filePath}
             name={name}
             zoomLevel={zoomLevel}
+            onZoomDelta={zoomBy}
           />
         )}
 

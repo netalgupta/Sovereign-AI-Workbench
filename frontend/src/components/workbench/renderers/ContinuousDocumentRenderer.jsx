@@ -66,6 +66,7 @@ export function ContinuousDocumentRenderer({
   initialPage = null,
   jumpToken = null,
   onPageChange,
+  onZoomDelta,
 }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -74,6 +75,8 @@ export function ContinuousDocumentRenderer({
   const [activePage, setActivePage] = useState(1)
 
   const containerRef = useRef(null)
+  // The pane's own width: 100% zoom fits a page to it.
+  const [paneWidth, setPaneWidth] = useState(0)
   const pageRefs = useRef([])
 
   useEffect(() => {
@@ -158,6 +161,35 @@ export function ContinuousDocumentRenderer({
     return () => cancelAnimationFrame(frame)
   }, [loading, error, initialPage, pageCount, jumpToken]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Track the pane's width (the panel resizes, goes full screen, etc.).
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setPaneWidth(el.clientWidth))
+    ro.observe(el)
+    setPaneWidth(el.clientWidth)
+    return () => ro.disconnect()
+  }, [loading, error])
+
+  // Ctrl + wheel (and a trackpad pinch, which browsers send as one) zooms
+  // the document, not the whole app.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || !onZoomDelta) return
+    let acc = 0
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      acc += e.deltaY
+      if (Math.abs(acc) >= 40) {
+        onZoomDelta(acc < 0 ? 25 : -25)
+        acc = 0
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [loading, error, onZoomDelta])
+
   // Zoom keeps the page you are reading in view (it used to stay at the same
   // scroll offset, which is a different page once every page changes size).
   const lastZoom = useRef(zoomLevel)
@@ -239,19 +271,25 @@ export function ContinuousDocumentRenderer({
   const isPptx = ['pptx', 'ppt'].includes(ext.toLowerCase())
   const labelWord = isPptx ? 'Slide' : 'Page'
 
-  const targetWidthPx = Math.max(350, Math.min(1400, Math.round(750 * (zoomLevel / 100))))
+  // 100% = the page fits the pane; 200% = twice that. It was a fixed 750 px
+  // AND capped at the pane's width, so zooming in past the pane did nothing
+  // (measured: 625 px at 100% and at 250%).
+  const fitWidth = Math.max(280, (paneWidth || 700) - 32)
+  const targetWidthPx = Math.max(200, Math.round(fitWidth * (zoomLevel / 100)))
 
   return (
     <div
       ref={containerRef}
-      className="flex-1 w-full h-full overflow-auto p-4 flex flex-col items-center gap-6 custom-scrollbar bg-[var(--color-bg)]"
+      // A block, not a centred flex column: a page wider than the pane must
+      // scroll to its left edge, which flex centring cuts off.
+      className="flex-1 w-full h-full overflow-auto p-4 custom-scrollbar bg-[var(--color-bg)]"
     >
       {pages.map((pageNum) => (
         <div
           key={pageNum}
           ref={(el) => (pageRefs.current[pageNum - 1] = el)}
-          className="flex flex-col items-center gap-2 group transition-all duration-150"
-          style={{ width: `${targetWidthPx}px`, maxWidth: '100%' }}
+          className="flex flex-col items-center gap-2 group"
+          style={{ width: `${targetWidthPx}px`, margin: '0 auto 24px' }}
         >
           <PageImage
             src={`${previewBaseUrl}&page=${pageNum}`}
