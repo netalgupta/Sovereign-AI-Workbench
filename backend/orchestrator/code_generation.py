@@ -134,6 +134,14 @@ def write_source(task: str, model_id: str = "coder-model") -> str:
     return raw.strip()
 
 
+_MISSING_MODULE = re.compile(r"(?:ModuleNotFoundError|ImportError): No module named ['\"]([\w.]+)['\"]")
+
+
+def _missing_module(stderr: str) -> str | None:
+    m = _MISSING_MODULE.search(stderr or "")
+    return m.group(1).split(".")[0] if m else None
+
+
 def generate_code(task: str, language: str = "python", model_id: str = "coder-model") -> str:
     """Ask the code model for a program that performs `task`.
 
@@ -179,6 +187,22 @@ def run_generated_code(
         # so the operator still gets the code (marked as not run).
         exc.code = code
         raise
+
+    # A MODULE THE SANDBOX DOES NOT HAVE: one rewrite, told which. The
+    # prompt says "standard library only" and the model still wrote
+    # `from reportlab.pdfgen import canvas`; the run failed with
+    # ModuleNotFoundError and that was the answer.
+    missing = _missing_module((event.output or {}).get("stderr", ""))
+    if event.status != "done" and missing:
+        T.kv("retry", f"missing module {missing}")
+        retry_task = (f"{task}\n\nThe sandbox has NO third-party packages: '{missing}' is not installed. "
+                      "Rewrite the program using the Python standard library only.")
+        try:
+            code = generate_code(retry_task, language=language, model_id=model_id)
+            event = run_code_step(step, code, session_id=session_id, language=language)
+            event.output = {**(event.output or {}), "retried_without": missing}
+        except CodeGenerationError:
+            pass  # the first run's failure stands, with its error
 
     # The code is part of the record. Without it the audit trail says a
     # program ran and cannot say which.

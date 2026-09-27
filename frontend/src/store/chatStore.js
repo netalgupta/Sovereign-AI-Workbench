@@ -13,6 +13,7 @@
  */
 
 import { create } from 'zustand'
+import { usePreviewStore } from './previewStore'
 import { now } from '../lib/formatTime'
 import { errorText } from '../lib/errorText'
 
@@ -570,6 +571,11 @@ export const useChatStore = create((set, get) => ({
     // or download it, where a line of text used to name it and stop.
     const files = isFileWrite ? await writtenFiles(execResult, action) : []
     get().addMessage('assistant', summary, { files })
+    // ...and open it, rendered, right there: the reason it was approved.
+    if (files.length) {
+      const f = files[0]
+      usePreviewStore.getState().openPreview({ id: f.path, name: f.name, filename: f.name, relativePath: f.path, path: f.path })
+    }
     // The Artifacts tab lists it now, not on its next poll.
     if (isFileWrite && typeof window !== 'undefined') window.dispatchEvent(new Event('workbench:outputs-changed'))
     return { success: true }

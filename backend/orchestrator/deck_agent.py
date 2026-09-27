@@ -276,10 +276,25 @@ def anchor_documents(store, chunks: list, request: str, *,
         chunk_text.setdefault(c.source_document, []).append(c.text)
 
     def about_the_topic(name: str) -> bool:
-        coverage, _ = topic_coverage(request, [{"text": " ".join(chunk_text.get(name, []))}])
+        coverage, _ = topic_coverage(request, [{"document": name, "text": " ".join(chunk_text.get(name, []))}])
         return coverage >= MIN_DOC_TOPIC_COVERAGE
 
-    ranked = [ranked[0]] + [d for d in ranked[1:] if about_the_topic(d)]
+    # A request with several subjects ("SOPs and quality control"): a second
+    # document also earns its place by covering a subject the kept ones do
+    # not -- no single document has to match half of ALL the words.
+    def as_docs(names):
+        return [{"document": k, "text": " ".join(chunk_text.get(k, []))} for k in names]
+
+    kept = [ranked[0]]
+    for d in ranked[1:]:
+        if about_the_topic(d):
+            kept.append(d)
+            continue
+        _, missing_so_far = topic_coverage(request, as_docs(kept))
+        _, missing_with = topic_coverage(request, as_docs(kept + [d]))
+        if len(missing_with) < len(missing_so_far):
+            kept.append(d)
+    ranked = kept
 
     by_doc: dict[str, list] = {}
     for ch in chunks or []:
@@ -348,8 +363,47 @@ def topic_coverage(request: str, docs: list[dict]) -> tuple[float, list[str]]:
     if not words:
         return 1.0, []
     haystack = " ".join(d["text"] for d in docs).lower()
-    missing = sorted(w for w in words if w not in haystack)
+    # A word counts when the documents say it, in singular or plural, or
+    # when it names WHERE they live -- their folder or file name. "Generate
+    # a document of SOPs" was refused as "none of them mention sops": the
+    # text says "SOP-114", and the folder is 01_SOPs_and_Procedures.
+    place = _location_words(docs)
+    missing = sorted(w for w in words if not _word_covered(w, haystack, place))
     return (len(words) - len(missing)) / len(words), missing
+
+
+def _singular(word: str) -> str:
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        return word[:-1]
+    return word
+
+
+def _word_covered(word: str, haystack: str, place: set[str]) -> bool:
+    stem = _singular(word)
+    return word in haystack or stem in haystack or word in place or stem in place
+
+
+def _location_words(docs: list[dict]) -> set[str]:
+    """The words of the documents' folders and file names (with the catalog's aliases)."""
+    try:
+        from backend.api.state import get_state
+        from backend.retrieval.catalog import _expand, _words, catalog
+
+        cat = catalog(get_state().ensure_corpus()[0])
+    except Exception:  # noqa: BLE001 - no catalog: file names alone
+        cat = {}
+        _expand = lambda w: w  # noqa: E731
+        _words = lambda t: set(re.findall(r"[a-z0-9]+", (t or "").lower()))  # noqa: E731
+    out: set[str] = set()
+    for d in docs:
+        name = d.get("document", "")
+        loc = cat.get(name)
+        parts = [name] + (list(loc.folders) if loc else [])
+        for part in parts:
+            out |= _expand(_words(re.sub(r"\.[A-Za-z0-9]+$", "", part)))
+    return out
 
 
 MIN_TOPIC_COVERAGE = 0.4
@@ -375,7 +429,9 @@ DOCUMENTS:
 {_sources_block(docs)}
 
 Answer honestly. If the documents are about a different subject, say no, even if they are
-interesting. Partial coverage of the REQUESTED subject counts as yes.
+interesting. Partial coverage of the REQUESTED subject counts as yes. A request for a document
+OF a kind of record ("a document of SOPs", "the quality reports") is answerable when documents
+of that kind are present: it asks to compile them. Each document's folder is shown after its name.
 
 Reply with ONLY: {{"can_answer": true or false, "reason": "one short sentence"}}"""
     data = _ask_json(prompt, timeout=180)
@@ -385,8 +441,21 @@ Reply with ONLY: {{"can_answer": true or false, "reason": "one short sentence"}}
 
 
 def _sources_block(docs: list[dict]) -> str:
+    """Each document with its folder, so a model can tell an SOP from a spec by where it lives."""
+    try:
+        from backend.api.state import get_state
+        from backend.retrieval.catalog import catalog
+
+        cat = catalog(get_state().ensure_corpus()[0])
+    except Exception:  # noqa: BLE001 - no catalog: names alone
+        cat = {}
+
+    def head(d):
+        loc = cat.get(d["document"])
+        return f"[{d['id']}] {d['document']}" + (f"  (folder: {loc.folder_label})" if loc and loc.folders else "")
+
     return "\n\n".join(
-        f"[{d['id']}] {d['document']}\n{d['text']}" + ("\n…(truncated)" if d["truncated"] else "")
+        f"{head(d)}\n{d['text']}" + ("\n…(truncated)" if d["truncated"] else "")
         for d in docs
     )
 
@@ -983,7 +1052,11 @@ def build_deck_spec(request: str, store, chunks: list, *, max_repairs: int = 1) 
             "The documents in the corpus do not cover this request: none of them mention "
             f"{', '.join(missing[:6])}. Nothing was generated."
         )
-    answerable, why = sources_can_answer(request, docs)
+    # The model check guards against an OFF-TOPIC source (low word coverage).
+    # When every word of the request is covered by the documents' text,
+    # folders or names, it may not veto: it refused "a document of SOPs"
+    # because the corpus holds one SOP rather than "a collection".
+    answerable, why = (True, "") if coverage >= 1.0 else sources_can_answer(request, docs)
     if not answerable:
         raise NotInCorpus(
             f"The corpus does not contain what this request needs{': ' + why if why else ''}. "

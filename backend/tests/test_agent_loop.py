@@ -250,3 +250,28 @@ def test_without_docker_the_program_is_shown_marked_not_run(monkeypatch):
     assert "Written, but not run" in reply and "Docker Desktop is not running" in reply
     assert "print(sum(range(10)))" in reply
     assert "pool.start()" not in reply
+
+
+def test_a_missing_module_gets_one_standard_library_rewrite(monkeypatch):
+    """The model wrote 'from reportlab.pdfgen import canvas'; the sandbox has
+    only the standard library, and the ModuleNotFoundError was the answer."""
+    from backend.orchestrator import code_generation as CG
+    from backend.orchestrator import dispatch
+    from backend.orchestrator.state import PlanStep
+
+    asked = []
+
+    def fake_generate(task, **_k):
+        asked.append(task)
+        return "import reportlab" if len(asked) == 1 else "print('stdlib only')"
+
+    class Event:
+        def __init__(self, status, stdout="", stderr=""):
+            self.status, self.output, self.input_params = status, {"stdout": stdout, "stderr": stderr}, {}
+
+    runs = iter([Event("failed", stderr="ModuleNotFoundError: No module named 'reportlab'"), Event("done", stdout="stdlib only")])
+    monkeypatch.setattr(CG, "generate_code", fake_generate)
+    monkeypatch.setattr(dispatch, "run_code_step", lambda *a, **k: next(runs))
+    event = CG.run_generated_code(PlanStep(step_id="code", description="t", assigned_agent="code"), "make a pdf")
+    assert event.status == "done" and "standard library only" in asked[1] and "'reportlab'" in asked[1]
+    assert event.input_params["code"] == "print('stdlib only')"

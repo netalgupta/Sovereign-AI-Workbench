@@ -483,7 +483,11 @@ def build_document_spec(request: str, store, chunks: list, *, max_repairs: int =
     # The relevance check is a MODEL call, so it must be shown a bounded view:
     # handing it a 1.4-million-character book overflowed the window and it
     # answered that the documents were unrelated to their own subject.
-    answerable, why = sources_can_answer(request, _bounded(docs))
+    # The model check guards against an OFF-TOPIC source (low word coverage).
+    # When every word of the request is covered by the documents' text,
+    # folders or names, it may not veto: it refused "a document of SOPs"
+    # because the corpus holds one SOP rather than "a collection".
+    answerable, why = (True, "") if coverage >= 1.0 else sources_can_answer(request, _bounded(docs))
     if not answerable:
         raise NotInCorpus(
             f"The corpus does not contain what this request needs{': ' + why if why else ''}. "

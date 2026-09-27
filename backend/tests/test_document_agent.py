@@ -320,7 +320,8 @@ def test_a_model_call_never_gets_the_whole_book(monkeypatch):
     seen = {}
 
     monkeypatch.setattr(D, "anchor_documents", lambda *a, **k: book)
-    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (1.0, []))
+    # below full coverage, so the model check runs (at 1.0 it may not veto)
+    monkeypatch.setattr(D, "topic_coverage", lambda *a, **k: (0.9, ["x"]))
     monkeypatch.setattr(D, "sources_can_answer",
                         lambda request, docs: (seen.update(chars=sum(len(d["text"]) for d in docs)), (True, ""))[1])
     monkeypatch.setattr(D, "plan_document", lambda *a, **k: None)
