@@ -1,3 +1,77 @@
+# HANDOFF — 2026-09-27 evening (read this first in a new session)
+
+Everything below is committed and pushed to `main` (last commit `8135854`).
+Servers used for testing: backend `py -3 -m uvicorn backend.main:app --host
+127.0.0.1 --port 8000`, frontend `cd frontend && npx vite --host 127.0.0.1
+--port 5173`. Advay's frontend revamp is the UI; do not re-layout it.
+
+## Working (each verified in a browser this session)
+- **Viewer**: 593-page PDF renders pages on demand (sandbox, JPEG, manifest-
+  validated cache); no white flash on Open; zoom sizes pages (100% = fit,
+  up to 400%, Ctrl+wheel, `0` resets) for PDFs and images; .html renders in a
+  sandboxed frame (CSP default-src 'none', no same-origin).
+- **Chats**: URL is the place (`/chat/<id>?tab=&view=&page=`), back/forward/
+  refresh restore chat, tab and open file; per-chat source switches (by full
+  path); chat attachments are sources of ONE chat (retrieval never searches an
+  attachment unless the owning chat names it); plan, trace and agent map are
+  saved with the chat; Up/Down prompt history; copy buttons everywhere; the
+  whole app is text-selectable.
+- **Deliverables**: approved files appear as cards in the chat (click opens
+  them rendered); multi-file code downloads as one zip (lib/zip.js, no
+  library); html blocks get a live Preview.
+- **Retrieval**: ranking happens within the chat's switched-on sources; one
+  embedding per question; a folder/location signal (backend/retrieval/
+  catalog.py) -- "sop", "quality", "inspection" find their folders; passages
+  reach the model as compact text, most relevant document first, each with
+  its location (the bug: found passages cut off by a 4,000-char JSON cap);
+  short questions with their own subject are not rewritten as follow-ups;
+  "what is in the quality folder" is answered exactly from disk.
+- **Excel**: rows kept whole, "Sheet k of N: <tab>", tab list on sheet 1
+  (Best House 2026.xlsx 40,683 -> 6,754 chars; lists all 10 institutes).
+- **Hard constraint #3 enforced**: a sum the model states is re-run through
+  evaluate_expression (trace + audit) and corrected if wrong.
+- **Plan & Agents**: one floating, draggable panel (TopBar: "Plan DAG",
+  "Agent map"); steps follow the agent owning each tool; unused steps show
+  "Not needed".
+- **Test hygiene**: conftest makes the corpus cache read-only for tests and
+  redirects chat attachments; source_config defaults resolve at call time
+  (tests used to wipe the real source list); 25 leaked test documents removed
+  from the index.
+
+## Needs the operator
+- **Docker Desktop** must be running to EXECUTE generated code (sandbox,
+  --network none). Without it the program is shown, marked not run; the pool
+  is retried on the next request.
+
+## Not done / not working
+- **Desktop app + installer** (`electron/`, `tools/package/build_payload.py`):
+  written, syntax-checked, NEVER RUN. `npm install` in electron/ was
+  interrupted (the Electron binary is missing; ~100 MB download needed -- ask
+  the user before downloading). Then: `npx electron . --setup` (wizard) and
+  `npx electron . --dev` (launcher against the repo). `--capture=<png>
+  --screen=<id>` saves a screenshot for smoke tests.
+- `requirements.txt` misses 16 packages the backend imports (torch,
+  transformers, paddleocr, langgraph, neo4j, python-pptx, ...). The payload
+  builder pins the real 41; requirements.txt itself is not yet fixed.
+- `test_intent.py`: 2 tests call `graph.classify_task`, which no longer
+  exists (fail on old code too).
+- In this conversation images stopped reaching the model (API rejected them);
+  slide review was done by OCR only.
+
+## Pitch (in progress)
+- Playbook artifact (revised, slide 6 rebuilt): https://claude.ai/artifact/YBLSVGZf5vubeiZDJXNk8T
+- Facts re-measured 27 Sep: 31 tools; 7 open-weight models in 8 roles; 875
+  tests; PS compliance 15/16 (16th manual: "nothing leaves").
+- Name: keep **Sovereign Workbench**. Idea title: "Sovereign Workbench: an
+  air-gapped AI that plans, computes and drafts for MRPL, on MRPL's own
+  hardware". Slide 2 feedback: source the problem claim (MoF advisory 29 Jan
+  2025, Samsung), add "0 external connections · 8 GB GPU" badge, use the
+  template's labels ("How it addresses the problem", "Innovation and
+  uniqueness"), open the list with "Offline chatbots answer questions. Ours
+  finishes the job.", keep ~60 words.
+
+---
+
 # HANDOFF — 2026-09-27 (speed, Artifacts tab, cleanup and critical review)
 
 **Speed** (measured on the RTX 4060 laptop): junk input 29 s -> 0.4 s (no
