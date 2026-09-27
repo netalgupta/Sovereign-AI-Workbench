@@ -42,9 +42,12 @@ export function WorkbenchPage() {
   const panels = useWorkspaceStore((s) => s.panels)
   const { openPanel, focusPanel, toggleCollapse } = useWorkspaceStore()
 
-  // Sources state
-  const [tree, setTree] = useState([])
-  const [sources, setSources] = useState([])
+  // Sources state. The corpus as the backend lists it; which files are ON
+  // is this chat's own selection (chatStore.disabledSources), applied below.
+  const [corpusTree, setTree] = useState([])
+  const [corpusSources, setSources] = useState([])
+  const disabledSources = useChatStore((s) => s.disabledSources)
+  const setDisabledSources = useChatStore((s) => s.setDisabledSources)
   const [directories, setDirectories] = useState([])
   const [totalSizeDisplay, setTotalSizeDisplay] = useState(null)
   const [sourcesCategory, setSourcesCategory] = useState('all')
@@ -78,87 +81,69 @@ export function WorkbenchPage() {
     }
   }
 
-  // ── Authoritative sync: whenever sources changes, push enabled names to chatStore ──
-  // This is the ONLY place setActiveDocuments is called, avoiding the anti-pattern
-  // of calling it inside a setState updater (which React skips or double-calls).
+  // A file's identity is its full path: two files may share a name (and the
+  // toggle used to flip every file of the same name at once).
+  const keyOf = (n) => n?.fullPath || n?.id || ''
+
+  // This chat's selection applied to the corpus: the list and the tree the
+  // panel shows, re-derived when the chat changes or the corpus reloads.
+  const { sources, tree } = useMemo(() => {
+    const off = new Set(disabledSources)
+    const sourcesOut = corpusSources.map((s) => ({ ...s, enabled: !off.has(keyOf(s)) }))
+    const mark = (nodes) =>
+      (nodes || []).map((n) => {
+        if (n.type === 'directory') {
+          const children = mark(n.children)
+          const files = children.filter((c) => c.type !== 'directory' || c.children?.length)
+          // a folder is ON while anything in it is on
+          return { ...n, children, enabled: files.length === 0 || children.some((c) => c.enabled !== false) }
+        }
+        return { ...n, enabled: !off.has(keyOf(n)) }
+      })
+    return { sources: sourcesOut, tree: mark(corpusTree) }
+  }, [corpusSources, corpusTree, disabledSources]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What the next question may search. null = no filter (every file on:
+  // nothing to confine, and the backend skips the filtering work); a list =
+  // only these. setActiveDocuments is called only here.
   useEffect(() => {
-    if (sources.length === 0) return
-    const enabled = sources
-      .filter((s) => s.enabled !== false)
-      .map((s) => s.name || s.corpus || s.id || '')
-      .filter(Boolean)
-    setActiveDocuments(enabled)
+    if (corpusSources.length === 0) return
+    if (disabledSources.length === 0) {
+      setActiveDocuments(null)
+      return
+    }
+    const enabled = sources.filter((s) => s.enabled).map((s) => s.name).filter(Boolean)
+    setActiveDocuments(Array.from(new Set(enabled)))
   }, [sources]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Per-file / per-folder On/Off toggle
+  // Per-file / per-folder On/Off switch: updates THIS chat's selection, which
+  // is saved with the chat at once.
   const handleToggleSource = (id, explicitEnabled, node) => {
-    const targetName = node?.name
-    const targetFullPath = node?.fullPath
-    const isDir = node?.type === 'directory'
-
-    // Collect all descendant file names for a directory toggle
-    const collectChildNames = (n) => {
-      const names = new Set()
-      const walk = (children) => {
-        if (!Array.isArray(children)) return
-        children.forEach((c) => {
-          if (c.type !== 'directory') names.add(c.name)
-          if (c.children) walk(c.children)
-        })
-      }
-      walk(n?.children || [])
-      return names
+    const target = node || corpusSources.find((s) => s.id === id)
+    if (!target) return
+    const keys = []
+    const collect = (n) => {
+      if (n.type === 'directory') (n.children || []).forEach(collect)
+      else keys.push(keyOf(n))
     }
-    const childNames = isDir ? collectChildNames(node) : new Set()
-
-    // ── Update sources flat list ──
-    setSources((prev) =>
-      prev.map((s) => {
-        const isDirectMatch =
-          s.id === id ||
-          (targetName && s.name === targetName) ||
-          (targetFullPath && s.fullPath === targetFullPath)
-        const isChildMatch = isDir && childNames.has(s.name)
-        if (isDirectMatch || isChildMatch) {
-          const nextEnabled = explicitEnabled !== undefined ? explicitEnabled : !s.enabled
-          return { ...s, enabled: nextEnabled }
-        }
-        return s
-      })
-    )
-
-    // ── Update tree nodes ──
-    const updateNodes = (nodes) => {
-      if (!Array.isArray(nodes)) return nodes
-      return nodes.map((n) => {
-        const isMatch =
-          n.id === id ||
-          (targetName && n.name === targetName) ||
-          (targetFullPath && n.fullPath === targetFullPath)
-        const nextEnabled = explicitEnabled !== undefined ? explicitEnabled : !(n.enabled !== false)
-        let updated = isMatch ? { ...n, enabled: nextEnabled } : n
-        if (isMatch && n.type === 'directory') {
-          // Cascade enabled state to all children in tree
-          const cascadeTree = (children) => {
-            if (!Array.isArray(children)) return children
-            return children.map((c) => {
-              const c2 = { ...c, enabled: nextEnabled }
-              if (c2.children) c2.children = cascadeTree(c2.children)
-              return c2
-            })
-          }
-          updated.children = cascadeTree(n.children || [])
-        } else if (updated.children) {
-          updated = { ...updated, children: updateNodes(updated.children) }
-        }
-        return updated
-      })
-    }
-    setTree((prev) => updateNodes(prev))
+    collect(target)
+    const off = new Set(disabledSources)
+    const turnOn = explicitEnabled !== undefined ? explicitEnabled : keys.some((k) => off.has(k))
+    keys.forEach((k) => (turnOn ? off.delete(k) : off.add(k)))
+    setDisabledSources([...off])
   }
 
   useEffect(() => {
     fetchCorpus()
+  }, [])
+
+  // The chat's paperclip menu ("Add source directory") sends this event.
+  // Only the old Sidebar -- no longer rendered -- listened for it, so the
+  // menu item did nothing.
+  useEffect(() => {
+    const open = () => setIsAddDirModalOpen(true)
+    window.addEventListener('open-add-source-modal', open)
+    return () => window.removeEventListener('open-add-source-modal', open)
   }, [])
 
   // Fetch graph if floating graph panel is open

@@ -72,7 +72,7 @@ def decide_path(request: str) -> PathDecision:
     """
     from backend.orchestrator.intent import classify
     from backend.orchestrator.simple_intent import is_simple_lookup
-    from backend.retrieval.corpus_questions import is_corpus_question
+    from backend.retrieval.corpus_questions import carries_attached_file, is_corpus_question
 
     text = (request or "").strip()
     if not text:
@@ -100,6 +100,11 @@ def decide_path(request: str) -> PathDecision:
     # Peeled off here because they provably need no corpus. The
     # classifier vetoes on any plant vocabulary, so a question that
     # deserves a citation can never land in one of these.
+    # A file attached to this message: answered from that file by the agent,
+    # never by a shortcut ("hi" + a spreadsheet is not a greeting).
+    if carries_attached_file(text):
+        return PathDecision("agentic", "The message carries an attached file; it is answered from that file.", True)
+
     intent = classify(text)
     if not intent.needs_corpus:
         return PathDecision(intent.kind, intent.reason, intent.kind == "arithmetic")

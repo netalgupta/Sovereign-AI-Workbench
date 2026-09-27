@@ -30,6 +30,8 @@ import {
   ShieldCheck,
   FileText,
   X,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { usePreviewStore } from '../../store/previewStore'
@@ -38,7 +40,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useChatStore } from '../../store/chatStore'
 import { useIngestionStore } from '../../store/ingestionStore'
-import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool } from '../../lib/api'
+import { sendMessageStream, uploadFilesToCorpus, analyseAttachment, callTool, readAttachmentText } from '../../lib/api'
 import { showToast } from '../../store/toastStore'
 import { MessageBubble } from '../chat/MessageBubble'
 import { CalcTraceCard } from '../../integrations/calc-trace'
@@ -132,6 +134,8 @@ export function ChatPane() {
   // ── Attachment Popover & Ingestion State ───────────────────────────────────
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false)
   const [temporaryAttachments, setTemporaryAttachments] = useState([])
+  // Reads of attached documents in flight, by attachment id (see addFiles).
+  const docReadsRef = useRef({})
   const attachMenuRef = useRef(null)
   const docFileInputRef = useRef(null)
   const photoFileInputRef = useRef(null)
@@ -234,13 +238,35 @@ export function ChatPane() {
         })
         continue
       }
+      const id = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      // A PDF, Word, Excel or PowerPoint file is READ now, while the
+      // operator types: it used to send only its name, so the model was
+      // told a file existed and never saw a word of it. Read-only -- the
+      // file does not join the corpus (Sources is for that).
+      if (textContent == null) {
+        docReadsRef.current[id] = readAttachmentText(file).then(
+          (r) => {
+            setTemporaryAttachments((prev) =>
+              prev.map((a) => (a.id === id ? { ...a, status: 'ready', pages: r.pages, truncated: r.truncated } : a)),
+            )
+            return r
+          },
+          (err) => {
+            setTemporaryAttachments((prev) =>
+              prev.map((a) => (a.id === id ? { ...a, status: 'error', error: err.message } : a)),
+            )
+            return { error: err.message }
+          },
+        )
+      }
       newAttachments.push({
-        id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        id,
         name: file.name,
         size: file.size,
         type: label || 'document',
         previewUrl,
         textContent,
+        status: textContent == null ? 'reading' : 'ready',
       })
     }
     if (mediaAttachments.length) setAttachments((prev) => [...prev, ...mediaAttachments])
@@ -647,18 +673,49 @@ export function ChatPane() {
     if ((!draft.trim() && temporaryAttachments.length === 0 && !hasAttachments) || isPending || awaitingHumanApproval) return
     let text = draft.trim()
 
+    // Attached documents: their TEXT goes to the model with the question;
+    // the bubble shows what was typed plus the file names, not a dump.
+    let documentContext = ''
+    let documentNote = ''
     if (temporaryAttachments.length > 0) {
-      const attDescriptions = temporaryAttachments
-        .map((att) => {
-          let desc = `[Temporary Attachment: ${att.name}]`
-          if (att.textContent) {
-            desc += `\n\`\`\`\n${att.textContent.slice(0, 3000)}\n\`\`\``
-          }
-          return desc
-        })
-        .join('\n\n')
-      text = text ? `${text}\n\n${attDescriptions}` : attDescriptions
+      const docs = temporaryAttachments
       setTemporaryAttachments([])
+      setDraft('')
+      const read = await Promise.all(
+        docs.map(async (att) => {
+          if (att.textContent != null) return { name: att.name, text: att.textContent, pages: 1 }
+          const r = (await docReadsRef.current[att.id]) || { error: 'it was not read' }
+          delete docReadsRef.current[att.id]
+          return { name: att.name, ...r }
+        }),
+      )
+      // ~3k tokens in all keeps the question, the file and the model's
+      // context (8192) together; a longer file says how much was included.
+      const perFile = Math.floor(12000 / read.length)
+      const blocks = []
+      const notes = []
+      for (const d of read) {
+        if (d.error || !d.text) {
+          notes.push(`${d.name} (could not be read${d.error ? `: ${d.error}` : ''})`)
+          continue
+        }
+        const total = d.chars || d.text.length
+        const included = d.text.slice(0, perFile)
+        const partial = included.length < total || d.truncated
+        blocks.push(
+          `ATTACHED FILE: ${d.name}${d.pages > 1 ? ` (${d.pages} pages)` : ''}` +
+            (partial ? ` -- only the first ${included.length} of ${total} characters are included` : '') +
+            `\n<<<\n${included}\n>>>`,
+        )
+        notes.push(partial ? `${d.name} (beginning only; add it as a source to search all of it)` : d.name)
+      }
+      if (blocks.length) {
+        documentContext =
+          '\n\nAnswer from the attached file(s) below. They were attached to this message and are not in the corpus.\n\n' +
+          blocks.join('\n\n')
+      }
+      if (!text) text = `Summarise the attached file${docs.length > 1 ? 's' : ''}.`
+      documentNote = `\n\nAttached: ${notes.join(', ')}`
     }
 
     setDraft('')
@@ -787,8 +844,8 @@ export function ChatPane() {
       (hasAttachments && !text ? `Analyse the attached file${names.length > 1 ? 's' : ''}: ${names.join(', ')}` : text) +
       visionContext.join('')
     const attachNote =
-      hasAttachments && text ? `\n\n_Attached: ${names.join(', ')}_` : ''
-    addMessage('user', userText + attachNote)
+      hasAttachments && text ? `\n\nAttached: ${names.join(', ')}` : ''
+    addMessage('user', userText + attachNote + documentNote)
 
     setIsPending(true)
 
@@ -812,7 +869,7 @@ export function ChatPane() {
     })
 
     try {
-      await sendMessageStream(userText, sessionId, {
+      await sendMessageStream(userText + documentContext, sessionId, {
         onPlan: (planEv) => {
           // Receive the plan DAG emitted before any tool work starts.
           // Normalise the step_id field (backend uses step_id, not id).
@@ -1375,10 +1432,25 @@ export function ChatPane() {
                       color: 'var(--color-text)',
                     }}
                   >
-                    <FileText size={11} className="text-[var(--color-accent)]" />
-                    <span className="font-medium truncate max-w-[120px]">{att.name}</span>
-                    <span className="text-[9px] text-[var(--color-text-muted)]">
-                      ({Math.round(att.size / 1024)}KB)
+                    {att.status === 'reading' ? (
+                      <Loader2 size={11} className="animate-spin text-[var(--color-text-muted)]" />
+                    ) : att.status === 'error' ? (
+                      <AlertTriangle size={11} className="text-red-500" />
+                    ) : (
+                      <FileText size={11} className="text-[var(--color-accent)]" />
+                    )}
+                    <span className="font-medium truncate max-w-[160px]" title={att.error || att.name}>{att.name}</span>
+                    <span
+                      className="text-[9px] whitespace-nowrap"
+                      style={{ color: att.status === 'error' ? 'var(--color-danger, #ef4444)' : 'var(--color-text-muted)' }}
+                    >
+                      {att.status === 'reading'
+                        ? 'reading…'
+                        : att.status === 'error'
+                          ? 'could not be read'
+                          : att.pages > 1
+                            ? `${att.pages} pages`
+                            : `${Math.round(att.size / 1024)} KB`}
                     </span>
                     <button
                       type="button"
@@ -1416,8 +1488,11 @@ export function ChatPane() {
                   ? 'Composer locked: Human authorization required at approval gate...'
                   : 'Ask a follow-up or command an agentic task (Shift+Enter for newline)...'
               }
-              className={`w-full bg-transparent text-xs outline-none placeholder:text-[var(--color-text-faint)] resize-none overflow-y-auto leading-relaxed ${
-                isCodeOrMarkdown ? 'font-mono text-[11.5px]' : ''
+              // 14 px on a 22 px line, padded to the 28 px of the icon buttons
+              // beside it, so the first line sits on their centre line (it was
+              // 12 px and sat low).
+              className={`w-full bg-transparent outline-none placeholder:text-[var(--color-text-faint)] resize-none overflow-y-auto py-[3px] ${
+                isCodeOrMarkdown ? 'font-mono text-[13px] leading-[22px]' : 'text-[14px] leading-[22px]'
               } ${awaitingHumanApproval ? 'cursor-not-allowed text-[var(--color-text-muted)]' : ''}`}
               style={{
                 color: 'var(--color-text)',

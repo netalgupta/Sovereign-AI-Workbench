@@ -60,9 +60,28 @@ _SPECIFIC_SUBJECT = re.compile(
 )
 
 
+# The header the chat writes above the text of a file attached to one
+# message (ChatPane.handleSend). Such a message is about THAT file.
+_ATTACHED_FILE = re.compile(r"^ATTACHED FILE: ", re.M)
+
+
+def carries_attached_file(text: str) -> bool:
+    """Does this message carry the text of a file attached to it?
+
+    Measured 27 Sep: "List all houses from the document" with a spreadsheet
+    attached was answered with the corpus inventory ("69 documents are
+    indexed") -- "list ... document" matched the pattern below, and the
+    attached text itself says "attached file(s)". A message with a file
+    is about that file, never about the collection, never a greeting.
+    """
+    return bool(text) and bool(_ATTACHED_FILE.search(text))
+
+
 def is_corpus_question(query: str) -> bool:
     """Is this a question about the collection rather than its contents?"""
     if not query or not query.strip():
+        return False
+    if carries_attached_file(query):
         return False
     text = query.strip()
     if _SPECIFIC_SUBJECT.search(text):

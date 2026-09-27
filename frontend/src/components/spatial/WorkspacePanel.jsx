@@ -258,6 +258,9 @@ export function WorkspacePanel({
         height: 'calc(100vh - 96px)',
         maxWidth: 'none',
         maxHeight: 'none',
+        // Above every panel, BELOW every dialog and toast (z 10050-10200).
+        // Dialogs used to sit at z-50: opening one from Focus Mode blurred
+        // the header and rail and put the dialog itself behind this panel.
         zIndex: 9999,
         margin: 0,
         background: 'var(--color-surface)',

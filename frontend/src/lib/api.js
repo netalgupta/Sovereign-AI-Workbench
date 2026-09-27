@@ -511,3 +511,18 @@ export async function sendMessage(message, sessionId) {
   }
 }
 
+
+/**
+ * The text of a file attached to one message (PDF, Word, Excel, PowerPoint,
+ * scanned pages OCR'd). Read-only: the backend reads it in a temporary
+ * directory and the file does not join the corpus.
+ * @returns {Promise<{filename, type, pages, chars, text, truncated}>}
+ */
+export async function readAttachmentText(file) {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  const res = await fetch('/api/attachments/read', { method: 'POST', body: form })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`)
+  return data
+}

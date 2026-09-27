@@ -111,7 +111,7 @@ export function CommandPalette({ isOpen, onClose }) {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/40 backdrop-blur-xs select-none">
+    <div className="fixed inset-0 z-[10100] flex items-start justify-center pt-20 px-4 bg-black/40 backdrop-blur-xs select-none">
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: -10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}

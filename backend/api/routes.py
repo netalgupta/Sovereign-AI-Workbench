@@ -3296,6 +3296,63 @@ async def upload_attachment(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+ATTACHMENT_TEXT_LIMIT = 60_000  # characters returned; the chat decides how much of it to send
+
+
+@router.post("/attachments/read")
+def read_attachment_text(file: UploadFile = File(...)) -> dict:
+    """The text of a file attached to ONE message, for that message only.
+
+    A PDF, Word, Excel or PowerPoint file attached in the chat used to send
+    nothing but its name -- "[Temporary Attachment: x.pdf]" -- so the model
+    was told a file existed and never saw a word of it ("I see a temporary
+    attachment but no specific question"). This reads it with the same
+    extractor ingestion uses (OCR for scanned pages) into a temporary
+    directory that is deleted on return: the file is not added to the
+    corpus, the index or the source list.
+    """
+    import tempfile
+
+    from backend.ingestion.document_types import detect_document_type
+    from backend.ingestion.text_extraction import extract_pages
+
+    name = Path(file.filename or "attachment").name
+    raw = file.file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The attached file is empty.")
+    if len(raw) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="The attached file is larger than 50 MB.")
+
+    def _ocr(img_path: str) -> str:
+        from backend.tools.vision.ocr_printed import extract_printed_text
+
+        return extract_printed_text(img_path).full_text or ""
+
+    with tempfile.TemporaryDirectory(prefix="sw_attach_") as tmp:
+        path = Path(tmp) / name
+        path.write_bytes(raw)
+        try:
+            detected = detect_document_type(str(path)).detected_type
+            pages = extract_pages(str(path), detected, ocr_fn=_ocr)
+        except (NotImplementedError, ValueError) as exc:
+            raise HTTPException(status_code=415, detail=f"{name} could not be read: {exc}") from exc
+
+    parts = [
+        (f"--- page {p.page_number} ---\n" if p.page_number and len(pages) > 1 else "") + p.text.strip()
+        for p in pages
+        if p.text and p.text.strip()
+    ]
+    text = "\n\n".join(parts)
+    return {
+        "filename": name,
+        "type": detected,
+        "pages": len(pages),
+        "chars": len(text),
+        "text": text[:ATTACHMENT_TEXT_LIMIT],
+        "truncated": len(text) > ATTACHMENT_TEXT_LIMIT,
+    }
+
+
 @router.get("/attachments/{attachment_id}")
 def get_attachment(attachment_id: str) -> dict:
     """Return current processing status and metadata for an attachment."""

@@ -121,7 +121,7 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
     <div
       className={`h-full flex flex-col shadow-2xl border-l transition-all duration-200 select-none ${
         isFullscreen
-          ? 'fixed inset-0 z-50 w-screen h-screen'
+          ? 'fixed inset-0 z-[10050] w-screen h-screen'
           : 'relative flex-shrink-0 z-20 w-[44vw] min-w-[340px] max-w-[850px]'
       }`}
       style={{

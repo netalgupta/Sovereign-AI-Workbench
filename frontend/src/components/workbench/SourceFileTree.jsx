@@ -190,9 +190,11 @@ export function SourceFileTree({
         // Merge with existing so user manual closes can be respected or all open
         return new Set([...prev, ...all])
       })
-      // Synchronize disabled state if provided in tree nodes
-      setDisabledNodeIds((prev) => {
-        const next = new Set(prev)
+      // Mirror the tree's switches EXACTLY. This only ever added ids, so a
+      // file switched back on -- or on in the chat just opened -- stayed
+      // shown as off.
+      setDisabledNodeIds(() => {
+        const next = new Set()
         const scan = (nodes) => {
           if (!Array.isArray(nodes)) return
           for (const n of nodes) {

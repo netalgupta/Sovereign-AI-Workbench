@@ -222,7 +222,7 @@ export default function AgentMap({ onClose }) {
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,0.35)' }} onClick={onClose}>
+    <div className="fixed inset-0 z-[10100] flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,0.35)' }} onClick={onClose}>
       <div
         role="dialog"
         aria-label="Agent map"

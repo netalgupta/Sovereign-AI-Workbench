@@ -79,10 +79,39 @@ function readSessionMessages(id) {
   }
 }
 
-/** Delete a session's messages from localStorage. */
+/** Delete a session's messages (and its source selection) from localStorage. */
 function deleteSessionStorage(id) {
   try {
     localStorage.removeItem(SESSION_KEY(id))
+    localStorage.removeItem(SOURCES_KEY(id))
+  } catch {}
+}
+
+// ── Each chat's own source selection ────────────────────────────────────────
+// A chat about five files keeps those five; another chat keeps its six.
+// Stored as the files switched OFF (by full path, which is unique -- a name
+// is not), so a source added later starts ON in every chat. Saved on every
+// flip, not only when a message is sent, and restored when the chat is.
+const SOURCES_KEY = (id) => `sw_session_sources_${id}`
+const DEFAULT_SELECTION = { disabledSources: [], sourcesEnabled: true }
+
+export function readSourceSelection(id) {
+  try {
+    const raw = localStorage.getItem(SOURCES_KEY(id))
+    if (!raw) return { ...DEFAULT_SELECTION }
+    const parsed = JSON.parse(raw)
+    return {
+      disabledSources: Array.isArray(parsed.disabledSources) ? parsed.disabledSources.filter((x) => typeof x === 'string') : [],
+      sourcesEnabled: parsed.sourcesEnabled !== false,
+    }
+  } catch {
+    return { ...DEFAULT_SELECTION }
+  }
+}
+
+function writeSourceSelection(id, selection) {
+  try {
+    localStorage.setItem(SOURCES_KEY(id), JSON.stringify(selection))
   } catch {}
 }
 
@@ -128,11 +157,12 @@ export const useChatStore = create((set, get) => ({
     set({ sessions: [...index] })
   },
 
-  /** Start a brand-new session, saving the current one first. */
+  /** Start a brand-new session, saving the current one first. A new chat starts with every source on. */
   newSession: () => {
     get()._saveSession()
     const newId = generateSessionId()
     set({
+      ...DEFAULT_SELECTION,
       messages: [],
       sessionId: newId,
       plan: [],
@@ -149,6 +179,7 @@ export const useChatStore = create((set, get) => ({
     get()._saveSession()
     const messages = readSessionMessages(id)
     set({
+      ...readSourceSelection(id), // this chat's own switches
       sessionId: id,
       messages,
       plan: [],
@@ -169,6 +200,7 @@ export const useChatStore = create((set, get) => ({
       sessions: index,
       // If deleting the active session, start fresh
       ...(state.sessionId === id ? {
+        ...DEFAULT_SELECTION,
         messages: [],
         sessionId: generateSessionId(),
         plan: [],
@@ -189,8 +221,25 @@ export const useChatStore = create((set, get) => ({
   // When sourcesEnabled is true (default): LLM strictly grounds in local documents.
   // When false: LLM bypasses local corpus retrieval and answers from general knowledge.
   sourcesEnabled: true,
-  setSourcesEnabled: (enabled) => set({ sourcesEnabled: Boolean(enabled) }),
-  toggleSourcesEnabled: () => set((state) => ({ sourcesEnabled: !state.sourcesEnabled })),
+  setSourcesEnabled: (enabled) => {
+    set({ sourcesEnabled: Boolean(enabled) })
+    get()._saveSourceSelection()
+  },
+  toggleSourcesEnabled: () => {
+    set((state) => ({ sourcesEnabled: !state.sourcesEnabled }))
+    get()._saveSourceSelection()
+  },
+
+  // This chat's switched-off files (full paths). See SOURCES_KEY above.
+  disabledSources: [],
+  setDisabledSources: (paths) => {
+    set({ disabledSources: Array.from(new Set(paths || [])) })
+    get()._saveSourceSelection()
+  },
+  _saveSourceSelection: () => {
+    const { sessionId, disabledSources, sourcesEnabled } = get()
+    writeSourceSelection(sessionId, { disabledSources, sourcesEnabled })
+  },
 
   // Built from the Sources panel — names of files currently toggled ON.
   // Passed as active_documents to every /api/chat/stream call.
@@ -505,6 +554,9 @@ export const useChatStore = create((set, get) => ({
       timestamp: now(),
     }
     set((state) => ({ messages: [...state.messages, message] }))
+    // The question is saved the moment it is asked, not only once the reply
+    // has finished typing: a refresh mid-answer used to lose the chat.
+    if (role === 'user') setTimeout(() => get()._saveSession(), 0)
     return message.id
   },
 
@@ -595,3 +647,28 @@ export const useChatStore = create((set, get) => ({
     set({ messages: [], sessionId: generateSessionId() })
   },
 }))
+
+// ── Refresh keeps you in the chat you were in ───────────────────────────────
+// Every page load used to mint a new session id, so a refresh dropped the
+// operator into an empty chat. The open chat's id is remembered, and on
+// load that chat -- messages and its own source switches -- comes back.
+const CURRENT_KEY = 'sw_current_session'
+
+try {
+  const id = localStorage.getItem(CURRENT_KEY)
+  const messages = id ? readSessionMessages(id) : []
+  if (id && messages.length) {
+    useChatStore.setState({ sessionId: id, messages, ...readSourceSelection(id) })
+  }
+} catch {}
+
+useChatStore.subscribe((state, prev) => {
+  if (state.sessionId !== prev.sessionId) {
+    try {
+      localStorage.setItem(CURRENT_KEY, state.sessionId)
+    } catch {}
+  }
+})
+try {
+  localStorage.setItem(CURRENT_KEY, useChatStore.getState().sessionId)
+} catch {}
