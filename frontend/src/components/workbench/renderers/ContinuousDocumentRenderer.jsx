@@ -59,6 +59,8 @@ export function ContinuousDocumentRenderer({
   filePath,
   ext = 'pdf',
   zoomLevel = 100,
+  initialPage = null,
+  jumpToken = null,
   onPageChange,
 }) {
   const [loading, setLoading] = useState(true)
@@ -133,6 +135,24 @@ export function ContinuousDocumentRenderer({
       clearTimeout(timer)
     }
   }, [filePath])
+
+  // A citation opens the viewer AT its page: scroll there once the pages
+  // exist, and again when another citation points into the same file
+  // (jumpToken is the preview request, new on every click).
+  useEffect(() => {
+    if (loading || error || !initialPage || initialPage < 2) return
+    const page = Math.min(initialPage, pageCount)
+    const frame = requestAnimationFrame(() => {
+      const el = pageRefs.current[page - 1]
+      const container = containerRef.current
+      if (el && container) {
+        container.scrollTo({ top: el.offsetTop - container.offsetTop - 16, behavior: 'smooth' })
+        setActivePage(page)
+        if (onPageChange) onPageChange(page, pageCount)
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [loading, error, initialPage, pageCount, jumpToken]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zoom keeps the page you are reading in view (it used to stay at the same
   // scroll offset, which is a different page once every page changes size).

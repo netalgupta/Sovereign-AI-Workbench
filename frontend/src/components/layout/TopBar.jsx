@@ -58,16 +58,14 @@ export function TopBar({ onOpenSearch }) {
           className="flex items-center gap-2.5 group cursor-pointer"
           title="Sovereign Workbench Home"
         >
-          {/* Sovereign Workstation Emblem */}
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs tracking-tight transition-transform duration-200 group-hover:scale-105 shadow-xs"
-            style={{
-              background: 'var(--color-accent)',
-              color: '#FFFFFF',
-            }}
-          >
-            <span className="font-mono text-sm leading-none font-bold">SV</span>
-          </div>
+          {/* Sovereign Workstation Emblem -- the refinery mark (it was the
+              sidebar's before the revamp, and a text "SV" badge after it) */}
+          <img
+            src="/assets/logo-mark-transparent.png"
+            alt="Sovereign Workbench"
+            className="h-8 w-auto object-contain flex-shrink-0 select-none transition-transform duration-200 group-hover:scale-105"
+            draggable={false}
+          />
 
           <div className="flex flex-col">
             <div className="flex items-center gap-2">

@@ -29,12 +29,10 @@ function processChildrenForCitations(children, citationsMap) {
       const match = part.match(/^\[(\d+)\]$/)
       if (match) {
         const id = parseInt(match[1], 10)
-        const cit = citationsMap[id] || {
-          id,
-          doc: `Corpus Source [${id}]`,
-          section: 'Retrieved excerpt',
-          passage: `Retrieved grounding passage for claim [${id}].`,
-        }
+        const cit = citationsMap[id]
+        // A marker with no citation behind it stays plain text. It used to
+        // become a chip for "Corpus Source [n]" with an invented passage.
+        if (!cit) return part
         return <CitationChip key={idx} citation={cit} inlineIndex={id} />
       }
       return part
@@ -133,17 +131,17 @@ const Tr = ({ children, ...props }) => (
 export function MarkdownBody({ content, citations = [] }) {
   const dark = isDarkMode()
 
-  // Map citations by 1-based index or id
+  // Map citations by 1-based index or id. Keyed on the content, not the
+  // array: callers pass `message.citations || []`, a new array every render.
+  const citationsKey = JSON.stringify(Array.isArray(citations) ? citations : [])
   const citationsMap = React.useMemo(() => {
     const map = {}
-    if (Array.isArray(citations)) {
-      citations.forEach((c, idx) => {
-        const id = c.id ?? idx + 1
-        map[id] = c
-      })
-    }
+    JSON.parse(citationsKey).forEach((c, idx) => {
+      map[c.id ?? idx + 1] = c
+    })
     return map
-  }, [citations])
+  }, [citationsKey])
+  const components = useMarkdownComponents(citationsMap, dark)
 
   return (
     <div
@@ -152,7 +150,20 @@ export function MarkdownBody({ content, citations = [] }) {
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
+        components={components}
+      >
+        {plainMath(content)}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+// Built inline, this map made every paragraph a NEW component type on each
+// render, so React remounted it -- and a citation chip lost its open state
+// the moment the chat re-rendered (a timer ticking was enough): clicking
+// [1] appeared to do nothing. Memoised on what it actually depends on.
+function useMarkdownComponents(citationsMap, dark) {
+  return React.useMemo(() => ({
           h1: ({ children }) => (
             <h1 className="text-lg font-bold mt-5 mb-2.5 leading-snug" style={{ color: 'var(--color-text)' }}>
               {children}
@@ -280,10 +291,5 @@ export function MarkdownBody({ content, citations = [] }) {
           tr: Tr,
           th: Th,
           td: Td,
-        }}
-      >
-        {plainMath(content)}
-      </ReactMarkdown>
-    </div>
-  )
+  }), [citationsMap, dark])
 }

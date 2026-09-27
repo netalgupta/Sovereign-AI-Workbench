@@ -248,6 +248,8 @@ export function SourcePreviewPanel({ file, isOpen, onClose }) {
             filePath={filePath}
             ext={ext}
             zoomLevel={zoomLevel}
+            initialPage={typeof file === 'object' ? file.page : null}
+            jumpToken={file}
             onPageChange={(current, total) => handlePageChange(current, total)}
           />
         )}

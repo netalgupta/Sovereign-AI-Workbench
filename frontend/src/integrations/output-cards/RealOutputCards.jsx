@@ -93,18 +93,18 @@ export default function RealOutputCards({
   })
 
   return (
-    <div className="flex-1 flex flex-col h-full p-6 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
+    <div className="flex-1 flex flex-col h-full min-w-0 p-6 overflow-y-auto overflow-x-hidden" style={{ background: 'var(--color-bg)' }}>
       {/* ── Top Header & Integration Banner ─────────────────────────────── */}
       <div
-        className="p-5 rounded-2xl border mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
+        className="p-5 rounded-2xl border mb-6 flex flex-wrap items-center justify-between gap-4 shadow-sm"
         style={{
           background: 'var(--color-card-bg)',
           borderColor: 'var(--color-border)',
         }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1 basis-[320px]">
           <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
+            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
             style={{
               background: 'var(--color-accent-tint)',
               color: 'var(--color-accent)',
@@ -113,13 +113,13 @@ export default function RealOutputCards({
           >
             <FolderDown size={20} />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base font-bold tracking-tight whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
                 Generated Deliverable Library
               </h2>
               <span
-                className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider"
+                className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider whitespace-nowrap"
                 style={{
                   background: 'var(--color-success-tint)',
                   color: 'var(--color-success)',
@@ -136,7 +136,7 @@ export default function RealOutputCards({
         </div>
 
         {/* Filter Chips */}
-        <div className="flex items-center gap-1.5 p-1 rounded-lg border bg-surface/50 text-xs font-mono">
+        <div className="flex items-center gap-1.5 p-1 rounded-lg border bg-surface/50 text-xs font-mono flex-shrink-0">
           <Filter size={13} className="text-zinc-400 ml-1.5 mr-0.5" />
           {['all', 'docx', 'xlsx', 'pptx', 'pdf'].map((t) => (
             <button
@@ -174,7 +174,7 @@ export default function RealOutputCards({
               : `No ${filter.toUpperCase()} deliverables yet.`}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-6xl">
+        <div className="grid gap-4 w-full" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))' }}>
           {filtered.map((file) => {
             const ext = (file.fileType || '').toLowerCase()
             const typeConfig = ICONS[ext] || { icon: FileText, color: 'var(--color-accent)', label: ext.toUpperCase() }
@@ -183,7 +183,7 @@ export default function RealOutputCards({
             return (
               <div
                 key={file.id || file.filename}
-                className="p-5 rounded-xl border flex flex-col justify-between gap-3 shadow-xs transition-all hover:border-zinc-400 dark:hover:border-zinc-600"
+                className="p-5 rounded-xl border flex flex-col justify-between gap-3 min-w-0 shadow-xs transition-all hover:border-zinc-400 dark:hover:border-zinc-600 hover:-translate-y-0.5 hover:shadow-md"
                 style={{
                   background: 'var(--color-card-bg)',
                   borderColor: file.filename === newest ? 'var(--color-accent)' : 'var(--color-border)',
@@ -198,7 +198,7 @@ export default function RealOutputCards({
                   </div>
                   <div className="min-w-0 flex-1">
                     <h4
-                      className="font-bold text-xs truncate"
+                      className="font-bold text-xs leading-snug line-clamp-2 break-all"
                       style={{ color: 'var(--color-text)' }}
                       title={file.filename}
                     >
@@ -212,17 +212,17 @@ export default function RealOutputCards({
                 </div>
 
                 <div
-                  className="pt-3 border-t flex items-center justify-between"
+                  className="pt-3 border-t flex flex-wrap items-center justify-between gap-2"
                   style={{ borderColor: 'var(--color-border)' }}
                 >
-                  <span className="text-[10px] font-mono" style={{ color: 'var(--color-text-muted)' }}>
+                  <span className="text-[10px] font-mono whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>
                     {file.generatedAt || ''}
                   </span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
                   <button
                     type="button"
                     onClick={() => openPreview({ id: file.path, name: file.filename, filename: file.filename, relativePath: file.path, relPath: file.path, path: file.path, type: ext })}
-                    className="px-3 py-1 rounded font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer border"
+                    className="px-3 py-1 rounded font-medium text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer border hover:bg-[var(--color-overlay)]"
                     style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
                   >
                     <Eye size={12} />
@@ -231,7 +231,7 @@ export default function RealOutputCards({
                   <button
                     type="button"
                     onClick={() => handleDownload(file)}
-                    className="px-3 py-1 rounded font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="px-3 py-1 rounded font-medium text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer hover:brightness-110"
                     style={{
                       background: 'var(--color-accent)',
                       color: '#ffffff',

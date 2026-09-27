@@ -23,6 +23,20 @@ import { usePreviewStore } from '../../store/previewStore'
 /**
  * @param {{ citation: { id: number, doc: string, section: string, passage: string } }} props
  */
+// The cited file, at the cited page, in the Sources viewer. A citation
+// carries the document's name; the backend finds it inside the sources.
+function openCited(citation) {
+  const doc = citation.source_document || citation.doc
+  if (!doc) return
+  usePreviewStore.getState().openPreview({
+    id: doc,
+    name: doc,
+    filename: doc,
+    relativePath: doc,
+    page: Number(citation.page_number) || null,
+  })
+}
+
 export function CitationChip({ citation }) {
   const [isOpen, setIsOpen] = useState(false)
 
@@ -45,10 +59,15 @@ export function CitationChip({ citation }) {
       >
         <button
           type="button"
-          onClick={() => setIsOpen((o) => !o)}
+          onClick={() => {
+            // A touch on [n] shows the evidence: the file opens in the
+            // viewer at the cited page, and the passage expands under the line.
+            if (!isOpen) openCited(citation)
+            setIsOpen((o) => !o)
+          }}
           aria-expanded={isOpen}
-          aria-label={`${isOpen ? 'Collapse' : 'Expand'} citation ${citation.id}: ${citation.doc}`}
-          title={citation.doc}
+          aria-label={`Open citation ${citation.id}: ${citation.doc}${citation.page_number ? `, page ${citation.page_number}` : ''}`}
+          title={`${citation.doc}${citation.page_number ? ` — page ${citation.page_number}` : ''} (opens in the viewer)`}
           style={{
             // Reset ALL button defaults
             appearance: 'none',
@@ -165,7 +184,7 @@ export function CitationChip({ citation }) {
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                usePreviewStore.getState().openPreview(citation.doc)
+                openCited(citation)
               }}
               style={{
                 display: 'inline-flex',
