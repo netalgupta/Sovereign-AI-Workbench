@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useParams } from 'react-router-dom'
+import { CHAT_TABS } from '../lib/nav'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FolderSearch,
@@ -34,6 +35,19 @@ import { showToast } from '../store/toastStore'
 
 export function WorkbenchPage() {
   const [searchParams] = useSearchParams()
+
+  // THE URL SAYS WHICH CHAT AND WHICH TAB (lib/nav.js). Back, forward and
+  // refresh change the URL; the store follows it -- never the reverse.
+  const { sessionId: routeSessionId } = useParams()
+  const openSession = useChatStore((s) => s.openSession)
+  const setActiveTab = useChatStore((s) => s.setActiveTab)
+  const routeTab = searchParams.get('tab')
+  useEffect(() => {
+    if (routeSessionId) openSession(routeSessionId)
+  }, [routeSessionId, openSession])
+  useEffect(() => {
+    setActiveTab(CHAT_TABS.includes(routeTab) ? routeTab : 'chat')
+  }, [routeTab, setActiveTab])
   const plan = useChatStore((s) => s.plan) || []
   const setActiveDocuments = useChatStore((s) => s.setActiveDocuments)
   const sourcesEnabled = useChatStore((s) => s.sourcesEnabled)

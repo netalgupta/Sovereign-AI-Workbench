@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { useGoBack } from '../lib/nav'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft,
@@ -29,6 +30,7 @@ import { showToast } from '../store/toastStore'
 import { FileTypeTile } from '../components/common/FileTypeTile'
 
 export function SourcesPage() {
+  const goBack = useGoBack('/chat')
   // Active top-level tab
   const [activeTab, setActiveTab] = useState('files') // 'files' | 'graph' | 'images' | 'vectors' | 'chunks'
 
@@ -403,8 +405,10 @@ export function SourcesPage() {
         }}
       >
         <div className="flex items-center gap-4 min-w-0">
-          <Link
-            to="/"
+          <button
+            type="button"
+            onClick={goBack}
+            title="Back to where you came from (the chat, if this page was opened directly)"
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border hover:bg-[var(--color-overlay)] transition-fast cursor-pointer flex-shrink-0 shadow-xs"
             style={{
               borderColor: 'var(--color-border)',
@@ -412,8 +416,8 @@ export function SourcesPage() {
             }}
           >
             <ArrowLeft size={14} />
-            <span>Workbench</span>
-          </Link>
+            <span>Back</span>
+          </button>
 
           <div className="flex flex-col min-w-0">
             <div className="flex items-center gap-2.5">

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useGoBack } from '../lib/nav'
 import {
   ArrowLeft,
   ArrowRight,
@@ -104,6 +105,7 @@ const INITIAL_SYSTEM_INFO = {
  * 3. Portable Drive & Encryption Status: Hardware encryption, mount points, storage gauge (NFR-2/NFR-3).
  */
 export function SettingsPage() {
+  const goBack = useGoBack('/chat')
   const { theme, toggleTheme } = useThemeStore()
   // THE LIVE REGISTRY ONLY. This started from a written-out list naming
   // qwen2.5:14b as the reasoning model (it is 7b; 14b was dropped as too slow),
@@ -347,19 +349,20 @@ export function SettingsPage() {
         }}
       >
         <div className="flex items-center gap-3">
-          <Link
-            to="/"
+          <button
+            type="button"
+            onClick={goBack}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-fast cursor-pointer hover:bg-[var(--color-surface-hover)] shadow-xs"
             style={{
               background: 'var(--color-overlay)',
               border: '1px solid var(--color-border)',
               color: 'var(--color-text)',
             }}
-            title="Return to workbench conversation"
+            title="Back to where you came from (the chat, if this page was opened directly)"
           >
             <ArrowLeft size={13} strokeWidth={2.2} />
-            <span>Workbench</span>
-          </Link>
+            <span>Back</span>
+          </button>
 
           <div className="h-4 w-[1px]" style={{ background: 'var(--color-border)' }} />
 

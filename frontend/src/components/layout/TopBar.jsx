@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { chatPath } from '../../lib/nav'
 import {
   ShieldCheck,
   ShieldAlert,
@@ -39,7 +40,7 @@ export function TopBar({ onOpenSearch }) {
   const location = useLocation()
   const navigate = useNavigate()
   const activeTab = useChatStore((s) => s.activeTab)
-  const setActiveTab = useChatStore((s) => s.setActiveTab)
+  const currentSessionId = useChatStore((s) => s.sessionId)
   const plan = useChatStore((s) => s.plan) || []
   const doneCount = plan.filter((s) => s.status === 'done').length
   const runningStep = plan.find((s) => s.status === 'running')
@@ -108,16 +109,17 @@ export function TopBar({ onOpenSearch }) {
           ].map((tab) => {
             // A chat tab is active only on the chat page: on Home, Sources or
             // Settings, "Chat" was lit while no chat was on screen.
-            const isActive = activeTab === tab.id && ['/workbench', '/chat'].includes(location.pathname)
+            const onChatPage = location.pathname.startsWith('/chat/')
+            const isActive = onChatPage && activeTab === tab.id
             return (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => {
-                  setActiveTab(tab.id)
-                  if (location.pathname !== '/workbench' && location.pathname !== '/chat') {
-                    navigate('/workbench')
-                  }
+                  // A tab is a place (lib/nav.js): back returns to the tab you
+                  // were on. The same tab again adds no history entry.
+                  if (isActive) return
+                  navigate(chatPath(currentSessionId, tab.id))
                 }}
                 className="relative flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs transition-fast cursor-pointer"
                 style={{

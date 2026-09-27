@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
 import { ArrowRight, MessageSquare, Search, Plus, Trash2, Clock } from "lucide-react"
 import { useChatStore } from "../store/chatStore"
+import { chatPath } from "../lib/nav"
 import { springs, buttonTapMotion } from "../lib/motion"
 
 function relativeTime(iso) {
@@ -25,25 +26,27 @@ export function HomePage() {
 
   const sessions = useChatStore((s) => s.sessions)
   const newSession = useChatStore((s) => s.newSession)
-  const loadSession = useChatStore((s) => s.loadSession)
+  const setPendingPrompt = useChatStore((s) => s.setPendingPrompt)
   const deleteSession = useChatStore((s) => s.deleteSession)
   const currentSessionId = useChatStore((s) => s.sessionId)
 
   const handleSubmit = (e) => {
     e.preventDefault()
     if (!prompt.trim()) return
-    newSession()
-    navigate(`/workbench?prompt=${encodeURIComponent(prompt.trim())}`)
+    // A new chat, opened at its own address, sends the question itself.
+    const id = newSession()
+    setPendingPrompt(prompt.trim())
+    navigate(chatPath(id))
   }
 
   const handleOpenSession = (id) => {
-    loadSession(id)
-    navigate("/workbench")
+    // The chat's address opens it (WorkbenchPage), so back and forward
+    // return to exactly this chat.
+    navigate(chatPath(id))
   }
 
   const handleNewChat = () => {
-    newSession()
-    navigate("/workbench")
+    navigate(chatPath(newSession()))
   }
 
   const handleDelete = (e, id) => {

@@ -131,7 +131,8 @@ export function PlanGraphView({ plan = [], onNodeClick }) {
         onNodeClick(step)
       } else {
         showToast(`Navigating to trace for: ${step.description.slice(0, 32)}...`, 'info')
-        navigate(`/?scrollTo=${targetAnchorId}`)
+        // the chat's trace, where ChatPane scrolls to ?scrollTo= (it pointed at Home)
+        navigate(`/chat?scrollTo=${encodeURIComponent(targetAnchorId)}`)
       }
     },
     [navigate, onNodeClick]

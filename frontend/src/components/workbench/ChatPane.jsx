@@ -107,7 +107,6 @@ export function ChatPane() {
 
   // Top tabs: Chat / Notebooks / Artifacts (synchronized with TopBar)
   const activeTab = useChatStore((s) => s.activeTab)
-  const setActiveTab = useChatStore((s) => s.setActiveTab)
 
   // Code block copy state
 
@@ -668,6 +667,25 @@ export function ChatPane() {
   }, [])
 
 
+  // A question asked on Home arrives here once (chatStore.pendingPrompt)
+  // and is sent as if typed. It was put in the URL as ?prompt=, which
+  // nothing read -- Home's "Ask Sovereign" opened an empty chat.
+  const pendingPrompt = useChatStore((s) => s.pendingPrompt)
+  const setPendingPrompt = useChatStore((s) => s.setPendingPrompt)
+  const autoSendRef = useRef(null)
+  useEffect(() => {
+    if (!pendingPrompt) return
+    setPendingPrompt(null)
+    autoSendRef.current = pendingPrompt
+    setDraft(pendingPrompt)
+  }, [pendingPrompt]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (autoSendRef.current && draft === autoSendRef.current) {
+      autoSendRef.current = null
+      handleSend()
+    }
+  }, [draft]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSend = async () => {
     const hasAttachments = attachments.length > 0
     if ((!draft.trim() && temporaryAttachments.length === 0 && !hasAttachments) || isPending || awaitingHumanApproval) return
@@ -1026,8 +1044,6 @@ export function ChatPane() {
         background: 'var(--color-bg)',
       }}
     >
-      {/* ── 2. Active Tab Content (Chat / Notebooks / Artifacts) ─────────── */}
-
       {/* ── 2. Active Tab Content ──────────────────────────────────────── */}
       {activeTab === 'artifacts' ? (
         /* Every file the operator has approved, newest first (outputs/). */
@@ -1035,32 +1051,6 @@ export function ChatPane() {
       ) : activeTab === 'notebooks' ? (
         /* Every calculation and program in this chat, re-runnable (integrations/notebook). */
         <NotebookView />
-      ) : activeTab !== 'chat' ? (
-        /* Notebooks: not built yet */
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-fade-in">
-          <div
-            className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"
-            style={{ background: 'var(--color-accent-tint)', color: 'var(--color-accent)' }}
-          >
-            {activeTab === 'notebooks' ? <BookOpen size={24} /> : <FileCode size={24} />}
-          </div>
-          <h3 className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>
-            {activeTab === 'notebooks' ? 'Interactive Notebooks' : 'Artifacts & Document Deliverables'}
-          </h3>
-          <p className="text-xs max-w-sm mt-1 mb-4 leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-            {activeTab === 'notebooks'
-              ? 'Jupyter-compatible interactive engineering notebooks with SymPy verified math are scheduled for Day 8.'
-              : 'Generated DOCX approval notes, XLSX spreadsheets, and inspection overlays will be cataloged here once verification passes.'}
-          </p>
-          <button
-            type="button"
-            onClick={() => setActiveTab('chat')}
-            className="px-4 py-1.5 rounded-xl text-xs font-semibold transition-fast cursor-pointer shadow-xs text-white"
-            style={{ background: 'var(--color-accent)' }}
-          >
-            Return to Chat
-          </button>
-        </div>
       ) : (
         /* Primary Chat Message Stream with Inline Thinking */
         <div

@@ -172,7 +172,40 @@ export const useChatStore = create((set, get) => ({
       isApprovalModalOpen: false,
       activeJob: null,
     })
+    return newId
   },
+
+  /**
+   * Open the chat a URL names (/chat/<id>). The URL is where the operator
+   * IS: back, forward and refresh all land here. A saved chat is loaded; an
+   * id not saved yet (a new chat before its first message, reopened by
+   * back/forward or refresh) starts empty under that same id.
+   */
+  openSession: (id) => {
+    if (!id || id === get().sessionId) return
+    if (readSessionMessages(id).length) {
+      get().loadSession(id)
+      return
+    }
+    get()._saveSession()
+    set({
+      ...readSourceSelection(id),
+      sessionId: id,
+      messages: [],
+      plan: [],
+      draft: '',
+      awaitingHumanApproval: false,
+      pendingApprovalAction: null,
+      isApprovalModalOpen: false,
+      activeJob: null,
+    })
+  },
+
+  // A question asked on Home, sent once by the chat it opens. In memory only,
+  // so a refresh can never send it twice. (Home used to put it in the URL as
+  // ?prompt=, which nothing read: the question was lost.)
+  pendingPrompt: null,
+  setPendingPrompt: (text) => set({ pendingPrompt: text || null }),
 
   /** Load an existing session by ID. */
   loadSession: (id) => {

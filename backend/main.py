@@ -204,13 +204,46 @@ logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
 app.include_router(router)
 
 
-@app.get("/")
-def root() -> dict:
+# ── The desktop app is served from here ─────────────────────────────────────
+# The Electron shell (and any browser on this machine) opens
+# http://127.0.0.1:8000/. Loading the build from file:// instead would break
+# every relative /api call and every route, and would need a second router.
+# From here: one origin, loopback only, and /chat/<id> survives a refresh
+# because any non-API path answers with the app shell.
+_DIST = (_REPO_ROOT / "frontend" / "dist").resolve()
+
+
+def _api_description() -> dict:
     return {
         "name": "Sovereign Workbench API",
         "offline": True,
         "endpoints": [r.path for r in app.routes if getattr(r, "path", "").startswith("/api")],
     }
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    from fastapi.responses import FileResponse
+
+    index = _DIST / "index.html"
+    return FileResponse(index) if index.exists() else _api_description()
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def app_shell(path: str):
+    """A built file if it exists, else the app shell (client-side routes)."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    if path.startswith("api/") or path == "api":
+        raise HTTPException(status_code=404, detail=f"No API route: /{path}")
+    index = _DIST / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="The frontend is not built (npm run build in frontend/).")
+    candidate = (_DIST / path).resolve()
+    if candidate.is_file() and candidate.is_relative_to(_DIST):
+        return FileResponse(candidate)
+    return FileResponse(index)
 
 
 @app.websocket("/ws/session/{session_id}")

@@ -14,16 +14,12 @@ export function GlobalSourcePreviewModal() {
 
   // On Workbench / Chat pages, WorkspaceCanvas renders the preview side-by-side beside the chat.
   if (!isOpen || !file) return null
-  if (
-    location.pathname === '/workbench' ||
-    location.pathname === '/chat' ||
-    location.pathname === '/'
-  ) {
+  if (location.pathname.startsWith('/chat') || location.pathname === '/workbench' || location.pathname === '/') {
     return null
   }
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 shadow-2xl flex">
+    <div className="fixed inset-y-0 right-0 z-[10050] shadow-2xl flex">
       <SourcePreviewPanel
         file={file}
         isOpen={isOpen}

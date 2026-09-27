@@ -1,8 +1,11 @@
 import { lazy, Suspense } from 'react'
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AppShell } from './components/layout/AppShell'
 import { GlobalSourcePreviewModal } from './components/workbench/GlobalSourcePreviewModal'
+import { PreviewUrlSync } from './components/workbench/PreviewUrlSync'
+import { useChatStore } from './store/chatStore'
+import { chatPath } from './lib/nav'
 
 // Lazy-loaded routes for optimal initial bundle and performance
 const HomePage = lazy(() => import('./pages/HomePage').then((m) => ({ default: m.HomePage })))
@@ -27,12 +30,7 @@ function RouteLoadingFallback() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center h-full w-full select-none" style={{ background: 'var(--color-bg)' }}>
       <div className="flex flex-col items-center gap-3">
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs tracking-tight shadow-xs animate-pulse"
-          style={{ background: 'var(--color-accent)', color: '#FFFFFF' }}
-        >
-          <span className="font-mono text-sm leading-none font-bold">SV</span>
-        </div>
+        <img src="/assets/logo-mark-transparent.png" alt="" className="h-10 w-auto animate-pulse" draggable={false} />
         <span className="text-[11px] font-mono text-[var(--color-text-muted)] tracking-wider">
           INITIALIZING WORKBENCH SURFACE...
         </span>
@@ -64,19 +62,31 @@ function PageTransition({ children }) {
  * App — top-level router.
  * All routes render inside AppShell (persistent navigation & status chrome).
  */
+// /chat and the old /workbench name no chat: open the current one, keeping
+// any query (?tab=, ?view=) and REPLACING the entry, so back does not bounce.
+function ToCurrentChat() {
+  const location = useLocation()
+  const sessionId = useChatStore((s) => s.sessionId)
+  return <Navigate to={chatPath(sessionId) + (location.search || '')} replace />
+}
+
 export default function App() {
   const location = useLocation()
+  // Keyed by SECTION, not by full path: moving between chats is not a new
+  // page, and remounting the Workbench refetched the whole corpus.
+  const section = location.pathname.split('/')[1] || 'home'
 
   return (
     <AppShell>
       <AnimatePresence mode="wait" initial={false}>
-        <Routes location={location} key={location.pathname}>
+        <Routes location={location} key={section}>
           {/* Home / Command Center */}
           <Route path="/" element={<PageTransition><HomePage /></PageTransition>} />
 
           {/* Spatial Chat & Workbench */}
-          <Route path="/workbench" element={<PageTransition><WorkbenchPage /></PageTransition>} />
-          <Route path="/chat" element={<PageTransition><WorkbenchPage /></PageTransition>} />
+          <Route path="/chat/:sessionId" element={<PageTransition><WorkbenchPage /></PageTransition>} />
+          <Route path="/chat" element={<ToCurrentChat />} />
+          <Route path="/workbench" element={<ToCurrentChat />} />
 
           {/* Execution Plan DAG Canvas */}
           <Route path="/plan" element={<PageTransition><PlanStubPage /></PageTransition>} />
@@ -111,8 +121,9 @@ export default function App() {
         </Routes>
       </AnimatePresence>
 
-      {/* Global Source Preview Reader */}
+      {/* Global Source Preview Reader, and its place in the URL */}
       <GlobalSourcePreviewModal />
+      <PreviewUrlSync />
     </AppShell>
   )
 }
