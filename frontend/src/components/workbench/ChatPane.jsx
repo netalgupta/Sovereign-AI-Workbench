@@ -44,7 +44,6 @@ import { MessageBubble } from '../chat/MessageBubble'
 import { CalcTraceCard } from '../../integrations/calc-trace'
 import LiveAudioVisualizer from './LiveAudioVisualizer'
 import RealOutputCards, { OUTPUTS_CHANGED } from '../../integrations/output-cards/RealOutputCards'
-import { AgentMapButton } from '../../integrations/agent-map/AgentMap'
 
 // Helper to convert browser File object to Base64
 const readFileAsBase64 = (file) => {
@@ -80,7 +79,6 @@ export function ChatPane() {
   const addMessage = useChatStore((s) => s.addMessage)
   const updateMessage = useChatStore((s) => s.updateMessage)
   const addToolCallEvent = useChatStore((s) => s.addToolCallEvent)
-  const addLlmCall = useChatStore((s) => s.addLlmCall)
   const addThoughtEvent = useChatStore((s) => s.addThoughtEvent)
   const appendStreamChunk = useChatStore((s) => s.appendStreamChunk)
   const finishStreaming = useChatStore((s) => s.finishStreaming)
@@ -840,9 +838,8 @@ export function ChatPane() {
           updateMessage(msgId, { memory: memEv })
         },
         onRoute: (routeEv) => {
-          updateMessage(msgId, { route: routeEv, startedAt: startTime })
+          updateMessage(msgId, { route: routeEv })
         },
-        onLlmCall: (callEv) => addLlmCall(msgId, callEv),
         onToolCall: (call) => {
           // Mark the plan step for this tool as running when the call starts.
           // We match by tool name → assigned_agent heuristic: any step
@@ -860,7 +857,6 @@ export function ChatPane() {
             input_params: call.arguments,
             reasoning: call.reasoning,
             status: 'running',
-            startedAt: Date.now(),
           })
         },
         onToolResult: (resEv) => {
@@ -876,7 +872,6 @@ export function ChatPane() {
             output: resEv.output,
             status: resEv.status || 'done',
             seconds: resEv.seconds,
-            endedAt: Date.now(),
           })
         },
         onThought: (thoughtEv) => {
@@ -925,8 +920,6 @@ export function ChatPane() {
             citations: normCitations,
             plan: doneEv.plan || [],
             verification: doneEv.verification || null,
-            usage: doneEv.usage || null,
-            endedAt: Date.now(),
             elapsedSeconds:
               doneEv.seconds ??
               Number(((Date.now() - startTime) / 1000).toFixed(1)),
@@ -990,73 +983,7 @@ export function ChatPane() {
         background: 'var(--color-bg)',
       }}
     >
-                          background: isDone
-                            ? 'var(--color-success)'
-                            : isRunning
-                            ? 'var(--color-accent)'
-                            : 'var(--color-border)',
-                        }}
-                      >
-                        {isRunning && (
-                          <div
-                            className="absolute inset-0 opacity-60 animate-pulse"
-                            style={{ background: 'white' }}
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </Link>
-            )
-          })()}
-          {/* Live agent map beside the Plan DAG (integrations/agent-map). */}
-          <AgentMapButton />
-
-          {/* Dedicated Live Sockets Telemetry Button (Relocated from bottom strip) */}
-          <Link
-            to="/monitor"
-            id="live-sockets-header-btn"
-            className="group flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium transition-fast hover:bg-[var(--color-surface-hover)] shadow-xs cursor-pointer select-none row-hover-lift"
-            style={{
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-border)',
-            }}
-            title="Inspect real-time air-gap security and socket telemetry (/monitor)"
-          >
-            <div
-              className="flex items-center gap-1.5"
-              style={{ color: networkStatus.isAirGapped ? '#10b981' : '#ef4444' }}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${networkStatus.isAirGapped ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`}
-              />
-              <ShieldCheck size={13} strokeWidth={2.2} />
-              <span className="text-[11px] font-semibold" style={{ color: 'var(--color-text)' }}>
-                Live Sockets ({networkStatus.available ? networkStatus.socketCount : 0})
-              </span>
-            </div>
-          </Link>
-
-          <button
-            type="button"
-            onClick={() =>
-              showToast(
-                'Conversation session: Refinery Turnaround Analysis (Zero-Egress Sandbox)',
-                'info'
-              )
-            }
-            className="w-7 h-7 rounded-md flex items-center justify-center transition-fast hover:bg-[var(--color-surface-hover)] cursor-pointer"
-            style={{ color: 'var(--color-text-muted)' }}
-            title="Chat options"
-          >
-            <MoreHorizontal size={16} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
-=======
       {/* ── 2. Active Tab Content (Chat / Notebooks / Artifacts) ─────────── */}
->>>>>>> Stashed changes
 
       {/* ── 2. Active Tab Content ──────────────────────────────────────── */}
       {activeTab === 'artifacts' ? (

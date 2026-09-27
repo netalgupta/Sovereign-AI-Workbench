@@ -67,7 +67,7 @@ export function HomePage() {
         {/* Header */}
         <div className="flex flex-col items-center text-center gap-3">
           <span className="text-[11px] font-mono uppercase tracking-widest font-semibold px-2 py-0.5 rounded border" style={{ background: "var(--color-overlay)", borderColor: "var(--color-border)", color: "var(--color-accent)" }}>
-            SOVEREIGN WORKBENCH · PS26117
+            SOVEREIGN WORKBENCH Â· PS26117
           </span>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight" style={{ color: "var(--color-text)" }}>
             {greeting}, Engineer.
@@ -84,7 +84,7 @@ export function HomePage() {
             <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: "var(--color-border)" }}>
               <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
                 <span className="flex items-center gap-1 font-mono text-[11px]"><kbd className="px-1 py-0.5 rounded bg-[var(--color-overlay)] border border-[var(--color-border)]">?</kbd> send</span>
-                <span>·</span>
+                <span>Â·</span>
                 <span className="hidden sm:inline">Grounded exclusively in verified local sources</span>
               </div>
               <motion.button {...buttonTapMotion} type="submit" disabled={!prompt.trim()} className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-white transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: "var(--color-accent)" }}>
@@ -121,7 +121,7 @@ export function HomePage() {
               <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-16 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed" style={{ borderColor: "var(--color-border)" }}>
                 <MessageSquare size={24} style={{ color: "var(--color-text-faint)" }} />
                 <p className="text-sm font-medium" style={{ color: "var(--color-text-muted)" }}>No sessions yet</p>
-                <p className="text-xs" style={{ color: "var(--color-text-faint)" }}>Start a conversation above — it will appear here automatically.</p>
+                <p className="text-xs" style={{ color: "var(--color-text-faint)" }}>Start a conversation above â€” it will appear here automatically.</p>
               </motion.div>
             ) : filtered.length === 0 ? (
               <motion.div key="no-match" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-10 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
