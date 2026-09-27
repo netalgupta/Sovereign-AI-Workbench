@@ -23,6 +23,12 @@ TWO THINGS THE SUITE MUST NOT DO TO A DEVELOPER'S MACHINE.
    demo shows. MEASURED: 96 of its 932 entries were pytest runs, with
    temp-directory paths. The default audit log and approval ledger now
    live in each test's tmp directory.
+
+4. Rewrite the operator's source list. configured_sources.json and
+   deleted_sources.json are anchored to the repo (backend/api/
+   source_config.py); a test that adds and deletes a source rewrote the
+   REAL list and dropped a book the operator had added. They point at
+   each test's tmp directory too.
 """
 
 from __future__ import annotations
@@ -58,3 +64,12 @@ def _audit_trail_in_tmp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backend.paths, "REPO_ROOT", tmp_path)
     (tmp_path / "backend" / "audit").mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _source_lists_in_tmp(tmp_path, monkeypatch):
+    """The operator's source lists are never touched by a test."""
+    from backend.api import source_config
+
+    monkeypatch.setattr(source_config, "CONFIG_PATH", tmp_path / "configured_sources.json")
+    monkeypatch.setattr(source_config, "DELETED_PATH", tmp_path / "deleted_sources.json")

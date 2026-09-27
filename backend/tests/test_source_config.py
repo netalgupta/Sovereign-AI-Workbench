@@ -14,10 +14,11 @@ from backend.api import source_config as SC
 
 
 def test_the_path_is_anchored_to_the_repository_not_the_working_directory(tmp_path, monkeypatch):
-    before = SC.CONFIG_PATH
+    # (conftest points CONFIG_PATH itself at tmp for every test; the anchor is _EVAL_DIR)
+    before = SC._EVAL_DIR
     monkeypatch.chdir(tmp_path)
-    assert SC.CONFIG_PATH == before
-    assert SC.CONFIG_PATH.parent.name == "evaluation" and SC.CONFIG_PATH.parents[1].name == "backend"
+    assert SC._EVAL_DIR == before and SC._EVAL_DIR.is_absolute()
+    assert SC._EVAL_DIR.name == "evaluation" and SC._EVAL_DIR.parent.name == "backend"
 
 
 def test_a_missing_file_is_an_empty_list(tmp_path):
