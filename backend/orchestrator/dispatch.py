@@ -91,6 +91,13 @@ class SubAgentError(Exception):
     """A sub-agent could not complete its step."""
 
 
+class SandboxUnavailable(SubAgentError):
+    """The code sandbox (Docker) is not running. `code` holds the program
+    that was written, so it can still be shown -- marked as not run."""
+
+    code: str = ""
+
+
 def node_for(step: PlanStep) -> str:
     return _AGENT_TO_NODE[step.assigned_agent]
 
@@ -247,10 +254,17 @@ def run_code_step(step: PlanStep, code: str, session_id: str = "default", langua
     from backend.sandbox import pool, run_in_sandbox
 
     if not pool.workers:
+        # Docker may have been started after the backend: try once more
+        # before refusing, so the operator does not have to restart anything.
+        try:
+            pool.start()
+        except Exception:  # noqa: BLE001 - reported just below, in plain words
+            pass
+    if not pool.workers:
         step.status = "failed"
-        raise SubAgentError(
-            "code_agent requires the sandbox execution wrapper (CARD 04, backend/sandbox), "
-            "and the sandbox pool has not been started. Start the sandbox pool with pool.start()."
+        raise SandboxUnavailable(
+            "Docker Desktop is not running, and generated code runs only inside its isolated "
+            "container (no network). Start Docker Desktop and ask again; nothing was run outside it."
         )
 
     event = ToolCallEvent(

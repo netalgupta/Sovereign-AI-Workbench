@@ -1355,6 +1355,7 @@ def _run_code(request: str, selection, *, session_id: str) -> Iterator[dict]:
         wants_source_only,
         write_source,
     )
+    from backend.orchestrator.dispatch import SandboxUnavailable
     from backend.orchestrator.state import PlanStep
 
     # A page, config or multi-file project is WRITTEN and returned, not run
@@ -1398,6 +1399,21 @@ def _run_code(request: str, selection, *, session_id: str) -> Iterator[dict]:
     except CodeGenerationError as exc:
         reply = f"**The code model did not return a program.** {exc}"
         yield {"type": "tool_result", "id": "code-1", "status": "failed", "output": {"error": str(exc)},
+               "seconds": round(time.time() - started, 1)}
+        yield {"type": "text_delta", "text": reply}
+        yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1,
+               "seconds": round(time.time() - started, 1), "citations": []}
+        return
+    except SandboxUnavailable as exc:
+        # Written but not run: say why in plain words, and still hand over
+        # the program. It used to say "start the sandbox pool with
+        # pool.start()" -- developer words -- and drop the code.
+        language_tag = "python"
+        reply = (f"**Written, but not run.** {exc}\n\n"
+                 + (f"```{language_tag}\n{exc.code.strip()}\n```\n\n" if getattr(exc, 'code', '') else "")
+                 + "The output above has **not** been executed or checked.")
+        yield {"type": "tool_result", "id": "code-1", "status": "failed",
+               "output": {"error": str(exc), "code": getattr(exc, "code", ""), "model": selection.model},
                "seconds": round(time.time() - started, 1)}
         yield {"type": "text_delta", "text": reply}
         yield {"type": "done", "reply": reply, "tool_calls": 1, "iterations": 1,

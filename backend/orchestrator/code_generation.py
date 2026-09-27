@@ -163,7 +163,7 @@ def run_generated_code(
     returned 0" is not evidence of anything on its own.
     """
     from backend.observability import turn_log as T
-    from backend.orchestrator.dispatch import run_code_step
+    from backend.orchestrator.dispatch import SandboxUnavailable, run_code_step
 
     T.section("CODE GENERATION")
     T.kv("task", task[:90])
@@ -172,7 +172,13 @@ def run_generated_code(
     code = generate_code(task, language=language, model_id=model_id)
     T.block("GENERATED CODE", code)
 
-    event = run_code_step(step, code, session_id=session_id, language=language)
+    try:
+        event = run_code_step(step, code, session_id=session_id, language=language)
+    except SandboxUnavailable as exc:
+        # The program was written; only running it is impossible. Keep it,
+        # so the operator still gets the code (marked as not run).
+        exc.code = code
+        raise
 
     # The code is part of the record. Without it the audit trail says a
     # program ran and cannot say which.

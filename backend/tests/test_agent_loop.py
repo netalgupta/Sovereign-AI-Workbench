@@ -228,3 +228,25 @@ def test_a_page_or_config_is_written_not_run():
     for task in ("Write a Python program that prints the first 10 primes",
                  "Compute the LMTD for these temperatures in Python"):
         assert not wants_source_only(task), task
+
+
+def test_without_docker_the_program_is_shown_marked_not_run(monkeypatch):
+    """'Start the sandbox pool with pool.start()' -- developer words -- and the
+    generated program was dropped. Now: plain words, and the code, not run."""
+    from backend.orchestrator import code_generation as CG
+    from backend.orchestrator.agent_loop import _run_code
+    from backend.sandbox import pool
+
+    monkeypatch.setattr(CG, "generate_code", lambda *a, **k: "print(sum(range(10)))")
+    monkeypatch.setattr(pool, "workers", [], raising=False)
+    monkeypatch.setattr(pool, "start", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("docker down")))
+
+    class Sel:
+        model = "coder"
+        model_id = "coder-model"
+
+    events = list(_run_code("Write a Python program that prints the sum of 0..9", Sel(), session_id="t"))
+    reply = next(e for e in events if e["type"] == "done")["reply"]
+    assert "Written, but not run" in reply and "Docker Desktop is not running" in reply
+    assert "print(sum(range(10)))" in reply
+    assert "pool.start()" not in reply
