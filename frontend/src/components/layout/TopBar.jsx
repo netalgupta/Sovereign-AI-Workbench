@@ -106,7 +106,9 @@ export function TopBar({ onOpenSearch }) {
             { id: 'notebooks', label: 'Notebooks', icon: BookOpen },
             { id: 'artifacts', label: 'Artifacts', icon: FileCode },
           ].map((tab) => {
-            const isActive = activeTab === tab.id
+            // A chat tab is active only on the chat page: on Home, Sources or
+            // Settings, "Chat" was lit while no chat was on screen.
+            const isActive = activeTab === tab.id && ['/workbench', '/chat'].includes(location.pathname)
             return (
               <button
                 key={tab.id}

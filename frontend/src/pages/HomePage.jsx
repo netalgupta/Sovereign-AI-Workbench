@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
 import { ArrowRight, MessageSquare, Search, Plus, Trash2, Clock } from "lucide-react"
@@ -57,6 +57,17 @@ export function HomePage() {
     return sessions.filter((s) => s.title?.toLowerCase().includes(q))
   }, [sessions, search])
 
+  // The operator's own name (the OS account, as the top bar shows it), not "Engineer".
+  const [operator, setOperator] = useState("")
+  useEffect(() => {
+    let alive = true
+    fetch("/api/system-info")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && d?.user && setOperator(d.user))
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
   const hour = new Date().getHours()
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
 
@@ -70,7 +81,7 @@ export function HomePage() {
             SOVEREIGN WORKBENCH · PS26117
           </span>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight" style={{ color: "var(--color-text)" }}>
-            {greeting}, Engineer.
+            {greeting}{operator ? `, ${operator}` : ""}.
           </h1>
           <p className="text-sm md:text-base max-w-lg leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
             Continue an investigation or start a new one.
@@ -83,7 +94,7 @@ export function HomePage() {
             <textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e) } }} placeholder="Ask a technical question, command a setpoint evaluation, or explore pipeline correlations..." className="w-full bg-transparent resize-none outline-none text-sm md:text-base leading-relaxed placeholder:text-[var(--color-text-faint)]" style={{ color: "var(--color-text)" }} />
             <div className="flex items-center justify-between pt-2 border-t" style={{ borderColor: "var(--color-border)" }}>
               <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                <span className="flex items-center gap-1 font-mono text-[11px]"><kbd className="px-1 py-0.5 rounded bg-[var(--color-overlay)] border border-[var(--color-border)]">?</kbd> send</span>
+                <span className="flex items-center gap-1 font-mono text-[11px]"><kbd className="px-1 py-0.5 rounded bg-[var(--color-overlay)] border border-[var(--color-border)]">↵</kbd> send</span>
                 <span>·</span>
                 <span className="hidden sm:inline">Grounded exclusively in verified local sources</span>
               </div>
