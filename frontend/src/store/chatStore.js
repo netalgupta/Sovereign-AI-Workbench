@@ -73,6 +73,7 @@ function writeSessionMessages(id, messages) {
     verification: m.verification || null,
     elapsedSeconds: m.elapsedSeconds ?? null,
     userRequest: m.userRequest || '',
+    files: m.files || [],
   })
   try {
     localStorage.setItem(SESSION_KEY(id), JSON.stringify(messages.map(full)))
@@ -102,6 +103,48 @@ function deleteSessionStorage(id) {
     localStorage.removeItem(SESSION_KEY(id))
     localStorage.removeItem(SOURCES_KEY(id))
   } catch {}
+}
+
+const OUTPUT_FILE = /\.(docx|xlsx|pptx|pdf|csv|zip|md|txt|py|json)$/i
+
+/**
+ * The file(s) an approved write produced. The execute endpoint returns the
+ * tool's own result, whose shape differs by tool: a path field, else any
+ * string that is an output path, else the approved target matched against
+ * the outputs folder (GET /api/outputs).
+ */
+async function writtenFiles(execResult, action) {
+  const found = []
+  const seen = new Set()
+  const add = (path) => {
+    if (typeof path !== 'string' || !OUTPUT_FILE.test(path) || seen.has(path)) return
+    seen.add(path)
+    found.push({ path, name: path.split(/[/\\]/).pop(), ext: path.split('.').pop().toLowerCase() })
+  }
+  const walk = (v, depth = 0) => {
+    if (depth > 4 || v == null) return
+    if (typeof v === 'string') return add(v)
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1))
+    if (typeof v === 'object') {
+      for (const key of ['path', 'output_path', 'file_path', 'written_path', 'written', 'files', 'outputs']) {
+        if (key in v) walk(v[key], depth + 1)
+      }
+      if (!found.length) Object.values(v).forEach((x) => walk(x, depth + 1))
+    }
+  }
+  walk(execResult?.result ?? execResult)
+  if (!found.length && action?.target) {
+    const name = String(action.target).split(/[/\\]/).pop()
+    try {
+      const res = await fetch('/api/outputs')
+      const data = res.ok ? await res.json() : { files: [] }
+      const hit = (data.files || []).find((f) => f.filename === name)
+      if (hit) found.push({ path: hit.path, name: hit.filename, ext: (hit.fileType || '').toLowerCase(), size: hit.fileSize })
+    } catch {
+      // no outputs listing: the summary line still names the file
+    }
+  }
+  return found
 }
 
 /** Earlier chats' messages, newest chat first (Up-arrow prompt history). */
@@ -471,6 +514,7 @@ export const useChatStore = create((set, get) => ({
 
     // Step 2: POST /api/approvals/execute (with token from step 1)
     const execToken = approveResult?.token || approveResult?.execution_token
+    let execResult = null
     if (execToken) {
       try {
         const execRes = await fetch('/api/approvals/execute', {
@@ -481,6 +525,7 @@ export const useChatStore = create((set, get) => ({
           // ever written -- since the day this was wired up.
           body: JSON.stringify({ request_id: action.id, token: execToken }),
         })
+        execResult = execRes.ok ? await execRes.clone().json().catch(() => null) : null
         if (!execRes.ok) {
           const errData = await execRes.json().catch(() => ({}))
           const errMsg = errorText(errData, `Execute backend returned HTTP ${execRes.status}`)
@@ -521,7 +566,10 @@ export const useChatStore = create((set, get) => ({
     // The job this approval finished is done; its card must not keep saying
     // "nothing is written until you approve it".
     set({ activeJob: null })
-    get().addMessage('assistant', summary)
+    // The file itself, as a card under the message: open it in the viewer
+    // or download it, where a line of text used to name it and stop.
+    const files = isFileWrite ? await writtenFiles(execResult, action) : []
+    get().addMessage('assistant', summary, { files })
     // The Artifacts tab lists it now, not on its next poll.
     if (isFileWrite && typeof window !== 'undefined') window.dispatchEvent(new Event('workbench:outputs-changed'))
     return { success: true }
@@ -601,6 +649,7 @@ export const useChatStore = create((set, get) => ({
       toolCallEvents = [],
       verification = null,
       userRequest = '',
+      files = [],
     } = opts
     const message = {
       id: generateSessionId(),
@@ -613,12 +662,18 @@ export const useChatStore = create((set, get) => ({
       toolCallEvents,
       verification,
       userRequest,
+      files,
       timestamp: now(),
     }
     set((state) => ({ messages: [...state.messages, message] }))
     // The question is saved the moment it is asked, not only once the reply
     // has finished typing: a refresh mid-answer used to lose the chat.
-    if (role === 'user') setTimeout(() => get()._saveSession(), 0)
+    // A message that arrives complete (not streamed) -- an approval's result
+    // with its file card -- is saved too; nothing else would have saved it.
+    if (role === 'user' || !streaming) {
+      clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => get()._saveSession(), 0)
+    }
     return message.id
   },
 

@@ -33,6 +33,7 @@ import {
 import { formatTime } from '../../lib/formatTime'
 import { MarkdownBody } from './MarkdownBody'
 import { CopyButton } from '../common/CopyButton'
+import { FileCards } from './FileCard'
 
 // The answer as text, with the sources its [n] markers point to listed
 // under it -- a pasted answer keeps its citations.
@@ -1184,6 +1185,9 @@ export function MessageBubble({ message }) {
         {/* Blinking cursor while draining */}
         {isStreaming && <StreamCursor />}
       </div>
+
+      {/* Files this turn wrote: open them rendered, or download them. */}
+      {!isStreaming && <FileCards files={message.files} />}
 
       {/* Real detection overlay from tool output (rendered only when the
           backend actually returned detections for an image). */}
