@@ -15,15 +15,19 @@ function PageImage({ src, label, aspect, eager }) {
   const [attempt, setAttempt] = useState(0)
   return (
     <div
-      className="relative w-full rounded-lg shadow-md border overflow-hidden bg-white"
-      style={state === 'ready' ? undefined : { aspectRatio: aspect }}
+      className="relative w-full rounded-lg shadow-md border overflow-hidden transition-colors duration-300"
+      // White only once the page is there. White placeholders were the
+      // "flash" on Open: a column of blank white slabs, then the pages.
+      style={state === 'ready'
+        ? { background: '#FFFFFF', borderColor: 'var(--color-border)' }
+        : { aspectRatio: aspect, background: 'var(--color-overlay)', borderColor: 'var(--color-border)' }}
     >
       {state !== 'failed' && (
         <img
           key={attempt}
           src={attempt ? `${src}&retry=${attempt}` : src}
           alt={label}
-          className="w-full h-auto object-contain block bg-white transition-opacity duration-200"
+          className="w-full h-auto object-contain block transition-opacity duration-300"
           style={{ opacity: state === 'ready' ? 1 : 0 }}
           loading={eager ? 'eager' : 'lazy'}
           decoding="async"
