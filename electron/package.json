@@ -1,0 +1,27 @@
+{
+  "name": "sovereign-workbench",
+  "productName": "Sovereign Workbench",
+  "version": "0.1.0",
+  "description": "On-premise agentic AI workbench for MRPL (PS26117). Installs and runs fully offline.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "setup": "electron . --setup",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "in.mrpl.sovereign-workbench",
+    "productName": "Sovereign Workbench",
+    "artifactName": "Sovereign Workbench Setup.exe",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "installer.js", "backend-process.js", "setup/**", "assets/**", "splash.html"],
+    "win": { "target": ["portable"], "icon": "assets/icon.png" },
+    "portable": { "unicode": true }
+  }
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Sovereign Workbench</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #0F141B; color: #E8EDF4; font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; display: grid; place-items: center; -webkit-app-region: drag; overflow: hidden; }
+  .box { text-align: center; padding: 24px; max-width: 440px; }
+  img { width: 92px; height: auto; }
+  h1 { font: 700 18px/1 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: .16em; margin: 14px 0 4px; }
+  .sub { color: #8C9BB0; font-size: 12px; }
+  .status { margin-top: 26px; color: #C9D3E0; min-height: 21px; }
+  .bar { width: 220px; height: 3px; margin: 12px auto 0; background: #1B2431; border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; width: 35%; height: 100%; background: #E0763A; border-radius: 99px; animation: slide 1.3s ease-in-out infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  .fail { display: none; margin-top: 16px; text-align: left; -webkit-app-region: no-drag; }
+  .fail pre { max-height: 120px; overflow: auto; background: #161E29; border: 1px solid #243142; border-radius: 8px; padding: 8px; font: 11px/1.4 Consolas, monospace; color: #8C9BB0; white-space: pre-wrap; user-select: text; }
+  .off { margin-top: 18px; font-size: 11.5px; color: #5F6E83; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <img src="assets/logo-mark.png" alt="">
+    <h1>SOVEREIGN</h1>
+    <div class="sub">Industrial Intelligence Workstation</div>
+    <div class="status" id="status">Starting</div>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="fail" id="fail"><pre id="log"></pre></div>
+    <div class="off">Running on this machine only · no network</div>
+  </div>
+<script>
+  window.sovereign.onStatus((t) => { document.getElementById('status').textContent = t })
+  window.sovereign.onFailed((info) => {
+    document.getElementById('bar').style.display = 'none'
+    document.getElementById('fail').style.display = 'block'
+    document.getElementById('log').textContent = (info.log || []).join('\n')
+  })
+</script>
+</body>
+</html>

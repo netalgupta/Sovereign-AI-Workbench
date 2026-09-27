@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Sovereign Workbench Setup</title>
+<link rel="stylesheet" href="setup.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <img src="../assets/logo-mark.png" alt="" class="mark">
+      <div>
+        <div class="brand-name">SOVEREIGN</div>
+        <div class="brand-sub">Industrial Intelligence Workstation</div>
+      </div>
+    </div>
+    <ol class="steps" id="steps">
+      <li data-screen="welcome" class="on"><span class="n">1</span>Welcome</li>
+      <li data-screen="machine"><span class="n">2</span>This machine</li>
+      <li data-screen="location"><span class="n">3</span>Install location</li>
+      <li data-screen="install"><span class="n">4</span>Install</li>
+      <li data-screen="finish"><span class="n">5</span>Ready</li>
+    </ol>
+    <div class="rail-foot">
+      <span class="dot"></span> Offline install · nothing is downloaded
+    </div>
+  </aside>
+
+  <main class="stage">
+    <!-- 1. Welcome -->
+    <section class="screen on" id="welcome">
+      <div class="eyebrow">Setup</div>
+      <h1>Sovereign Workbench</h1>
+      <p class="lede">An AI workbench that runs entirely on this machine. Setup installs every component from this drive, one by one, and builds the search index. It needs no internet connection at any point.</p>
+      <div class="package" id="package">
+        <div class="package-head">In this package</div>
+        <div class="package-rows" id="package-rows"><div class="muted">Reading the package…</div></div>
+      </div>
+      <div class="actions"><span></span><button class="primary" data-go="machine" id="start-btn" disabled>Begin</button></div>
+    </section>
+
+    <!-- 2. Machine -->
+    <section class="screen" id="machine">
+      <div class="eyebrow">Step 2 of 5</div>
+      <h2>This machine</h2>
+      <p class="lede">What setup found. The workbench runs its models on an NVIDIA GPU; 8 GB of video memory is enough.</p>
+      <div class="cards" id="machine-cards"></div>
+      <div class="note" id="machine-note" hidden></div>
+      <div class="actions"><button class="ghost" data-go="welcome">Back</button><button class="primary" data-go="location">Continue</button></div>
+    </section>
+
+    <!-- 3. Location -->
+    <section class="screen" id="location">
+      <div class="eyebrow">Step 3 of 5</div>
+      <h2>Install location</h2>
+      <p class="lede">Everything goes into one folder: Python, the workbench and its model caches. Ollama's models go to its own folder in your profile.</p>
+      <div class="dirbox">
+        <div class="dir" id="dir"></div>
+        <button class="ghost" id="choose">Change…</button>
+      </div>
+      <div class="space" id="space"></div>
+      <div class="actions"><button class="ghost" data-go="machine">Back</button><button class="primary" id="install-btn">Install</button></div>
+    </section>
+
+    <!-- 4. Install -->
+    <section class="screen" id="install">
+      <div class="eyebrow">Step 4 of 5</div>
+      <h2 id="install-title">Installing</h2>
+      <p class="lede" id="install-lede">Each component is installed and checked in turn. This takes a while; the models alone are several gigabytes.</p>
+      <div class="components" id="components"></div>
+      <details class="log" id="log-box">
+        <summary>Show details <span class="muted" id="log-count"></span></summary>
+        <pre id="log"></pre>
+      </details>
+      <div class="actions"><span class="muted" id="elapsed"></span><button class="primary" id="retry-btn" hidden>Try again</button></div>
+    </section>
+
+    <!-- 5. Finish -->
+    <section class="screen" id="finish">
+      <div class="eyebrow">Ready</div>
+      <h1>Sovereign Workbench is installed</h1>
+      <p class="lede" id="finish-lede">Every component is on this machine. The drive can be removed.</p>
+      <ul class="summary" id="summary"></ul>
+      <div class="actions"><button class="ghost" id="open-logs">Open the log folder</button><button class="primary" id="launch-btn">Open Sovereign Workbench</button></div>
+    </section>
+  </main>
+</div>
+<script src="setup.js"></script>
+</body>
+</html>
